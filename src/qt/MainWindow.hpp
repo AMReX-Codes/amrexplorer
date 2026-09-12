@@ -521,7 +521,10 @@ public:
         QRectF visible;
         double scale = 0.0;
     };
-    [[nodiscard]] MappedPanelForTest mappedPanelForTest(int normal) const;
+    [[nodiscard]] MappedPanelForTest mappedPanelForTest(int normal, int layer = 0) const;
+    // Test-only: the probe readout for a pixmap pixel of one layer's tile on
+    // a 3-D panel.
+    [[nodiscard]] QString probeReadoutPanelForTest(int normal, int layer, int x, int y) const;
     // Test-only: the active view's transform scale and scroll position
     // {m11, m22, h, v}; a scroll by viewport pixels, as a drag or the scroll
     // bars would; and the physical region of the plane it holds (x = first
@@ -852,10 +855,14 @@ private:
         const std::optional<CompanionRestore>& selections);
     // Which views a companion's controls and states reach.
     void scheduleLayerSliceRequests(DatasetLayer& layer);
-    // The per-panel layouts follow the pair geometry and the aspect settings;
-    // applying them re-places every tile without re-rendering.
-    void updatePairLayouts();
+    // The per-panel layouts follow the pair geometry, the aspect settings and
+    // the layers' display bounds; true when a tile rect changed. Applying
+    // them re-places every tile without re-rendering.
+    bool updatePairLayouts();
     void applyPairLayouts();
+    // What a layer's tiles cover: its logical bounds, widened on each panel's
+    // axes by the node box its warped views have brought (mappedCanvasBounds).
+    [[nodiscard]] RealBox pairDisplayBounds(std::size_t layer) const;
     // The scene rect a panel frames: what arrivals assert as the scene rect
     // and Fit frames. The layout's whole canvas until a layer on the panel is
     // zoomed; then the panel's framed window (m_pairWindows), so a confined
@@ -867,18 +874,26 @@ private:
     // window), the layers re-slice for them, and the view frames the window.
     [[nodiscard]] RealBox snappedPairRegion(
         std::size_t layer, int normal, const RealBox& region) const;
+    // A warped layer gets no region: its warp follows the view
+    // (updateMappedDemand), and its part of the framed window is the window
+    // cut to its tile (pairFramedWindow).
     [[nodiscard]] std::array<std::optional<RealBox>, 2> pairRegionsForSceneWindow(
         int normal, const QRectF& window) const;
-    // The rect a panel's regions occupy, if any layer on it has one.
+    [[nodiscard]] std::optional<QRectF> pairFramedWindow(int normal,
+        const QRectF& window,
+        const std::array<std::optional<RealBox>, 2>& regions) const;
+    // The rect a panel's regions occupy, if any layer on it has one; a
+    // warped layer's is the window its warp is drawn for.
     [[nodiscard]] std::optional<QRectF> pairRegionsRect(int normal) const;
-    // Sets the panel's layers to these regions (none: back to the whole
-    // domain), records the framed window (`window`, else the regions' rect)
-    // and re-slices. `refit` frames the window (a selection); a pan keeps
-    // the view's scale and only moves it onto the window. False when both
-    // regions are empty; nothing changes then.
+    // Sets the panel's flat layers to these regions (none: back to the whole
+    // domain), records the framed window (the selection's parts over the
+    // layers, or the pan's `window` itself) and re-slices. `refit` frames the
+    // window (a selection); a pan keeps the view's scale and only moves it
+    // onto the window. False when the window covers no layer; nothing
+    // changes then.
     bool applyPairRegions(int normal,
         const std::array<std::optional<RealBox>, 2>& regions,
-        std::optional<QRectF> window, bool refit);
+        const QRectF& window, bool refit);
     bool applyPairZoomWindow(int normal, const QRectF& window, bool refit = true);
     void pairRubberBandZoom(int normal, const QRectF& sceneRect);
     // A pan over a pair: the framed window moved against the drag, stopped
@@ -1159,6 +1174,11 @@ private:
     // the current axis factors. Nothing until the first mapped arrival has
     // brought the canvas bounds.
     [[nodiscard]] std::optional<MappedLayout> mappedLayout(
+        const PlaneViewState& state) const;
+    // Where the view's tile sits: on the pair's canvas as its layer while a
+    // companion is open, on its own mapped canvas when warped, and nowhere
+    // in particular (the classic raster at the origin) otherwise.
+    [[nodiscard]] std::optional<TilePlacement> tilePlacement(
         const PlaneViewState& state) const;
     // Ask the warp for what the viewport shows: the visible physical window
     // at the viewport's own device pixels, re-sliced first when the plane on

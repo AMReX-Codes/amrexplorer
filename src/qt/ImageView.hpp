@@ -478,6 +478,9 @@ private:
         int horizontalScroll = 0;
         int verticalScroll = 0;
         QSize viewportSize;
+        // A framed window moved under a still transform and scroll (a pan
+        // over a pair) moves the scene under the screen too.
+        QRectF sceneRect;
         friend bool operator==(const ViewSnapshot&, const ViewSnapshot&) = default;
     };
     ViewSnapshot m_notedView;

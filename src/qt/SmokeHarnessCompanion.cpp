@@ -283,6 +283,258 @@ void armCompanionDerivedChecks(amrvis::qt::MainWindow& window,
 // Real zoom over a pair: a selection straddling the interface gives each
 // layer the part in its own domain, both re-slice for it and land at their
 // places, the panel frames the selection, and Reset Zoom puts both back.
+// Mapped grids over a pair: each dataset that carries node positions is
+// drawn on them, on the pair's canvas about the interface (the fixtures'
+// nodes stay inside their domains, so the tiles keep the pair's rects); a
+// flat companion keeps its logical raster beside the warped primary.
+void armMappedCompanionChecks(amrvis::qt::MainWindow& window,
+    QApplication& application, const std::filesystem::path& upper,
+    const std::filesystem::path& lower, bool lowerMapped)
+{
+    constexpr int xz = 1;
+    constexpr int xy = 2;
+    auto phase = std::make_shared<int>(-1);
+    auto windowsBefore = std::make_shared<std::array<QRectF, 2>>();
+    const auto fail = [&window, &application](const char* message) {
+        for (int tile = 0; tile < 2; ++tile) {
+            const auto rect = window.panelTileRectForTest(xz, tile);
+            const auto panel = window.mappedPanelForTest(xz, tile);
+            qCritical("xz tile %d: [%g, %g, %g x %g] warped %d window [%g, %g, %g x %g] "
+                      "device [%g, %g, %g x %g] image %d x %d fit %d",
+                tile, rect.x(), rect.y(), rect.width(), rect.height(), panel.warped,
+                panel.window.x(), panel.window.y(), panel.window.width(),
+                panel.window.height(), panel.tileDevice.x(), panel.tileDevice.y(),
+                panel.tileDevice.width(), panel.tileDevice.height(),
+                panel.image.width(), panel.image.height(), panel.fit);
+        }
+        qCritical("%s", message);
+        application.exit(1);
+    };
+    // A warped tile drawn for the screen: its pixmap is the device pixels it
+    // covers, aligned to them (see --mapped-grid-smoke-test).
+    const auto drawnForScreen = [&window](int layer) {
+        const auto panel = window.mappedPanelForTest(xz, layer);
+        const auto whole = [](double value) {
+            return std::abs(value - std::round(value)) < 1e-6;
+        };
+        return panel.warped && !panel.window.isEmpty()
+            && std::abs(panel.tileDevice.width() - panel.image.width()) < 1e-6
+            && std::abs(panel.tileDevice.height() - panel.image.height()) < 1e-6
+            && whole(panel.tileDevice.left()) && whole(panel.tileDevice.top());
+    };
+    // A warped tile is drawn for whole device pixels, so its rect holds its
+    // band and reaches at most a pixel past it; a flat tile is its band.
+    const auto onBand = [](const QRectF& tile, const QRectF& band) {
+        constexpr double slack = 0.05;
+        return tile.left() <= band.left() + 1e-6 && tile.left() > band.left() - slack
+            && tile.top() <= band.top() + 1e-6 && tile.top() > band.top() - slack
+            && tile.right() >= band.right() - 1e-6 && tile.right() < band.right() + slack
+            && tile.bottom() >= band.bottom() - 1e-6 && tile.bottom() < band.bottom() + slack;
+    };
+    // Zoomed, a warped tile is drawn for what the viewport shows of it: it
+    // holds the framed window's part over its band and stays on the band.
+    const auto holds = [](const QRectF& tile, const QRectF& part) {
+        return tile.left() <= part.left() + 1e-6 && tile.top() <= part.top() + 1e-6
+            && tile.right() >= part.right() - 1e-6 && tile.bottom() >= part.bottom() - 1e-6;
+    };
+    const auto within = [](const QRectF& tile, const QRectF& band) {
+        constexpr double slack = 0.05;
+        return tile.left() > band.left() - slack && tile.top() > band.top() - slack
+            && tile.right() < band.right() + slack && tile.bottom() < band.bottom() + slack;
+    };
+    const auto probed = [&window](int layer) {
+        const auto image = window.mappedPanelForTest(xz, layer).image;
+        const auto readout = window.probeReadoutPanelForTest(
+            xz, layer, image.width() / 2, image.height() / 2);
+        return readout.contains(QStringLiteral("value"))
+            && readout.contains(QStringLiteral("cell"));
+    };
+    const auto runPhase = [&window, &application, phase, windowsBefore, fail,
+                              drawnForScreen, probed, onBand, holds, within, lowerMapped] {
+        if (*phase < 0 || window.sliceRequestPendingForTest()
+            || window.slicesInFlightForTest() > 0) {
+            return;
+        }
+        const auto tile0 = window.panelTileRectForTest(xz, 0);
+        const auto tile1 = window.panelTileRectForTest(xz, 1);
+        switch (*phase) {
+        case 0:
+            if (!window.companionOpen() || window.panelTileCountForTest(xz) != 2) {
+                fail("the companion did not open beside a mapped primary");
+                return;
+            }
+            if (!window.displayIsMappedForTest() || !window.mappedGridMenuEnabledForTest()) {
+                fail("the mapped grid is not shown with a companion open");
+                return;
+            }
+            if (!drawnForScreen(0)
+                || (lowerMapped ? !drawnForScreen(1)
+                                : window.mappedPanelForTest(xz, 1).warped)) {
+                fail("the pair's tiles are not the warps they should be");
+                return;
+            }
+            if (!onBand(tile0, QRectF(0.0, 0.0, 6.0, 4.0))
+                || !onBand(tile1, QRectF(2.0, 4.0, 4.0, 1.0))) {
+                fail("the pair's tiles are not on their bands in physical size");
+                return;
+            }
+            if (window.backgroundErrorCountForTest() != 0) {
+                fail("the mapped pair reported an error");
+                return;
+            }
+            *phase = 1;
+            window.setCompanionPerpendicularScaleForTest(4.0);
+            break;
+        case 1:
+            if (!onBand(tile0, QRectF(0.0, 0.0, 6.0, 4.0))
+                || !onBand(tile1, QRectF(2.0, 4.0, 4.0, 4.0)) || !drawnForScreen(0)
+                || (lowerMapped && !drawnForScreen(1))) {
+                fail("a companion z factor did not stretch only the lower band");
+                return;
+            }
+            *phase = 2;
+            window.setSlicePositionForTest(2, -0.1);
+            break;
+        case 2:
+            if (window.panelTileVisibleForTest(xy, 0) || !window.panelTileVisibleForTest(xy, 1)
+                || window.mappedPanelForTest(xy, 1).warped != lowerMapped) {
+                fail("a slice position in the companion did not show its tile on XY");
+                return;
+            }
+            *phase = 3;
+            window.setSlicePositionForTest(2, 0.5);
+            break;
+        case 3:
+            if (!window.panelTileVisibleForTest(xy, 0) || window.panelTileVisibleForTest(xy, 1)
+                || !window.mappedPanelForTest(xy, 0).warped) {
+                fail("a slice position back in the primary did not show its warp on XY");
+                return;
+            }
+            if (!probed(0) || !probed(1)) {
+                fail("the probe does not read both tiles of a mapped pair");
+                return;
+            }
+            // A wheel notch zooms the view: each warp is drawn again for
+            // what it then shows, from the planes on hand.
+            for (int layer = 0; layer < 2; ++layer) {
+                (*windowsBefore)[static_cast<std::size_t>(layer)]
+                    = window.mappedPanelForTest(xz, layer).window;
+            }
+            *phase = 4;
+            window.setActiveViewForTest(xz);
+            window.wheelActiveViewForTest(1);
+            break;
+        case 4: {
+            const auto panel0 = window.mappedPanelForTest(xz, 0);
+            const auto panel1 = window.mappedPanelForTest(xz, 1);
+            if (panel0.fit || !drawnForScreen(0) || panel0.resliced
+                || panel0.window == (*windowsBefore)[0]
+                || (lowerMapped
+                    && (!drawnForScreen(1) || panel1.resliced
+                        || panel1.window == (*windowsBefore)[1]))) {
+                fail("a wheel zoom did not redraw the warps for the screen");
+                return;
+            }
+            // A rubber band across the interface frames its parts over the
+            // layers: the warps follow the view, a flat companion re-slices
+            // to its part.
+            *phase = 5;
+            window.rubberBandZoomPanelSceneForTest(xz, QRectF(1.0, 2.0, 4.0, 4.0));
+            break;
+        }
+        case 5:
+            if (!near(window.panelCanvasRectForTest(xz), QRectF(1.0, 2.0, 4.0, 4.0))
+                || !drawnForScreen(0) || !holds(tile0, QRectF(1.0, 2.0, 4.0, 2.0))
+                || !within(tile0, QRectF(0.0, 0.0, 6.0, 4.0))
+                || window.mappedPanelForTest(xz, 0).resliced) {
+                fail("a rubber band over a mapped pair did not frame the warp's part");
+                return;
+            }
+            if (lowerMapped
+                    ? (!drawnForScreen(1) || !holds(tile1, QRectF(2.0, 4.0, 3.0, 2.0))
+                        || !within(tile1, QRectF(2.0, 4.0, 4.0, 4.0)))
+                    : (!near(tile1, QRectF(2.0, 4.0, 3.0, 2.0))
+                        || !window.mappedPanelForTest(xz, 1).resliced)) {
+                fail("a rubber band over a mapped pair did not place the companion's part");
+                return;
+            }
+            // A pan step moves the framed window against the drag, one scene
+            // unit here, to the canvas edge; the warps follow.
+            *phase = 6;
+            window.panStepActiveViewForTest(QPointF(1.0, 0.0));
+            break;
+        case 6:
+            if (!near(window.panelCanvasRectForTest(xz), QRectF(0.0, 2.0, 4.0, 4.0))
+                || !drawnForScreen(0) || !holds(tile0, QRectF(0.0, 2.0, 4.0, 2.0))
+                || !within(tile0, QRectF(0.0, 0.0, 6.0, 4.0))
+                || (lowerMapped
+                    && (!drawnForScreen(1) || !holds(tile1, QRectF(2.0, 4.0, 2.0, 2.0))
+                        || !within(tile1, QRectF(2.0, 4.0, 4.0, 4.0))))) {
+                fail("a pan step over a mapped pair did not move the framed window");
+                return;
+            }
+            *phase = 7;
+            window.resetZoomAllViewsForTest();
+            break;
+        case 7:
+            if (!near(window.panelCanvasRectForTest(xz), QRectF(0.0, 0.0, 6.0, 8.0))
+                || !drawnForScreen(0) || (lowerMapped && !drawnForScreen(1))) {
+                fail("Fit over a mapped pair did not frame the whole canvas");
+                return;
+            }
+            *phase = 8;
+            window.closeCompanion();
+            break;
+        case 8: {
+            const auto panel = window.mappedPanelForTest(xz);
+            if (window.companionOpen() || window.panelTileCountForTest(xz) != 1
+                || !drawnForScreen(0) || !panel.fit
+                || !window.mappedGridMenuEnabledForTest()) {
+                fail("closing the companion did not leave the primary's warp alone");
+                return;
+            }
+            application.exit(0);
+            break;
+        }
+        default:
+            break;
+        }
+    };
+    QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+        &application, [&window, &application, fail, lower](bool success) {
+            if (!success) {
+                application.exit(2);
+                return;
+            }
+            if (!window.mappedGridMenuEnabledForTest()) {
+                fail("Mapped Grid is not offered for the mapped upper plotfile");
+                return;
+            }
+            // The primary on its grid first; the companion opens once its
+            // warp has settled.
+            QObject::connect(&window, &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                &application, [&window, lower] { window.openCompanion(lower); },
+                Qt::SingleShotConnection);
+            window.setMappedGridForTest(true);
+        });
+    QObject::connect(&window, &amrvis::qt::MainWindow::companionOpenFinished,
+        &application, [&window, &application, phase, runPhase](bool success) {
+            if (!success) {
+                application.exit(3);
+                return;
+            }
+            *phase = 0;
+            QTimer::singleShot(0, &window, runPhase);
+        });
+    QObject::connect(&window, &amrvis::qt::MainWindow::interactiveSlicesSettled,
+        &application, [&window, runPhase] { QTimer::singleShot(0, &window, runPhase); });
+    QTimer::singleShot(60000, &application, [&application, phase] {
+        qCritical("mapped companion smoke stalled in phase %d", *phase);
+        application.exit(4);
+    });
+    QTimer::singleShot(0, &window, [&window, upper] { window.openDataset(upper); });
+}
+
 void armCompanionZoomChecks(amrvis::qt::MainWindow& window,
     QApplication& application, const std::filesystem::path& upper,
     const std::filesystem::path& lower)
@@ -1179,6 +1431,16 @@ Outcome dispatchCompanion(Context& context)
     }
     if (argc == 4 && std::string_view(argv[1]) == "--mixed-companion-smoke-test") {
         armMixedCompanionChecks(context, argv[2], argv[3]);
+        return {true, std::nullopt};
+    }
+    if (argc == 4 && std::string_view(argv[1]) == "--mapped-companion-smoke-test") {
+        armMappedCompanionChecks(window, application,
+            std::filesystem::path(argv[2]), std::filesystem::path(argv[3]), true);
+        return {true, std::nullopt};
+    }
+    if (argc == 4 && std::string_view(argv[1]) == "--mixed-mapped-companion-smoke-test") {
+        armMappedCompanionChecks(window, application,
+            std::filesystem::path(argv[2]), std::filesystem::path(argv[3]), false);
         return {true, std::nullopt};
     }
     if (argc == 4 && std::string_view(argv[1]) == "--companion-zoom-smoke-test") {

@@ -422,6 +422,15 @@ open plotfile by itself: in Physical Size its tightest cell is one pixel at
 1x, and a companion with finer cells shows them smaller than a pixel until its
 own factor in **Axis Scaling...** stretches them.
 
+With **View > Mapped Grid** on (see [Mapped grids](#mapped-grids)), each
+dataset that carries node positions is drawn on them and the other, if it
+has none, stays on its logical grid beside it; the menu is offered when
+either does. The two are stacked about the interface as before, each
+dataset's own vertical factor still applies, and the display is Physical
+Size while the grid is on. A rubber band, Shift-drag and the arrow keys frame
+the window as before; a mapped dataset is redrawn for what the panel shows
+of it rather than re-sliced.
+
 The Expression Editor's definitions reach the companion too, computed
 against its own stored fields: its **Field** list shows the ones it resolves,
 and greys the rest with the reason. Applying a change reloads both datasets,
@@ -821,11 +830,12 @@ be current (protocol 1.7 or newer); with an older one the menu says so. The
 raster is sized so the node plane fits the server's frame budget, and a zoom
 re-slices the cells on show.
 
-Limits: line plots, volume rendering and a companion plotfile use the
-logical grid: the line tool is unavailable while the mapped grid is shown,
-and a companion cannot be opened until it is switched off. In the two
-panels that show the stretched axis the crosshair guide along that axis is
-omitted, since a constant logical coordinate is a curve on screen.
+Limits: line plots and volume rendering use the logical grid, and the line
+tool is unavailable while the mapped grid is shown. In the two panels that
+show the stretched axis the crosshair guide along that axis is omitted,
+since a constant logical coordinate is a curve on screen. A companion
+plotfile is drawn on its own grid too (see
+[Companion plotfiles](#companion-plotfiles)).
 
 ## Plotfile sequences and animation
 

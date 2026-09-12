@@ -558,15 +558,17 @@ QRectF MainWindow::activeViewMappedWindowForTest() const
         QPointF(window.upper[h], window.upper[v]));
 }
 
-MainWindow::MappedPanelForTest MainWindow::mappedPanelForTest(int normal) const
+MainWindow::MappedPanelForTest MainWindow::mappedPanelForTest(int normal, int layer) const
 {
     MappedPanelForTest panel;
     // A negative normal reads the 2-D view.
     const PlaneViewState* found = nullptr;
     if (normal < 0) {
         found = m_viewDimension == 2 ? &m_view2d : nullptr;
-    } else if (m_viewDimension == 3 && normal <= 2) {
-        found = &primary().planeViews[static_cast<std::size_t>(normal)];
+    } else if (m_viewDimension == 3 && normal <= 2 && layer >= 0 && layer <= 1
+        && (layer == 0 || m_layers[1].active)) {
+        found = &m_layers[static_cast<std::size_t>(layer)]
+                     .planeViews[static_cast<std::size_t>(normal)];
     }
     if (found == nullptr) {
         return panel;
@@ -612,6 +614,20 @@ void MainWindow::setActiveViewForTest(int normal)
         return;
     }
     setActiveView(primary().planeViews[static_cast<std::size_t>(normal)]);
+}
+
+QString MainWindow::probeReadoutPanelForTest(int normal, int layer, int x, int y) const
+{
+    if (m_viewDimension != 3 || normal < 0 || normal > 2 || layer < 0 || layer > 1
+        || (layer == 1 && !m_layers[1].active)) {
+        return {};
+    }
+    const auto& state = m_layers[static_cast<std::size_t>(layer)]
+                            .planeViews[static_cast<std::size_t>(normal)];
+    if (!state.plane) {
+        return {};
+    }
+    return probeReadout(state, x, y);
 }
 
 QString MainWindow::probeReadoutActiveViewForTest(int x, int y) const

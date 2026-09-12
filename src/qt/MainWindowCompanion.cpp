@@ -217,12 +217,6 @@ void MainWindow::openCompanionImpl(
         refuse(tr("a plotfile sequence cannot take a companion"));
         return;
     }
-    if (displayIsMapped()) {
-        // A pair places its tiles affinely, which a stretched grid's
-        // physically uniform pixmap does not fit.
-        refuse(tr("switch off View > Mapped Grid first"));
-        return;
-    }
     if (!canOpenCompanion()) {
         refuse(tr("the open dataset is not a three-dimensional plotfile"));
         return;
@@ -257,6 +251,16 @@ void MainWindow::openCompanionImpl(
     spec.logarithmic = primary().range->logarithmic();
     spec.slicePositions = m_slicePosition3d;
     spec.defaultPositions = false;
+    // With the mapped grid on, a companion that carries node positions is
+    // drawn on them from the start: the whole node box at the viewport's
+    // pixels (a replaced companion's windows do not carry over).
+    spec.mappedGrid = m_mappedGrid && !displayIsSpherical();
+    if (spec.mappedGrid) {
+        for (const auto& state : m_layers[1].planeViews) {
+            spec.displayWindows.push_back(RealBox{});
+            spec.displayPixels.push_back(viewportPixelSize(state));
+        }
+    }
     if (restore) {
         // A reload renders the selections it is putting back from the first
         // slice: the field by name (resolveSpecField), the level and range.
@@ -507,9 +511,17 @@ void MainWindow::installCompanion(const std::filesystem::path& path,
     if (restore && live && !sameCompanionSelections(*restore, *live)) {
         scheduleLayerSliceRequests(layer);
     }
+    // A warped primary tile moved onto the pair's canvas without a view
+    // change to redraw it: asked for the window it now shows.
+    for (auto* state : primaryViews()) {
+        if (isWarped(state->warp)) {
+            updateMappedDemand(*state);
+        }
+    }
     updateShownLayers();
     updatePairedModeControls();
     updateMappedGridControls();
+    updateAspectControls();
     configureSlicePositionControls();
     updateCrosshairs();
     updateScaleBarAvailability();
@@ -555,6 +567,15 @@ void MainWindow::tearDownCompanion(bool replacing)
         state.gridBoxes.clear();
         state.cachedRequest = {};
         state.hasCachedRequest = false;
+        state.warp = DisplayWarp::None;
+        state.gridNodes.reset();
+        state.displaySourceIndex.reset();
+        state.mappedCanvasBounds.reset();
+        state.mappedWindow = {};
+        state.mappedWindowPixels = {0, 0};
+        state.mappedNodeBounds = {};
+        state.pixmapRegion = {};
+        state.displayRegion = {};
         if (state.view != nullptr) {
             state.view->removeTile(state.tile);
         }
@@ -641,12 +662,9 @@ void MainWindow::tearDownCompanion(bool replacing)
         updateMappedGridControls();
         updateAspectControls();
         configureSlicePositionControls();
+        // A warped primary goes back on its own canvas and is drawn again
+        // for what the viewport shows (applyDisplayStretches).
         applyDisplayStretches();
-        if (!replacing && displayIsMapped()) {
-            // The pair kept the primary on its logical grid; the choice
-            // that was waiting applies again.
-            scheduleSliceRequest(true);
-        }
         if (!replacing) {
             // A remote primary's fixed scale rides a demand-driven virtual
             // canvas, which the pair displaced (installCompanion); each panel
@@ -735,36 +753,59 @@ void MainWindow::scheduleLayerSliceRequests(DatasetLayer& layer)
     }
 }
 
-void MainWindow::updatePairLayouts()
+RealBox MainWindow::pairDisplayBounds(std::size_t layer) const
+{
+    auto bounds = m_pair->bounds[layer];
+    for (const auto& state : m_layers[layer].planeViews) {
+        if (requestedWarpFor(state) != DisplayWarp::MappedGrid || !state.mappedCanvasBounds) {
+            continue;
+        }
+        for (const auto axis : displayAxes(state.normal)) {
+            const auto a = static_cast<std::size_t>(axis);
+            bounds.lower[a] = std::min(bounds.lower[a], state.mappedCanvasBounds->lower[a]);
+            bounds.upper[a] = std::max(bounds.upper[a], state.mappedCanvasBounds->upper[a]);
+        }
+    }
+    return bounds;
+}
+
+bool MainWindow::updatePairLayouts()
 {
     if (!m_pair) {
-        return;
+        return false;
     }
     // The primary's perpendicular factor is its axis factor, the companion's
-    // its own.
+    // its own. A mapped grid's pixmap is physical, so the pair is laid out
+    // in Physical Size while the grid is on, as one dataset is.
     const auto p = static_cast<std::size_t>(m_pair->perpendicularAxis);
     const std::array<double, 2> perpendicular{
         m_axisScale[p], m_layers[1].perpendicularScale};
+    const auto mode = displayIsMapped() ? AspectMode::PhysicalSize : m_aspectMode;
+    auto geometry = *m_pair;
+    geometry.displayBounds = {pairDisplayBounds(0), pairDisplayBounds(1)};
     const auto previous = m_pairLayouts;
     for (int normal = 0; normal < 3; ++normal) {
         m_pairLayouts[static_cast<std::size_t>(normal)] = PairLayout(
-            *m_pair, normal, m_aspectMode, m_axisScale, perpendicular);
+            geometry, normal, mode, m_axisScale, perpendicular);
     }
     // A window is in scene units, which the layout defines: after a change
     // of aspect or axis scale it is the regions' rect under the new one. An
     // unchanged layout (a reload) keeps it as framed: the regions are rounded
     // out to cell edges, and a window rebuilt from them would grow.
+    bool changed = false;
     for (std::size_t normal = 0; normal < 3; ++normal) {
-        if (!m_pairWindows[normal]) {
-            continue;
-        }
         const auto& before = previous[normal];
         const auto& after = m_pairLayouts[normal];
-        if (before.tileRect(0) != after.tileRect(0)
-            || before.tileRect(1) != after.tileRect(1)) {
+        if (before.tileRect(0) == after.tileRect(0)
+            && before.tileRect(1) == after.tileRect(1)) {
+            continue;
+        }
+        changed = true;
+        if (m_pairWindows[normal]) {
             m_pairWindows[normal] = pairRegionsRect(static_cast<int>(normal));
         }
     }
+    return changed;
 }
 
 void MainWindow::applyPairLayouts()
@@ -779,15 +820,22 @@ void MainWindow::applyPairLayouts()
             continue;
         }
         if (m_pair) {
+            // A warped tile's pixmap spans the window it was drawn for.
             const auto& layout = pairLayout(state->normal);
+            const auto& region = isWarped(state->warp)
+                ? state->pixmapRegion : state->plane->physicalRegion;
             view->setDisplayStretch(1.0, 1.0);
             view->placeTile(state->tile,
-                toQRectF(layout.sceneRectForRegion(state->layer,
-                    state->plane->physicalRegion)),
+                toQRectF(layout.sceneRectForRegion(state->layer, region)),
                 toQRectF(pairCanvasRect(state->normal)));
-        } else if (!isWarped(state->warp)) {
-            // A warped tile stays on its own canvas (MappedLayout); the
-            // others go back to the classic raster-at-origin scene.
+        } else if (const auto placed = tilePlacement(*state)) {
+            // A warped tile back on its own canvas (MappedLayout).
+            view->setDisplayStretch(1.0, 1.0);
+            view->placeTile(state->tile,
+                toQRectF(placed->sceneRectForRegion(state->pixmapRegion)),
+                toQRectF(placed->canvas));
+        } else {
+            // The others go back to the classic raster-at-origin scene.
             const auto& image = view->image(state->tile);
             view->placeTile(state->tile,
                 QRectF(QPointF(0.0, 0.0), QSizeF(image.size())), std::nullopt);
@@ -811,11 +859,22 @@ std::optional<QRectF> MainWindow::pairRegionsRect(int normal) const
     std::optional<QRectF> rect;
     for (const auto& layer : m_layers) {
         const auto& state = layer.planeViews[static_cast<std::size_t>(normal)];
-        if (!layer.active || !state.visibleRegion || !stateShown(state)) {
+        if (!layer.active || !stateShown(state)) {
             continue;
         }
-        const auto part = toQRectF(layout.sceneRectForRegion(state.layer, *state.visibleRegion));
-        rect = rect ? rect->united(part) : part;
+        std::optional<QRectF> part;
+        if (isWarped(state.warp)) {
+            // Its demand region is not a zoom; the window it draws for is.
+            if (hasMappedWindow(state)) {
+                part = toQRectF(layout.sceneRectForRegion(state.layer, state.mappedWindow))
+                           .intersected(toQRectF(layout.tileRect(state.layer)));
+            }
+        } else if (state.visibleRegion) {
+            part = toQRectF(layout.sceneRectForRegion(state.layer, *state.visibleRegion));
+        }
+        if (part) {
+            rect = rect ? rect->united(*part) : part;
+        }
     }
     return rect;
 }
@@ -834,8 +893,9 @@ std::array<std::optional<RealBox>, 2> MainWindow::pairRegionsForSceneWindow(
         // On the panel normal to the shared plane the layers overlap and one
         // is hidden; it takes no part (see updateShownLayers for when it comes
         // on show).
-        if (!dataset.session
-            || !stateShown(dataset.planeViews[static_cast<std::size_t>(normal)])) {
+        const auto& state = dataset.planeViews[static_cast<std::size_t>(normal)];
+        if (!dataset.session || !stateShown(state)
+            || requestedWarpFor(state) == DisplayWarp::MappedGrid) {
             continue;
         }
         const auto region = layout.regionForSceneRect(layer, rect);
@@ -844,6 +904,36 @@ std::array<std::optional<RealBox>, 2> MainWindow::pairRegionsForSceneWindow(
         }
     }
     return regions;
+}
+
+std::optional<QRectF> MainWindow::pairFramedWindow(int normal, const QRectF& window,
+    const std::array<std::optional<RealBox>, 2>& regions) const
+{
+    if (!m_pair || normal < 0 || normal > 2) {
+        return std::nullopt;
+    }
+    const auto& layout = pairLayout(normal);
+    const SceneRect rect{window.x(), window.y(), window.width(), window.height()};
+    std::optional<QRectF> framed;
+    for (std::size_t layer = 0; layer < 2; ++layer) {
+        const auto& state = m_layers[layer].planeViews[static_cast<std::size_t>(normal)];
+        if (!m_layers[layer].session || !stateShown(state)) {
+            continue;
+        }
+        std::optional<QRectF> part;
+        if (requestedWarpFor(state) == DisplayWarp::MappedGrid) {
+            // The window's part over the warped tile, as the view frames it.
+            if (layout.regionForSceneRect(layer, rect)) {
+                part = window.intersected(toQRectF(layout.tileRect(layer)));
+            }
+        } else if (regions[layer]) {
+            part = toQRectF(layout.sceneRectForRegion(layer, *regions[layer]));
+        }
+        if (part) {
+            framed = framed ? framed->united(*part) : part;
+        }
+    }
+    return framed;
 }
 
 RealBox MainWindow::snappedPairRegion(
@@ -872,18 +962,24 @@ bool MainWindow::applyPairZoomWindow(int normal, const QRectF& window, bool refi
     // A selection frames what its snapped regions cover; a pan frames the
     // shifted window itself, at its size.
     return applyPairRegions(normal, pairRegionsForSceneWindow(normal, window),
-        refit ? std::nullopt : std::optional<QRectF>(window), refit);
+        window, refit);
 }
 
 bool MainWindow::applyPairRegions(int normal,
     const std::array<std::optional<RealBox>, 2>& regions,
-    std::optional<QRectF> window, bool refit)
+    const QRectF& window, bool refit)
 {
-    if (!regions[0] && !regions[1]) {
+    const auto framed = refit ? pairFramedWindow(normal, window, regions)
+                              : std::optional<QRectF>(window);
+    if (!framed) {
         return false;
     }
     std::vector<PlaneViewState*> changed;
     for (auto* state : statesForPanel(normal)) {
+        if (requestedWarpFor(*state) == DisplayWarp::MappedGrid) {
+            // A warped layer draws for what the view then shows.
+            continue;
+        }
         const auto& region = regions[state->layer];
         if (region) {
             state->visibleRegion = region;
@@ -901,8 +997,7 @@ bool MainWindow::applyPairRegions(int normal,
     // on this canvas and the transform keeps the frame (see showSlice's
     // paired arm). A pan keeps the scale -- a fixed one included -- and
     // moves onto the window.
-    m_pairWindows[static_cast<std::size_t>(normal)]
-        = window ? window : pairRegionsRect(normal);
+    m_pairWindows[static_cast<std::size_t>(normal)] = framed;
     auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
     const auto canvas = toQRectF(pairCanvasRect(normal));
     if (refit) {
@@ -923,23 +1018,32 @@ void MainWindow::pairRubberBandZoom(int normal, const QRectF& sceneRect)
         return;
     }
     const auto regions = pairRegionsForSceneWindow(normal, window);
-    if (!applyPairRegions(normal, regions, std::nullopt, /*refit=*/true)) {
+    if (!applyPairRegions(normal, regions, window, /*refit=*/true)) {
         return;
     }
     const bool synchronize = m_syncRubberBandZoomAction != nullptr
         && m_syncRubberBandZoomAction->isChecked() && m_viewDimension == 3;
     if (synchronize) {
         // Each other panel shares one axis with this one: it takes the
-        // selection's extent along that axis, over both layers' parts, and
-        // keeps its other axis whole -- the physical form of the fractions a
-        // single dataset's sync carries (see rubberBandZoom).
+        // selection's extent along that axis, over both layers' parts (a
+        // warped layer's is the window cut to it), and keeps its other axis
+        // whole -- the physical form of the fractions a single dataset's
+        // sync carries (see rubberBandZoom).
+        const auto& layout = pairLayout(normal);
+        const SceneRect rect{window.x(), window.y(), window.width(), window.height()};
         for (int other = 0; other < 3; ++other) {
             if (other == normal) {
                 continue;
             }
             const auto c = static_cast<std::size_t>(3 - normal - other);
             std::optional<std::pair<double, double>> extent;
-            for (const auto& region : regions) {
+            for (std::size_t layer = 0; layer < 2; ++layer) {
+                const auto& state = m_layers[layer].planeViews[static_cast<std::size_t>(normal)];
+                auto region = regions[layer];
+                if (!region && m_layers[layer].session && stateShown(state)
+                    && requestedWarpFor(state) == DisplayWarp::MappedGrid) {
+                    region = layout.regionForSceneRect(layer, rect);
+                }
                 if (!region) {
                     continue;
                 }
@@ -947,21 +1051,27 @@ void MainWindow::pairRubberBandZoom(int normal, const QRectF& sceneRect)
                                       std::max(extent->second, region->upper[c])}
                                 : std::pair{region->lower[c], region->upper[c]};
             }
-            std::array<std::optional<RealBox>, 2> targets;
+            // The selection on the other panel: each shown layer's display
+            // bounds cut to the extent, as one scene rect.
+            const auto& otherLayout = pairLayout(other);
+            std::optional<QRectF> selection;
             for (std::size_t layer = 0; layer < 2 && extent; ++layer) {
                 if (!m_layers[layer].session
                     || !stateShown(m_layers[layer].planeViews[static_cast<std::size_t>(other)])) {
                     continue;
                 }
-                auto region = m_pair->bounds[layer];
+                auto region = pairDisplayBounds(layer);
                 region.lower[c] = std::max(region.lower[c], extent->first);
                 region.upper[c] = std::min(region.upper[c], extent->second);
                 const auto span = m_pair->bounds[layer].upper[c] - m_pair->bounds[layer].lower[c];
                 if (region.upper[c] - region.lower[c] > 1.0e-9 * span) {
-                    targets[layer] = snappedPairRegion(layer, other, region);
+                    const auto part = toQRectF(otherLayout.sceneRectForRegion(layer, region));
+                    selection = selection ? selection->united(part) : part;
                 }
             }
-            applyPairRegions(other, targets, std::nullopt, /*refit=*/true);
+            if (selection) {
+                applyPairZoomWindow(other, *selection, /*refit=*/true);
+            }
         }
     }
     // One panel zoomed and the others as they were is Mixed (see rubberBandZoom).
@@ -1016,6 +1126,11 @@ void MainWindow::updateShownLayers()
         // zoom, though the hidden layer took no part in it.
         const auto& window = m_pairWindows[static_cast<std::size_t>(state->normal)];
         if (shown && !wasShown && window && m_pair) {
+            if (requestedWarpFor(*state) == DisplayWarp::MappedGrid) {
+                // A warped layer draws for what the window shows of it.
+                updateMappedDemand(*state);
+                continue;
+            }
             const SceneRect rect{window->x(), window->y(), window->width(), window->height()};
             if (const auto region
                 = pairLayout(state->normal).regionForSceneRect(state->layer, rect)) {
@@ -1047,7 +1162,8 @@ void MainWindow::updatePairedIsoGeometry()
     // The isometric view in the panels' proportions: with the ocean 30 times
     // shallower than the atmosphere is tall and both 70 km wide, physical
     // units would flatten the ocean to a line.
-    const PairDisplayMap map(*m_pair, m_aspectMode, m_axisScale,
+    const auto mode = displayIsMapped() ? AspectMode::PhysicalSize : m_aspectMode;
+    const PairDisplayMap map(*m_pair, mode, m_axisScale,
         {m_axisScale[static_cast<std::size_t>(m_pair->perpendicularAxis)],
             companion.perpendicularScale});
     m_isoWidget->setPairedGeometry(primary().session->metadata(),

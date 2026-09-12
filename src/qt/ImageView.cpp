@@ -527,6 +527,7 @@ void ImageView::noteViewChanged()
     now.horizontalScroll = horizontalScrollBar()->value();
     now.verticalScroll = verticalScrollBar()->value();
     now.viewportSize = viewport() != nullptr ? viewport()->size() : QSize();
+    now.sceneRect = m_scene != nullptr ? m_scene->sceneRect() : QRectF();
     if (now == m_notedView) {
         return;
     }

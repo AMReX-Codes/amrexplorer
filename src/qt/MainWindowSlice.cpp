@@ -1480,6 +1480,11 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
         }
         state.mappedCanvasBounds = bounds;
     }
+    // Over a pair the node box is the layer's display bounds: a wider one
+    // re-lays out the panel and re-places the other tile, once.
+    if (m_pair && m_viewDimension == 3 && updatePairLayouts()) {
+        applyPairLayouts();
+    }
     // Before the raster is installed, so a Fit is computed once, with the
     // stretch the raster was sized for: none on a mapped grid, whose tile
     // carries its own placement.
@@ -1540,28 +1545,21 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
             placement = virtualPlacementFor(
                 state, display.displayPlane().physicalRegion);
         }
-        const auto mapped = isWarped(display.warp) ? mappedLayout(state) : std::nullopt;
-        if (mapped) {
-            // The warp of the window it was asked for lands at that
-            // window's place on the canvas; the view's transform and
-            // scroll position are untouched (Preserve), a first warped
-            // arrival or a switch from the logical grid refits to the
-            // canvas. Never setImage: that would drop the canvas.
+        if (const auto placed = tilePlacement(state)) {
+            // A warp of the window it was asked for lands at that window's
+            // place on the canvas, a flat raster at its region's; the view's
+            // transform and scroll position are untouched (Preserve), a
+            // first warped arrival or a switch from the logical grid refits
+            // to the canvas. Over a pair the other tile stays where it is.
+            // Never setImage: that would drop the canvas.
+            const auto region = isWarped(display.warp)
+                ? display.displayRegion : display.displayPlane().physicalRegion;
             state.view->setTileImage(state.tile, image,
-                toQRectF(mapped->sceneRectForRegion(display.displayRegion)),
-                toQRectF(mapped->canvasRect()), transformPolicy);
-        } else if (m_pair && m_viewDimension == 3) {
-            // Two datasets share the panel's canvas: this tile lands at
-            // its layout position, the other tile stays where it is.
-            const auto& layout = pairLayout(state.normal);
-            const auto region = display.displayPlane().physicalRegion;
-            const auto rect = layout.sceneRectForRegion(state.layer, region);
-            const auto canvas = pairCanvasRect(state.normal);
-            state.view->setTileImage(state.tile, image,
-                QRectF(rect.x, rect.y, rect.width, rect.height),
-                QRectF(canvas.x, canvas.y, canvas.width, canvas.height),
-                transformPolicy);
-            state.view->setTileVisible(state.tile, stateShown(state));
+                toQRectF(placed->sceneRectForRegion(region)),
+                toQRectF(placed->canvas), transformPolicy);
+            if (m_pair) {
+                state.view->setTileVisible(state.tile, stateShown(state));
+            }
         } else {
             state.view->setImage(image, transformPolicy,
                 logicalImageSize(state, display.displayPlane(), image),
@@ -1670,7 +1668,14 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     // The straight-line profile tool works on the logical r-theta / theta-r
     // grid but not on the warped R-Z view, nor on a mapped grid, where a
     // straight screen line is not a constant logical coordinate.
-    state.view->setLineToolEnabled(!displayIsSphericalWarp() && !isWarped(state.warp));
+    // The line tool is the view's: off while any tile on the panel is a warp.
+    bool warpedOnPanel = displayIsSphericalWarp() || isWarped(state.warp);
+    if (m_viewDimension == 3) {
+        for (const auto* other : statesForPanel(state.normal)) {
+            warpedOnPanel = warpedOnPanel || isWarped(other->warp);
+        }
+    }
+    state.view->setLineToolEnabled(!warpedOnPanel);
     // The 2-D Spherical menu is available only for spherical datasets;
     // Aspect Ratio for the others.
     updateSphericalControls();
@@ -1705,9 +1710,11 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
 
     m_diagnosticsModel->setSliceMetrics(display.slice.metrics.blocksRead,
         display.slice.metrics.cacheHits, display.slice.metrics.payloadBytesRead);
-    if (state.layer == 0 && !display.mappedGridFallback.empty()) {
-        statusBar()->showMessage(tr("Mapped grid display is off: %1")
-                .arg(QString::fromStdString(display.mappedGridFallback)));
+    if (!display.mappedGridFallback.empty()) {
+        const auto message = tr("Mapped grid display is off: %1")
+            .arg(QString::fromStdString(display.mappedGridFallback));
+        statusBar()->showMessage(state.layer == 1
+                ? tr("%1: %2").arg(layerFor(state).name, message) : message);
     } else {
         statusBar()->clearMessage();
     }
@@ -2006,34 +2013,31 @@ void MainWindow::syncVisibleRanges(DatasetLayer& layer)
                             placement = virtualPlacementFor(
                                 *state, state->plane->physicalRegion);
                         }
-                        const auto mapped = state->warp == DisplayWarp::MappedGrid
-                            ? mappedLayout(*state) : std::nullopt;
-                        if (mapped && outcome.mappedWindows[index]) {
+                        const bool warpedWindow
+                            = state->warp == DisplayWarp::MappedGrid
+                            && outcome.mappedWindows[index].has_value();
+                        const auto placed = tilePlacement(*state);
+                        if (placed && (warpedWindow || m_pair)) {
                             // The re-coloured warp of the same window lands
-                            // where it was; the canvas and the view stay.
-                            state->displayRegion = *outcome.mappedWindows[index];
-                            state->displaySourceIndex
-                                = outcome.mappedSourceIndices[index];
+                            // where it was, a flat tile at its region; the
+                            // canvas and the view stay, and over a pair only
+                            // this layer's tile changes.
+                            if (warpedWindow) {
+                                state->displayRegion = *outcome.mappedWindows[index];
+                                state->displaySourceIndex
+                                    = outcome.mappedSourceIndices[index];
+                            }
+                            const auto region = warpedWindow
+                                ? state->displayRegion : state->plane->physicalRegion;
                             state->view->setTileImage(state->tile,
                                 outcome.images[index],
-                                toQRectF(mapped->sceneRectForRegion(
-                                    state->displayRegion)),
-                                toQRectF(mapped->canvasRect()),
+                                toQRectF(placed->sceneRectForRegion(region)),
+                                toQRectF(placed->canvas),
                                 ImageTransformPolicy::Preserve);
-                        } else if (m_pair && m_viewDimension == 3) {
-                            // Two datasets: only this layer's tile changes.
-                            const auto& layout = pairLayout(state->normal);
-                            const auto rect = layout.sceneRectForRegion(
-                                state->layer, state->plane->physicalRegion);
-                            const auto canvas = pairCanvasRect(state->normal);
-                            state->view->setTileImage(state->tile,
-                                outcome.images[index],
-                                QRectF(rect.x, rect.y, rect.width, rect.height),
-                                QRectF(canvas.x, canvas.y, canvas.width,
-                                    canvas.height),
-                                ImageTransformPolicy::Preserve);
-                            state->view->setTileVisible(
-                                state->tile, stateShown(*state));
+                            if (m_pair) {
+                                state->view->setTileVisible(
+                                    state->tile, stateShown(*state));
+                            }
                         } else {
                             state->view->setImage(outcome.images[index],
                                 ImageTransformPolicy::GeometryAware,

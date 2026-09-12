@@ -28,7 +28,8 @@
 #                 mapped-grid-sequence | mapped-grid-cap | spherical-rz |
 #                 remote-physical-aspect | companion |
 #                 remote-companion | companion-derived | companion-zoom |
-#                 mixed-companion |
+#                 mixed-companion | mapped-companion |
+#                 mixed-mapped-companion |
 #                 volume |
 #                 derived-field | derived-field-sequence |
 #                 derived-field-frames | derived-field-playback |
@@ -285,6 +286,18 @@ elseif(MODE STREQUAL "companion-zoom")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/upper")
     run_or_die("${MATERIALIZER}" "${SOURCE2}" "${WORK}/lower")
     run_or_die("${AMREXPLORER_QT}" --companion-zoom-smoke-test
+        "${WORK}/upper" "${WORK}/lower")
+elseif(MODE STREQUAL "mapped-companion")
+    # Both plotfiles carry node positions: each is drawn on its own grid.
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/upper")
+    run_or_die("${MATERIALIZER}" "${SOURCE2}" "${WORK}/lower")
+    run_or_die("${AMREXPLORER_QT}" --mapped-companion-smoke-test
+        "${WORK}/upper" "${WORK}/lower")
+elseif(MODE STREQUAL "mixed-mapped-companion")
+    # A mapped primary over a flat companion.
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/upper")
+    run_or_die("${MATERIALIZER}" "${SOURCE2}" "${WORK}/lower")
+    run_or_die("${AMREXPLORER_QT}" --mixed-mapped-companion-smoke-test
         "${WORK}/upper" "${WORK}/lower")
 elseif(MODE STREQUAL "mixed-companion")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/upper")

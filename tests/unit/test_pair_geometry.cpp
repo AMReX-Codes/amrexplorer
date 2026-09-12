@@ -59,6 +59,12 @@ amrvis::DatasetMetadata remora()
     return plotfile({{0.0, 0.0, -300.0}}, {{50000.0, 20000.0, 0.0}}, {{50, 20, 40}});
 }
 
+// A second atmosphere east of the ERF domain, touching it at x = 50000.
+amrvis::DatasetMetadata east()
+{
+    return plotfile({{50000.0, 0.0, 0.0}}, {{60000.0, 20000.0, 9000.0}}, {{10, 20, 48}});
+}
+
 void detectsTheSharedPlane()
 {
     const auto result = amrvis::qt::pairGeometry(erf(), remora());
@@ -279,11 +285,114 @@ void displayMapStacksTheWholeDomains()
         "the display map does not stack the two domains");
 }
 
+// The display bounds: what a mapped grid's tile covers, about the logical
+// interface, in place of the logical bounds the pairing is decided on.
+void displayBoundsDefaultToLogical()
+{
+    const auto geometry = *amrvis::qt::pairGeometry(erf(), remora()).geometry;
+    require(nearly(geometry.displayBounds[0], geometry.bounds[0])
+            && nearly(geometry.displayBounds[1], geometry.bounds[1])
+            && nearly(geometry.displayUnionBounds(), geometry.unionBounds)
+            && nearly(geometry.interfacePosition(), 0.0),
+        "a pair's display bounds are not its logical bounds");
+}
+
+void liftedUpperNodesGrowTheUpperBand()
+{
+    // ERF's nodes reach 500 m above its domain and stop 100 m short of the
+    // ground: its band grows at the top, and the ocean's band starts where
+    // the interface is on ERF's map, not where ERF's tile ends.
+    auto geometry = *amrvis::qt::pairGeometry(erf(), remora()).geometry;
+    geometry.displayBounds[0].lower[2] = 100.0;
+    geometry.displayBounds[0].upper[2] = 9500.0;
+    const std::array<double, 3> unit{1.0, 1.0, 1.0};
+    const amrvis::qt::PairLayout xz(geometry, 1, amrvis::qt::AspectMode::CellCounts,
+        unit, {1.0, 1.0});
+    require(nearly(xz.tileRect(0), {0.0, 0.0, 70.0, 9400.0 / 187.5}),
+        "the lifted tile does not span its display bounds");
+    require(nearly(xz.sceneFromPhysical(0, 2, 0.0), 9500.0 / 187.5)
+            && nearly(xz.sceneFromPhysical(1, 2, 0.0), 9500.0 / 187.5),
+        "the two bands do not meet at the interface");
+    require(nearly(xz.tileRect(1), {20.0, 9500.0 / 187.5, 50.0, 40.0})
+            && nearly(xz.canvasRect(), {0.0, 0.0, 70.0, 9500.0 / 187.5 + 40.0}),
+        "the ocean's band does not start at the interface");
+    // Physical size: the upper layer's factor sets where the lower band
+    // starts; the lower layer's own factor sets only its height.
+    const amrvis::qt::PairLayout physical(geometry, 1,
+        amrvis::qt::AspectMode::PhysicalSize, unit, {1.0, 30.0});
+    require(nearly(physical.tileRect(1),
+                {20000.0 / 187.5, 9500.0 / 187.5, 50000.0 / 187.5, 48.0})
+            && nearly(physical.tileRect(0), {0.0, 0.0, 70000.0 / 187.5, 9400.0 / 187.5}),
+        "a lifted upper band does not place the ocean in physical size");
+}
+
+void surfaceNodesCrossTheInterface()
+{
+    // The ocean's free surface reaches 30 m above z = 0: four ocean rows
+    // into the atmosphere's band, at the ocean's own scale.
+    auto geometry = *amrvis::qt::pairGeometry(erf(), remora()).geometry;
+    geometry.displayBounds[1].upper[2] = 30.0;
+    const std::array<double, 3> unit{1.0, 1.0, 1.0};
+    const amrvis::qt::PairLayout xz(geometry, 1, amrvis::qt::AspectMode::CellCounts,
+        unit, {1.0, 1.0});
+    require(nearly(xz.tileRect(1), {20.0, 44.0, 50.0, 44.0})
+            && nearly(xz.tileRect(0), {0.0, 0.0, 70.0, 48.0}),
+        "surface nodes past the interface are not drawn into the other band");
+    require(nearly(xz.physicalFromScene(1, 2, 44.0), 30.0)
+            && nearly(*xz.regionForSceneRect(1, xz.tileRect(1)), geometry.displayBounds[1]),
+        "a tile past the interface does not map back to its display bounds");
+    // The same rect through the atmosphere's map is cut to its own bounds.
+    const auto air = xz.regionForSceneRect(0, xz.tileRect(1));
+    require(air && nearly(air->lower[2], 0.0) && nearly(air->upper[2], 750.0),
+        "the other layer's part of a crossing tile is not cut to its bounds");
+}
+
+void horizontalPairDisplayBounds()
+{
+    // Perpendicular x, shown horizontally: ERF is the lower (western) layer
+    // and its own lowest node anchors the scene; the eastern layer's nodes
+    // reaching 1 km west of the interface extend its tile leftwards.
+    auto geometry = *amrvis::qt::pairGeometry(erf(), east()).geometry;
+    require(geometry.perpendicularAxis == 0 && geometry.upperLayer == 1,
+        "the eastern pair is not stacked along x");
+    geometry.displayBounds[1].lower[0] = 49000.0;
+    const std::array<double, 3> unit{1.0, 1.0, 1.0};
+    const amrvis::qt::PairLayout xz(geometry, 1, amrvis::qt::AspectMode::CellCounts,
+        unit, {1.0, 1.0});
+    require(nearly(xz.tileRect(0), {0.0, 0.0, 70.0, 48.0})
+            && nearly(xz.tileRect(1), {69.0, 0.0, 11.0, 48.0})
+            && nearly(xz.sceneFromPhysical(1, 0, 50000.0), 70.0),
+        "a horizontal band does not start at the interface");
+}
+
+void sharedAxesUseTheDisplayUnion()
+{
+    // Ocean nodes 5 km west of the union: the shared x map anchors there,
+    // ERF's tile moves right, and ERF's cut is still to its own bounds.
+    auto geometry = *amrvis::qt::pairGeometry(erf(), remora()).geometry;
+    geometry.displayBounds[1].lower[0] = -25000.0;
+    const std::array<double, 3> unit{1.0, 1.0, 1.0};
+    const amrvis::qt::PairLayout xy(geometry, 2, amrvis::qt::AspectMode::CellCounts,
+        unit, {1.0, 1.0});
+    require(nearly(xy.tileRect(0), {5.0, 0.0, 70.0, 20.0})
+            && nearly(xy.tileRect(1), {0.0, 0.0, 75.0, 20.0})
+            && nearly(xy.canvasRect().x, 0.0),
+        "the shared axis is not anchored at the display union");
+    const auto west = xy.regionForSceneRect(0, {0.0, 0.0, 10.0, 20.0});
+    require(west && nearly(west->lower[0], -20000.0) && nearly(west->upper[0], -15000.0),
+        "a rect past a layer's display bounds was not cut to them");
+}
+
 } // namespace
 
 int main()
 {
     displayMapStacksTheWholeDomains();
+    displayBoundsDefaultToLogical();
+    liftedUpperNodesGrowTheUpperBand();
+    surfaceNodesCrossTheInterface();
+    horizontalPairDisplayBounds();
+    sharedAxesUseTheDisplayUnion();
     detectsTheSharedPlane();
     refusesWhatCannotShareAPlane();
     indicesSpanBothLayers();

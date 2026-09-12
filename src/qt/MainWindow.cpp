@@ -1360,11 +1360,14 @@ std::array<int, 2> MainWindow::sliceOutputSize(
     auto viewportPixels = stretchedViewportPixelSize(state);
     const auto target = state.visibleRegion.value_or(
         datasetSampleBounds(*layerFor(state).openMetadata));
-    if (m_pair && state.visibleRegion.has_value()) {
+    if (m_pair && state.visibleRegion.has_value()
+        && requestedWarpFor(state) != DisplayWarp::MappedGrid) {
         // Over a pair a zoomed layer fills only its share of the framed
         // window -- a selection straddling the interface splits the height
         // between the two -- so its raster is bounded by that share of the
-        // viewport rather than fetched as if it filled the whole of it.
+        // viewport rather than fetched as if it filled the whole of it. A
+        // warped layer's region is the demand loop's, sized to the viewport
+        // as one dataset's is.
         const auto rect = pairLayout(state.normal).sceneRectForRegion(state.layer, target);
         const auto canvas = pairCanvasRect(state.normal);
         const auto share = [](double part, double whole) {
@@ -1467,9 +1470,18 @@ bool MainWindow::displayIsSphericalWarp() const
 bool MainWindow::mappedGridAvailable() const
 {
     // A 2-D spherical plane is drawn on its (R, Z) wedge, which the pipeline
-    // takes over any node positions the plotfile may carry.
-    return primary().session && primary().session->supportsMappedGrid()
-        && !m_pair && !m_layers[1].active && !displayIsSpherical();
+    // takes over any node positions the plotfile may carry. Over a pair,
+    // each dataset that carries node positions draws on them.
+    if (!primary().session || displayIsSpherical()) {
+        return false;
+    }
+    for (const auto& layer : m_layers) {
+        if (layer.session && (&layer == &primary() || layer.active)
+            && layer.session->supportsMappedGrid()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool MainWindow::displayIsMapped() const
@@ -1480,12 +1492,14 @@ bool MainWindow::displayIsMapped() const
 DisplayWarp MainWindow::requestedWarpFor(const PlaneViewState& state) const
 {
     // The R-Z wedge first, as the pipeline decides it: a spherical plane is
-    // never drawn on a mapped grid. Otherwise the primary alone draws on its
-    // mapped grid; a companion's tile is placed affinely (mappedGridAvailable).
+    // never drawn on a mapped grid. Otherwise each layer whose plotfile
+    // carries node positions draws on them; a companion without them keeps
+    // its logical raster beside a warped primary.
     if (displayIsSphericalWarp()) {
         return DisplayWarp::SphericalRZ;
     }
-    if (state.layer == 0 && displayIsMapped()) {
+    const auto& session = layerFor(state).session;
+    if (displayIsMapped() && session && session->supportsMappedGrid()) {
         return DisplayWarp::MappedGrid;
     }
     return DisplayWarp::None;
@@ -1501,8 +1515,8 @@ void MainWindow::updateMappedGridControls()
     // Say why the menu is off; a disabled menu on its own explains nothing.
     QString reason;
     if (!available && primary().session) {
-        if (m_pair || m_layers[1].active) {
-            reason = tr("Not available while a companion is open");
+        if (m_layers[1].active) {
+            reason = tr("Neither dataset carries mapped-grid node positions");
         } else if (displayIsSpherical()) {
             reason = tr("A 2-D spherical plotfile is drawn on its R-Z wedge");
         } else if (const auto remote = std::dynamic_pointer_cast<
@@ -1642,6 +1656,26 @@ std::optional<MappedLayout> MainWindow::mappedLayout(
         m_axisScale, finest.cellSize, metadata.dimension);
 }
 
+std::optional<TilePlacement> MainWindow::tilePlacement(
+    const PlaneViewState& state) const
+{
+    TilePlacement placement;
+    if (m_pair && m_viewDimension == 3) {
+        placement.pair = &pairLayout(state.normal);
+        placement.layer = static_cast<std::size_t>(state.layer);
+        placement.canvas = pairCanvasRect(state.normal);
+        return placement;
+    }
+    if (isWarped(state.warp)) {
+        if (auto layout = mappedLayout(state)) {
+            placement.canvas = layout->canvasRect();
+            placement.single = std::move(*layout);
+            return placement;
+        }
+    }
+    return std::nullopt;
+}
+
 void MainWindow::applyDisplayStretches()
 {
     if (m_pair) {
@@ -1662,14 +1696,15 @@ void MainWindow::applyDisplayStretches()
         applyDisplayStretch(*state);
         if (isWarped(state->warp) && state->view->hasTileImage(state->tile)) {
             // The axis factors are the layout: the tile and its canvas move
-            // to the new one, and the warp is drawn again for what the
-            // viewport then shows.
-            if (const auto layout = mappedLayout(*state)) {
+            // to the new one (over a pair, applyPairLayouts just did), and
+            // the warp is drawn again for what the viewport then shows.
+            const auto placement = m_pair ? std::nullopt : tilePlacement(*state);
+            if (placement) {
                 state->view->placeTile(state->tile,
-                    toQRectF(layout->sceneRectForRegion(state->displayRegion)),
-                    toQRectF(layout->canvasRect()));
-                updateMappedDemand(*state);
+                    toQRectF(placement->sceneRectForRegion(state->displayRegion)),
+                    toQRectF(placement->canvas));
             }
+            updateMappedDemand(*state);
             continue;
         }
         if (!layerIsRemote(*state) || !state->view->hasImage()) {
@@ -1975,6 +2010,10 @@ void MainWindow::createMenus()
         updateScaleBarAvailability();
         // Display-only change: re-draw from the cached planes, no query.
         if (mappedGridAvailable() && m_controlsReady) {
+            if (m_pair) {
+                // The pair's layout is Physical Size while the grid is on.
+                applyDisplayStretches();
+            }
             scheduleSliceRequest(true);
         }
     });

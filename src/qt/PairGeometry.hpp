@@ -44,12 +44,30 @@ struct PairGeometry {
     std::size_t upperLayer = 0;
     std::array<RealBox, 2> bounds;
     RealBox unionBounds;
+    // What each layer's raster covers on screen: its whole-domain node box
+    // when drawn on a mapped grid, else `bounds`. The logical `bounds` keep
+    // the pairing, layerAt and the stacked/union indices.
+    std::array<RealBox, 2> displayBounds;
     // Per axis, the smaller of the two finest cell sizes: the unit a shared
     // axis is measured in so both rasters keep at least one pixel per cell.
     Real3 referenceCellSize;
     std::array<Real3, 2> finestCellSize;
 
     [[nodiscard]] std::size_t lowerLayer() const noexcept { return 1 - upperLayer; }
+    // Where the two domains meet along the perpendicular axis.
+    [[nodiscard]] double interfacePosition() const noexcept
+    {
+        return bounds[upperLayer].lower[static_cast<std::size_t>(perpendicularAxis)];
+    }
+    [[nodiscard]] RealBox displayUnionBounds() const noexcept
+    {
+        RealBox box;
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            box.lower[axis] = std::min(displayBounds[0].lower[axis], displayBounds[1].lower[axis]);
+            box.upper[axis] = std::max(displayBounds[0].upper[axis], displayBounds[1].upper[axis]);
+        }
+        return box;
+    }
     // The layer a position along the perpendicular axis belongs to: the
     // upper layer from its lower bound up (the interface included, and
     // anything above), the lower layer below that.
@@ -205,14 +223,18 @@ struct PairGeometryResult {
         geometry.referenceCellSize[axis] = std::min(
             geometry.finestCellSize[0][axis], geometry.finestCellSize[1][axis]);
     }
+    geometry.displayBounds = geometry.bounds;
     return {geometry, {}};
 }
 
 // How one panel places the two rasters in its scene. Scene units are display
 // units: a fixed scale N is N screen pixels per scene unit. Along a shared
-// axis both layers use one linear map anchored at the union's lower bound;
-// along the perpendicular axis each layer has its own band, the upper layer's
-// first (top, or left), and its own scale. The panels are normalized so the
+// axis both layers use one linear map anchored at the display union's lower
+// bound; along the perpendicular axis each layer has its own band, the upper
+// layer's first (top, or left), and its own scale. The bands meet at the
+// interface: each runs from its layer's display bound to the interface, so a
+// mapped grid's node past the interface lands a little into the other band,
+// at its own layer's scale. The panels are normalized so the
 // primary's tightest raster pixel along any axis is one scene unit, the same
 // rule displayStretchFor applies to the primary alone. The layout depends only on
 // the geometry and the aspect settings, never on the current zoom, so pan and
@@ -268,21 +290,29 @@ public:
                 value /= smallest;
             }
         }
-        // Bands along the perpendicular axis, when the panel shows it.
+        m_displayUnion = geometry.displayUnionBounds();
+        // Bands along the perpendicular axis, when the panel shows it: each
+        // anchored where its scene coordinate starts counting.
         const auto upper = geometry.upperLayer;
         const auto lower = geometry.lowerLayer();
-        const auto extent = [&](std::size_t layer) {
-            return (geometry.bounds[layer].upper[p] - geometry.bounds[layer].lower[p])
-                * m_perpendicularUnitsPerLength[layer];
-        };
+        const auto& display = geometry.displayBounds;
+        const auto interface = geometry.interfacePosition();
         if (m_axes[1] == geometry.perpendicularAxis) {
-            // Vertical: scene y grows downward, so the upper layer is on top.
+            // Vertical: scene y grows downward, so the upper layer is on top,
+            // from its highest node down to the interface.
             m_bandStart[upper] = 0.0;
-            m_bandStart[lower] = extent(upper);
+            m_bandAnchor[upper] = display[upper].upper[p];
+            m_bandStart[lower] = (display[upper].upper[p] - interface)
+                * m_perpendicularUnitsPerLength[upper];
+            m_bandAnchor[lower] = interface;
         } else {
-            // Horizontal: the lower layer is on the left.
+            // Horizontal: the lower layer is on the left, from its lowest
+            // node up to the interface.
             m_bandStart[lower] = 0.0;
-            m_bandStart[upper] = extent(lower);
+            m_bandAnchor[lower] = display[lower].lower[p];
+            m_bandStart[upper] = (interface - display[lower].lower[p])
+                * m_perpendicularUnitsPerLength[lower];
+            m_bandAnchor[upper] = interface;
         }
     }
 
@@ -301,16 +331,14 @@ public:
         const auto a = static_cast<std::size_t>(axis);
         const bool vertical = axis == m_axes[1];
         if (axis == m_geometry.perpendicularAxis) {
-            const auto& bounds = m_geometry.bounds[layer];
+            const auto anchor = m_bandAnchor[layer];
             const auto k = m_perpendicularUnitsPerLength[layer];
-            return vertical
-                ? m_bandStart[layer] + (bounds.upper[a] - position) * k
-                : m_bandStart[layer] + (position - bounds.lower[a]) * k;
+            return vertical ? m_bandStart[layer] + (anchor - position) * k
+                            : m_bandStart[layer] + (position - anchor) * k;
         }
-        const auto& union_ = m_geometry.unionBounds;
         const auto k = m_sharedUnitsPerLength[a];
-        return vertical ? (union_.upper[a] - position) * k
-                        : (position - union_.lower[a]) * k;
+        return vertical ? (m_displayUnion.upper[a] - position) * k
+                        : (position - m_displayUnion.lower[a]) * k;
     }
 
     // The physical position under a scene coordinate along a displayed axis:
@@ -322,26 +350,25 @@ public:
         const auto a = static_cast<std::size_t>(axis);
         const bool vertical = axis == m_axes[1];
         if (axis == m_geometry.perpendicularAxis) {
-            const auto& bounds = m_geometry.bounds[layer];
+            const auto anchor = m_bandAnchor[layer];
             const auto k = m_perpendicularUnitsPerLength[layer];
-            return vertical
-                ? bounds.upper[a] - (scene - m_bandStart[layer]) / k
-                : bounds.lower[a] + (scene - m_bandStart[layer]) / k;
+            return vertical ? anchor - (scene - m_bandStart[layer]) / k
+                            : anchor + (scene - m_bandStart[layer]) / k;
         }
-        const auto& union_ = m_geometry.unionBounds;
         const auto k = m_sharedUnitsPerLength[a];
-        return vertical ? union_.upper[a] - scene / k
-                        : union_.lower[a] + scene / k;
+        return vertical ? m_displayUnion.upper[a] - scene / k
+                        : m_displayUnion.lower[a] + scene / k;
     }
 
-    // The part of a layer's domain under a scene rect: the rect through the
-    // layer's maps, cut to its bounds, the normal axis whole. Nothing when
-    // the rect misses the layer, or meets it within the pairing tolerance
-    // only (a selection ending at the interface belongs to one side).
+    // The part of a layer's display bounds under a scene rect: the rect
+    // through the layer's maps, cut to them, the normal axis whole. Nothing
+    // when the rect misses the layer, or meets it within the pairing
+    // tolerance only (a selection ending at the interface belongs to one
+    // side).
     [[nodiscard]] std::optional<RealBox> regionForSceneRect(
         std::size_t layer, const SceneRect& rect) const noexcept
     {
-        const auto& bounds = m_geometry.bounds[layer];
+        const auto& bounds = m_geometry.displayBounds[layer];
         const auto h = m_axes[0];
         const auto v = m_axes[1];
         const auto hs = static_cast<std::size_t>(h);
@@ -364,6 +391,25 @@ public:
         return region;
     }
 
+    // The physical window under a scene rect through a layer's maps, not
+    // cut to its bounds: a rect reaching past them reads past them, as a
+    // warp drawn for whole device pixels needs. The normal axis carries the
+    // layer's display bounds.
+    [[nodiscard]] RealBox windowForSceneRect(
+        std::size_t layer, const SceneRect& rect) const noexcept
+    {
+        const auto h = m_axes[0];
+        const auto v = m_axes[1];
+        const auto hs = static_cast<std::size_t>(h);
+        const auto vs = static_cast<std::size_t>(v);
+        RealBox region = m_geometry.displayBounds[layer];
+        region.lower[hs] = physicalFromScene(layer, h, rect.x);
+        region.upper[hs] = physicalFromScene(layer, h, rect.right());
+        region.upper[vs] = physicalFromScene(layer, v, rect.y);
+        region.lower[vs] = physicalFromScene(layer, v, rect.bottom());
+        return region;
+    }
+
     // The scene rect a layer's raster over a physical region occupies.
     [[nodiscard]] SceneRect sceneRectForRegion(
         std::size_t layer, const RealBox& region) const noexcept
@@ -381,10 +427,10 @@ public:
         return {left, top, right - left, bottom - top};
     }
 
-    // A layer's whole domain.
+    // A layer's whole display bounds.
     [[nodiscard]] SceneRect tileRect(std::size_t layer) const noexcept
     {
-        return sceneRectForRegion(layer, m_geometry.bounds[layer]);
+        return sceneRectForRegion(layer, m_geometry.displayBounds[layer]);
     }
 
     // The union of both layers' tiles: the scene rect and what Fit frames.
@@ -401,17 +447,20 @@ public:
 
 private:
     PairGeometry m_geometry;
+    RealBox m_displayUnion;
     int m_normal = 2;
     std::array<int, 2> m_axes{0, 1};
     Real3 m_sharedUnitsPerLength{{1.0, 1.0, 1.0}};
     std::array<double, 2> m_perpendicularUnitsPerLength{1.0, 1.0};
     std::array<double, 2> m_bandStart{0.0, 0.0};
+    std::array<double, 2> m_bandAnchor{0.0, 0.0};
 };
 
 // The same proportions for the whole 3-D domain, for the isometric view: a
 // shared linear map along the shared axes and one band per layer along the
 // perpendicular axis (the lower layer's first), normalized over all three
-// axes as PairLayout normalizes a panel.
+// axes as PairLayout normalizes a panel. On the logical bounds: the outline
+// is the domains', whatever grid the slices are drawn on.
 class PairDisplayMap {
 public:
     PairDisplayMap() = default;

@@ -1519,10 +1519,9 @@ void MainWindow::beginPanDrag(PlaneViewState& state)
     if (m_pair) {
         // Over a pair the zoomed window is the panel's, not one raster's: the
         // drag shifts the framed window and each layer follows within its
-        // own domain (flushPanDrag). Nothing to shift until a layer is zoomed.
-        const auto panel = statesForPanel(state.normal);
-        m_panDataRefresh = std::any_of(panel.begin(), panel.end(),
-            [](const PlaneViewState* other) { return other->visibleRegion.has_value(); });
+        // own domain (flushPanDrag). Nothing to shift until the panel frames
+        // a window.
+        m_panDataRefresh = m_pairWindows[static_cast<std::size_t>(state.normal)].has_value();
         if (m_panDataRefresh) {
             const auto window = pairCanvasRect(state.normal);
             m_panStartSceneWindow = QRectF(window.x, window.y, window.width, window.height);
@@ -1842,8 +1841,12 @@ void MainWindow::updateMappedDemand(PlaneViewState& state)
         || !state.plane || state.plane->width <= 0 || state.plane->height <= 0) {
         return;
     }
-    const auto layout = mappedLayout(state);
-    if (!layout) {
+    if (m_pair && !stateShown(state)) {
+        // A hidden layer is asked when it comes on show (updateShownLayers).
+        return;
+    }
+    const auto placement = tilePlacement(state);
+    if (!placement) {
         return;
     }
     const auto& metadata = layerFor(state).session->metadata();
@@ -1860,7 +1863,7 @@ void MainWindow::updateMappedDemand(PlaneViewState& state)
     // to one. The rect may reach a fraction of a pixel past the canvas.
     const auto ratio = state.view->devicePixelRatioF();
     const auto toViewport = state.view->viewportTransform();
-    const auto area = toViewport.mapRect(toQRectF(layout->canvasRect()));
+    const auto area = toViewport.mapRect(toQRectF(placement->extent()));
     const auto* viewport = state.view->viewport();
     const auto deviceWidth = std::ceil(viewport->width() * ratio);
     const auto deviceHeight = std::ceil(viewport->height() * ratio);
@@ -1873,7 +1876,7 @@ void MainWindow::updateMappedDemand(PlaneViewState& state)
     }
     const auto shown = toViewport.inverted().mapRect(QRectF(
         QPointF(left / ratio, top / ratio), QPointF(right / ratio, bottom / ratio)));
-    const auto window = layout->regionForSceneRect(
+    const auto window = placement->regionForSceneRect(
         {shown.x(), shown.y(), shown.width(), shown.height()});
     if (!(window.upper[h] > window.lower[h]) || !(window.upper[v] > window.lower[v])) {
         return;
@@ -1908,7 +1911,7 @@ void MainWindow::updateMappedDemand(PlaneViewState& state)
     // are the first axis' lower and upper bounds, bottom/top the second's.
     const auto& nodes = state.mappedNodeBounds;
     const bool haveNodes = nodes.upper[h] > nodes.lower[h] && nodes.upper[v] > nodes.lower[v];
-    const auto planeRect = toQRectF(layout->sceneRectForRegion(nodes));
+    const auto planeRect = toQRectF(placement->sceneRectForRegion(nodes));
     const auto& transform = state.view->transform();
     const auto slackX = 2.0 / (std::abs(transform.m11()) * ratio);
     const auto slackY = 2.0 / (std::abs(transform.m22()) * ratio);
@@ -2011,10 +2014,7 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
     }
     setActiveView(state);
     if (m_pair) {
-        const auto panel = statesForPanel(state.normal);
-        if (std::any_of(panel.begin(), panel.end(), [](const PlaneViewState* other) {
-                return other->visibleRegion.has_value();
-            })) {
+        if (m_pairWindows[static_cast<std::size_t>(state.normal)]) {
             // A twentieth of the framed window, at least one scene unit (the
             // tightest raster pixel), the analogue of the pixel floor below.
             const auto canvas = pairCanvasRect(state.normal);

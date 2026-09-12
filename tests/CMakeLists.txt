@@ -1387,6 +1387,33 @@ if(TARGET amrexplorer_qt)
     )
     set_tests_properties(qt_companion_smoke PROPERTIES TIMEOUT 30)
 
+    # Mapped grids over a pair: both plotfiles on their node positions, and a
+    # mapped primary over a flat companion.
+    add_test(
+        NAME qt_mapped_companion_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped_pair_upper"
+            "-DSOURCE2=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped_pair_lower"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_mapped_companion"
+            -DMODE=mapped-companion
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_mapped_companion_smoke PROPERTIES TIMEOUT 90)
+    add_test(
+        NAME qt_mixed_mapped_companion_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped_pair_upper"
+            "-DSOURCE2=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_lower"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_mixed_mapped_companion"
+            -DMODE=mixed-mapped-companion
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_mixed_mapped_companion_smoke PROPERTIES TIMEOUT 90)
+
     # The same pair over the in-process loopback server: a remote primary
     # takes a companion from its own server, a local path is refused.
     add_test(

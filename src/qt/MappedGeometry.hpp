@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <optional>
 
 // A slice drawn on its mapped (stretched) grid: how the panel places the
 // warped raster in its scene. Qt-free so the unit test needs no QApplication.
@@ -122,6 +123,35 @@ private:
     RealBox m_bounds;
     std::array<int, 2> m_axes{0, 1};
     Real3 m_unitsPerLength{{1.0, 1.0, 1.0}};
+};
+
+// Where one view's tile sits: alone on its mapped canvas, or on the pair's
+// shared canvas as one of its layers. Every placement asks this, so the
+// arms that once picked a layout agree.
+struct TilePlacement {
+    std::optional<MappedLayout> single;
+    const PairLayout* pair = nullptr;
+    std::size_t layer = 0;
+    SceneRect canvas;  // what the tile is placed against
+
+    [[nodiscard]] SceneRect sceneRectForRegion(const RealBox& region) const noexcept
+    {
+        return pair ? pair->sceneRectForRegion(layer, region)
+                    : single->sceneRectForRegion(region);
+    }
+    // The physical window under a scene rect, not cut to what the tile can
+    // span: a warp is drawn for whole device pixels, which may reach past it.
+    [[nodiscard]] RealBox regionForSceneRect(const SceneRect& rect) const noexcept
+    {
+        return pair ? pair->windowForSceneRect(layer, rect)
+                    : single->regionForSceneRect(rect);
+    }
+    // The scene rect the tile can span: its layer's over a pair, the whole
+    // canvas alone.
+    [[nodiscard]] SceneRect extent() const noexcept
+    {
+        return pair ? pair->tileRect(layer) : single->canvasRect();
+    }
 };
 
 } // namespace amrvis::qt

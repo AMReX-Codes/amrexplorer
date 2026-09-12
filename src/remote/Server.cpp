@@ -324,11 +324,13 @@ ErrorData classifyError(const std::exception& error)
 class Session : public std::enable_shared_from_this<Session> {
 public:
     Session(std::unique_ptr<Channel> channel, ThreadPool& workers,
-        std::atomic<unsigned int>& rendersInFlight, const ServerOptions& options)
+        std::atomic<unsigned int>& rendersInFlight, const ServerOptions& options,
+        std::shared_ptr<SharedCacheBudget> cacheBudget)
         : m_channel(std::move(channel))
         , m_workers(workers)
         , m_rendersInFlight(rendersInFlight)
         , m_options(options)
+        , m_cacheBudget(std::move(cacheBudget))
         , m_handshakeDeadline(
               std::chrono::steady_clock::now() + options.handshakeTimeout)
         , m_maximumFrameBytes(options.maximumFrameBytes)
@@ -642,23 +644,18 @@ private:
             // failing the open -- a list written for another dataset must not
             // make this one unopenable.
             dataset = std::make_shared<LocalDatasetSession>(
-                resolveDatasetPath(open.path), id, open.cacheBudgetBytes,
-                cancellation, std::move(open.derivedFields));
-            // The operator's number, on its own. The constructor has just
-            // seeded the grid pool from cache_budget_bytes, which is the
-            // client's *block* cache budget -- a different pool holding
-            // different things, and no kind of ceiling for this one. Taking
-            // the smaller of the two would mean an operator could never set
-            // the grid pool above whatever the client asked for its blocks,
-            // a client with a small AMREXPLORER_CACHE_SIZE_MB would starve
-            // the pool until every render re-sampled from disk, and a peer
-            // that omitted the field (wire default 0) would zero it.
-            //
-            // So a client cannot ask for a smaller grid pool. That is a real
-            // gap, but it needs a wire field of its own rather than the
-            // block budget standing in for one.
+                resolveDatasetPath(open.path), id,
+                m_cacheBudget ? m_cacheBudget->limit() : open.cacheBudgetBytes, cancellation,
+                std::move(open.derivedFields));
+            if (m_cacheBudget) {
+                dataset->setSharedCacheBudget(m_cacheBudget);
+            }
+            // Volume grids have their own operator-selected per-dataset cap,
+            // independent of the client's block budget. In automatic mode
+            // both pools additionally draw from one server-wide allowance.
             static_cast<void>(dataset->setVolumeGridCacheBudget(
-                m_options.volumeGridCacheBytes));
+                m_cacheBudget ? std::min(m_options.volumeGridCacheBytes, m_cacheBudget->limit())
+                              : m_options.volumeGridCacheBytes));
             OpenedDataset opened;
             opened.id = id;
             opened.catalog = dataset->metadata();
@@ -1037,8 +1034,10 @@ private:
         const auto dataset = requireDataset(DatasetId{request->dataset_id});
         // The block pool only. setCacheBudget moves both, which is what a
         // local user setting one number wants -- but this number comes from
-        // the peer, and the grid pool answers to --volume-cache-mib alone.
-        static_cast<void>(dataset->setBlockCacheBudget(request->budget_bytes));
+        // the peer. Both pools also obey the shared allowance in auto mode.
+        static_cast<void>(dataset->setBlockCacheBudget(
+            m_cacheBudget ? std::min(request->budget_bytes, m_cacheBudget->limit())
+                          : request->budget_bytes));
         sendCache(envelope.request_id, *dataset);
     }
 
@@ -1285,6 +1284,7 @@ private:
     ThreadPool& m_workers;
     std::atomic<unsigned int>& m_rendersInFlight;
     ServerOptions m_options;
+    std::shared_ptr<SharedCacheBudget> m_cacheBudget;
     std::chrono::steady_clock::time_point m_handshakeDeadline;
     std::atomic<std::uint32_t> m_maximumFrameBytes;
     std::atomic_bool m_stopping{false};
@@ -1324,6 +1324,9 @@ public:
     // before either a listener or the worker pool exists.
     Impl(ServerOptions options, std::unique_ptr<Channel> channel)
         : m_options(validated(std::move(options)))
+        , m_cacheBudget(m_options.totalCacheBytes
+                  ? std::make_shared<SharedCacheBudget>(m_options.totalCacheBytes)
+                  : nullptr)
         , m_channel(std::move(channel))
         , m_listener(m_channel ? std::optional<Listener>{}
                                : std::optional<Listener>{
@@ -1365,7 +1368,7 @@ public:
                 auto socket = std::make_unique<Socket>(acceptConnection(
                     m_listener->socket, m_acceptStop.get_token()));
                 auto session = std::make_shared<Session>(
-                    std::move(socket), m_workers, m_rendersInFlight, m_options);
+                    std::move(socket), m_workers, m_rendersInFlight, m_options, m_cacheBudget);
                 std::scoped_lock lock(m_sessionsMutex);
                 std::erase_if(m_sessions,
                     [](const auto& worker) {
@@ -1485,7 +1488,7 @@ private:
                 return;
             }
             session = std::make_shared<Session>(
-                std::move(m_channel), m_workers, m_rendersInFlight, m_options);
+                std::move(m_channel), m_workers, m_rendersInFlight, m_options, m_cacheBudget);
             m_singleSession = session;
         }
         session->run();
@@ -1497,6 +1500,7 @@ private:
     };
 
     ServerOptions m_options;
+    std::shared_ptr<SharedCacheBudget> m_cacheBudget;
     std::unique_ptr<Channel> m_channel;
     std::optional<Listener> m_listener;
     // Before m_workers, deliberately: members die in reverse declaration

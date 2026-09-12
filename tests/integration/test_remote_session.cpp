@@ -154,6 +154,46 @@ int main(int argc, char* argv[])
                     == localSlice.plane.physicalRegion,
             "local and remote slice values differ");
 
+        // One allowance across distinct connections, not a budget per peer.
+        // Size it to hold precisely this fixture's slice working set.
+        {
+            amrvis::remote::ServerOptions sharedOptions;
+            sharedOptions.workerCount = 2;
+            sharedOptions.totalCacheBytes = localDataset.cacheMetrics().residentBytes;
+            require(sharedOptions.totalCacheBytes > 0, "fixture has no cache footprint");
+            amrvis::remote::Server sharedServer(sharedOptions);
+            ServerThread sharedThread(sharedServer);
+            const auto connect = [&] {
+                return std::make_shared<amrvis::remote::Connection>(
+                    "127.0.0.1", sharedServer.port(),
+                    amrvis::remote::ConnectionOptions{.sessionToken = sharedServer.token()});
+            };
+            auto firstConnection = connect();
+            auto secondConnection = connect();
+            auto first = amrvis::remote::RemoteDatasetSession::open(firstConnection, argv[1], 1);
+            auto second = amrvis::remote::RemoteDatasetSession::open(secondConnection, argv[1], 1);
+            require(first->cacheMetrics().budgetBytes == sharedOptions.totalCacheBytes,
+                    "automatic budget did not replace tiny client default");
+            require(first->setCacheBudget(sharedOptions.totalCacheBytes * 10),
+                    "clamped update unexpectedly failed");
+            require(first->cacheMetrics().budgetBytes == sharedOptions.totalCacheBytes,
+                    "client raised the automatic cache allowance");
+            const auto read = [](auto& session) {
+                return std::get<amrvis::SliceQueryResult>(
+                    session->requestView(sliceRequest(*session, 8, 6)));
+            };
+            require(read(first).plane.values == slice.plane.values, "shared first slice differs");
+            require(read(first).metrics.blocksRead == 0, "first slice did not cache");
+            require(read(second).plane.values == slice.plane.values, "shared second slice differs");
+            require(read(first).metrics.blocksRead > 0,
+                    "other connection bypassed the shared limit instead of evicting");
+            // A smaller later client request remains meaningful.
+            require(first->setCacheBudget(sharedOptions.totalCacheBytes / 2),
+                    "smaller client budget failed");
+            require(first->cacheMetrics().budgetBytes == sharedOptions.totalCacheBytes / 2,
+                    "smaller client budget was ignored");
+        }
+
         // Protocol 1.4: a field computed on the server must be the same field
         // a local session computes. The definitions are installed in the same
         // order at both ends, so the derived field takes the same id, and the

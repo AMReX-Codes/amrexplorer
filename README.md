@@ -35,6 +35,8 @@ FAB and MultiFab data.
   applications
 - **[User Guide](docs/user-guide.md)** — workflows, controls, animation,
   export, shortcuts, and troubleshooting
+- **[Slurm Remote Workflow](docs/slurm-remote.md)** — run the server on an
+  allocated compute node, with an OLCF Riker example
 - **[Developer Build Guide](docs/building.md)** — CMake presets, supported
   compilers, and validation
 - **[Architecture](docs/ARCHITECTURE.md)** — layering, the dataset-session

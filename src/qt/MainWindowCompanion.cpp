@@ -1146,7 +1146,7 @@ void MainWindow::applyPairTileVisibility(PlaneViewState& state)
     state.view->setTileVisible(state.tile, hold);
 }
 
-void MainWindow::updateShownLayers()
+void MainWindow::updateShownLayers(bool sliceNewlyShown)
 {
     if (m_viewDimension != 3) {
         return;
@@ -1161,7 +1161,7 @@ void MainWindow::updateShownLayers()
         // its domain and slices for it: crossing the interface keeps the
         // zoom, though the hidden layer took no part in it.
         const auto& window = m_pairWindows[static_cast<std::size_t>(state->normal)];
-        if (shown && !wasShown && window && m_pair) {
+        if (shown && !wasShown && window && m_pair && sliceNewlyShown) {
             if (isWarped(state->warp)) {
                 // A warped tile draws for what the window shows of it; a
                 // flat one, its warp fallen back or not yet landed, takes

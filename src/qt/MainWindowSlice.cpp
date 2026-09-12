@@ -933,9 +933,10 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
             updateDiagnostics();
             // A layer switch waiting on this slice (updateShownLayers) is
             // finished by showSlice; an arrival that never got there -- stale,
-            // failed -- must not leave the outgoing tile on show.
+            // failed -- must not leave the outgoing tile on show. Visibility
+            // only: a failed slice asked for again would fail again.
             if (m_pair) {
-                updateShownLayers();
+                updateShownLayers(/*sliceNewlyShown=*/false);
             }
             watcher->deleteLater();
             settleIfDrained();

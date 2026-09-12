@@ -923,7 +923,11 @@ private:
     // tile keeps showing while the incoming layer still waits for its slice,
     // so the switch shows no stale slice in between (see updateShownLayers).
     void applyPairTileVisibility(PlaneViewState& state);
-    void updateShownLayers();
+    // Which tiles the position puts on show. Driven by a position change it
+    // also slices a layer newly on show for the panel's framed window; the
+    // recovery call after a slice completes applies visibility only, so a
+    // failed slice is not asked for again.
+    void updateShownLayers(bool sliceNewlyShown = true);
     // Actions that have no meaning with two datasets open are disabled while
     // a companion is, and restored when it closes.
     void updatePairedModeControls();

@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <numbers>
 
 namespace amrvis {
 namespace {
@@ -129,17 +130,23 @@ OrthoCamera orthoCameraFromAngles(double azimuth, double elevation, double zoom)
 
 OrthoAngles nearestOrthoAngles(const OrthoCamera& camera) noexcept
 {
-    // From the matrix of a roll-free rotation, Rx(el) * Rz(az): its top row
-    // is (cos az, -sin az, 0) and its last column (0, -sin el, cos el).
-    // At a quarter-turn roll both pairs are rounding dust, and atan2 of dust
-    // could hand back any of several orientations, some far from nearest:
-    // dust counts as zero, and zero over zero is the XY view.
+    // The nearest roll-free rotation Rx(el) * Rz(az), measured by the angle
+    // between rotations: the tilt first, from the matrix entries that carry
+    // it, then the turn that best goes with whatever tilt came out.
+    // At a quarter-turn roll those entries are rounding dust and every tilt
+    // is equally near, so dust counts as zero and the tilt comes out level
+    // -- a fixed choice, not the dust's. The turn stays exact there: its two
+    // terms square to at least a half whatever the tilt is.
     const auto q = normalized(camera.rotation);
     const auto settled = [](double value) { return std::abs(value) < 1.0e-12 ? 0.0 : value; };
-    return {std::atan2(settled(2.0 * (q.w * q.z - q.x * q.y)),
-                settled(1.0 - 2.0 * (q.y * q.y + q.z * q.z))),
-        std::atan2(settled(2.0 * (q.w * q.x - q.y * q.z)),
-            settled(1.0 - 2.0 * (q.x * q.x + q.y * q.y)))};
+    const auto elevation = std::atan2(settled(2.0 * (q.w * q.x - q.y * q.z)),
+        settled(1.0 - 2.0 * (q.x * q.x + q.y * q.y)));
+    const auto cosHalf = std::cos(elevation / 2.0);
+    const auto sinHalf = std::sin(elevation / 2.0);
+    // Half the turn, so the doubled angle wraps back into [-pi, pi].
+    const auto azimuth
+        = 2.0 * std::atan2(q.z * cosHalf - q.y * sinHalf, q.w * cosHalf + q.x * sinHalf);
+    return {std::remainder(azimuth, 2.0 * std::numbers::pi), elevation};
 }
 
 std::optional<OrthoAngles> orthoAnglesOf(const OrthoCamera& camera) noexcept

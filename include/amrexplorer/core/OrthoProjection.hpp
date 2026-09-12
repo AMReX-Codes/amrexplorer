@@ -77,8 +77,8 @@ struct OrthoAngles {
 [[nodiscard]] std::optional<OrthoAngles> orthoAnglesOf(
     const OrthoCamera& camera) noexcept;
 // The same, for any camera: the angles of the roll-free camera nearest it,
-// except at a quarter-turn roll, where several are equally near and the
-// answer is the XY view -- fixed, not the rounding noise's choice.
+// by the angle between rotations. At a quarter-turn roll a whole family is
+// equally near and the level one is taken -- fixed, not the rounding's.
 [[nodiscard]] OrthoAngles nearestOrthoAngles(const OrthoCamera& camera) noexcept;
 // How far from unit length a camera's rotation may be and still be used.
 inline constexpr double orthoRotationTolerance = 1.0e-3;

@@ -319,7 +319,6 @@ void VolumeController::pushGeometry()
         fetchIsosurfaceRange();
     }
     slicePositionsChanged();
-    slicePlanesVisibilityChanged();
 }
 
 void VolumeController::pushPalette()
@@ -544,13 +543,6 @@ void VolumeController::slicePositionsChanged()
     if (m_window && m_hooks.slicePositions) {
         const auto positions = m_hooks.slicePositions();
         m_window->setSlicePositions(positions[0], positions[1], positions[2]);
-    }
-}
-
-void VolumeController::slicePlanesVisibilityChanged()
-{
-    if (m_window && m_hooks.slicePlanesVisible) {
-        m_window->setSlicePlanesVisible(m_hooks.slicePlanesVisible());
     }
 }
 

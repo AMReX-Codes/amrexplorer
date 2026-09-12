@@ -588,11 +588,6 @@ void VolumeWindow::setSlicePositions(double x, double y, double z)
     m_view->setSlicePositions(x, y, z);
 }
 
-void VolumeWindow::setSlicePlanesVisible(bool visible)
-{
-    m_view->setSlicePlanesVisible(visible);
-}
-
 void VolumeWindow::setColorPalette(const Palette* palette)
 {
     m_curve->setColorPalette(palette);

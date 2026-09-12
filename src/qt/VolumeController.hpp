@@ -114,9 +114,8 @@ public:
         std::function<RangeController::Selection()> rangeSelection;
         // The palette in effect (colours; alpha ramp when the file had one).
         std::function<const Palette&()> palette;
-        // The three slice positions and whether the planes are shown.
+        // The three slice positions.
         std::function<std::array<double, 3>()> slicePositions;
-        std::function<bool()> slicePlanesVisible;
         // True once application shutdown began: late results are dropped
         // without touching the GUI.
         std::function<bool()> isShuttingDown;
@@ -154,8 +153,8 @@ public:
     // Host notifications. configureForDataset: a dataset opened or a sequence
     // frame arrived -- the geometry is pushed and, with the window open, a
     // frame rendered with the same camera. refresh: field, level, range, log
-    // or palette changed. slicePositionsChanged / slicePlanesVisibilityChanged:
-    // overlay-only, no render. reset: the dataset is going away -- cancel,
+    // or palette changed. slicePositionsChanged: overlay-only, no render.
+    // reset: the dataset is going away -- cancel,
     // close the window, disable the action. cancel: in-flight work is
     // abandoned (shutdown, a dataset going away); the window stays.
     void configureForDataset();
@@ -174,7 +173,6 @@ public:
     void regionChanged();
     void refresh();
     void slicePositionsChanged();
-    void slicePlanesVisibilityChanged();
     void reset();
     void cancel();
 

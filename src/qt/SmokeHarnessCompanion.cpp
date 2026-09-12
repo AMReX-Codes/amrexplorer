@@ -404,6 +404,12 @@ void armMappedCompanionChecks(amrvis::qt::MainWindow& window,
             }
             *phase = 2;
             window.setSlicePositionForTest(2, -0.1);
+            // The companion's slice for the new position is on its way: the
+            // primary's tile stays on show until it lands.
+            if (!window.panelTileVisibleForTest(xy, 0) || window.panelTileVisibleForTest(xy, 1)) {
+                fail("the XY panel switched to a stale companion tile");
+                return;
+            }
             break;
         case 2:
             if (window.panelTileVisibleForTest(xy, 0) || !window.panelTileVisibleForTest(xy, 1)
@@ -413,6 +419,10 @@ void armMappedCompanionChecks(amrvis::qt::MainWindow& window,
             }
             *phase = 3;
             window.setSlicePositionForTest(2, 0.5);
+            if (window.panelTileVisibleForTest(xy, 0) || !window.panelTileVisibleForTest(xy, 1)) {
+                fail("the XY panel switched to a stale primary tile");
+                return;
+            }
             break;
         case 3:
             if (!window.panelTileVisibleForTest(xy, 0) || window.panelTileVisibleForTest(xy, 1)

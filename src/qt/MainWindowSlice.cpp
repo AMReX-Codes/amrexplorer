@@ -1484,9 +1484,10 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     // re-lays out the panel and re-places the other tile, once.
     if (m_pair && m_viewDimension == 3 && updatePairLayouts()) {
         applyPairLayouts();
-        // The other warped tiles moved with the layout while arrivals are
+        // Every other warped tile moved with the layout (a node box grown on
+        // one panel's axis moves the others' bands too) while arrivals are
         // held back: asked again for what they now show, once this one is in.
-        for (auto* other : statesForPanel(state.normal)) {
+        for (auto* other : currentViews()) {
             if (other != &state && isWarped(other->warp)) {
                 QTimer::singleShot(0, this, [this, other] { updateMappedDemand(*other); });
             }
@@ -1564,9 +1565,7 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
             state.view->setTileImage(state.tile, image,
                 toQRectF(placed->sceneRectForRegion(region)),
                 toQRectF(placed->canvas), transformPolicy);
-            if (m_pair) {
-                state.view->setTileVisible(state.tile, stateShown(state));
-            }
+            applyPairTileVisibility(state);
         } else {
             state.view->setImage(image, transformPolicy,
                 logicalImageSize(state, display.displayPlane(), image),
@@ -2034,10 +2033,7 @@ void MainWindow::syncVisibleRanges(DatasetLayer& layer)
                                 toQRectF(placed->sceneRectForRegion(region)),
                                 toQRectF(placed->canvas),
                                 ImageTransformPolicy::Preserve);
-                            if (m_pair) {
-                                state->view->setTileVisible(
-                                    state->tile, stateShown(*state));
-                            }
+                            applyPairTileVisibility(*state);
                         } else {
                             state->view->setImage(outcome.images[index],
                                 ImageTransformPolicy::GeometryAware,

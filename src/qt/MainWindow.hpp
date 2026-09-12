@@ -910,6 +910,14 @@ private:
     // The panel normal to the perpendicular axis shows one layer at a time:
     // the one whose domain holds the slice position along that axis.
     [[nodiscard]] bool stateShown(const PlaneViewState& state) const noexcept;
+    // A slice for the view's current position queued or on a worker: the
+    // tile it holds is a stale one.
+    [[nodiscard]] bool sliceOnItsWay(const PlaneViewState& state) const;
+    // Tile visibility over a pair after this state's tile was installed: the
+    // layer on show is seen and the other hidden, except that an outgoing
+    // tile keeps showing while the incoming layer still waits for its slice,
+    // so the switch shows no stale slice in between (see updateShownLayers).
+    void applyPairTileVisibility(PlaneViewState& state);
     void updateShownLayers();
     // Actions that have no meaning with two datasets open are disabled while
     // a companion is, and restored when it closes.

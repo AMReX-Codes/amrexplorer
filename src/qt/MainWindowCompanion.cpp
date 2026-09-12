@@ -1113,6 +1113,36 @@ bool MainWindow::stateShown(const PlaneViewState& state) const noexcept
         == state.layer;
 }
 
+bool MainWindow::sliceOnItsWay(const PlaneViewState& state) const
+{
+    return state.pendingRequests > 0 || m_pendingAllViews
+        || std::find(m_pendingViews.begin(), m_pendingViews.end(), &state)
+            != m_pendingViews.end();
+}
+
+void MainWindow::applyPairTileVisibility(PlaneViewState& state)
+{
+    if (!m_pair || state.view == nullptr) {
+        return;
+    }
+    if (stateShown(state)) {
+        state.view->setTileVisible(state.tile, true);
+        for (auto* other : statesForPanel(state.normal)) {
+            if (other != &state && !stateShown(*other)) {
+                other->view->setTileVisible(other->tile, false);
+            }
+        }
+        return;
+    }
+    bool hold = false;
+    for (auto* other : statesForPanel(state.normal)) {
+        hold = hold
+            || (other != &state && stateShown(*other) && sliceOnItsWay(*other)
+                && !other->view->isTileVisible(other->tile));
+    }
+    state.view->setTileVisible(state.tile, hold);
+}
+
 void MainWindow::updateShownLayers()
 {
     if (m_viewDimension != 3) {
@@ -1124,7 +1154,6 @@ void MainWindow::updateShownLayers()
         }
         const bool shown = stateShown(*state);
         const bool wasShown = state->view->isTileVisible(state->tile);
-        state->view->setTileVisible(state->tile, shown);
         // Newly on show under a framed window, it takes the window's part of
         // its domain and slices for it: crossing the interface keeps the
         // zoom, though the hidden layer took no part in it.
@@ -1133,15 +1162,31 @@ void MainWindow::updateShownLayers()
             if (requestedWarpFor(*state) == DisplayWarp::MappedGrid) {
                 // A warped layer draws for what the window shows of it.
                 updateMappedDemand(*state);
-                continue;
-            }
-            const SceneRect rect{window->x(), window->y(), window->width(), window->height()};
-            if (const auto region
-                = pairLayout(state->normal).regionForSceneRect(state->layer, rect)) {
-                state->visibleRegion = snappedPairRegion(state->layer, state->normal, *region);
-                scheduleSliceRequest(*state);
+            } else {
+                const SceneRect rect{window->x(), window->y(), window->width(), window->height()};
+                if (const auto region
+                    = pairLayout(state->normal).regionForSceneRect(state->layer, rect)) {
+                    state->visibleRegion = snappedPairRegion(state->layer, state->normal, *region);
+                    scheduleSliceRequest(*state);
+                }
             }
         }
+        // A switch waits for the incoming layer's slice when one is on its
+        // way: the tile it holds is stale (a slice at its face, from before
+        // the position entered it), and the outgoing tile stays on show until
+        // showSlice switches them (applyPairTileVisibility).
+        if (shown != wasShown && m_pair) {
+            const PlaneViewState* incoming = nullptr;
+            for (const auto* other : statesForPanel(state->normal)) {
+                if (stateShown(*other)) {
+                    incoming = other;
+                }
+            }
+            if (incoming != nullptr && sliceOnItsWay(*incoming)) {
+                continue;
+            }
+        }
+        state->view->setTileVisible(state->tile, shown);
     }
     // The colour controls follow the layer on show when the active panel is
     // the one that switched.

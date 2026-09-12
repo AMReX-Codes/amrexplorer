@@ -462,6 +462,9 @@ public:
     // See fab-round-trip-loses-visible-region.
     [[nodiscard]] bool activeViewIsZoomedForTest() const;
     [[nodiscard]] bool activeViewLineToolEnabledForTest() const;
+    // Test-only: whether a layer's view on a 3-D panel has a slice queued or
+    // on a worker.
+    [[nodiscard]] bool layerSliceOnItsWayForTest(int normal, int layer) const;
 
     // Test-only: the active view's pixmap width, and whether it is at
     // fit-to-window without mutating it (unlike activeViewIsFitToWindowForTest,

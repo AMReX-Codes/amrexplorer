@@ -402,8 +402,11 @@ void armMappedCompanionChecks(amrvis::qt::MainWindow& window,
             *phase = 2;
             window.setSlicePositionForTest(2, -0.1);
             // The companion's slice for the new position is on its way: the
-            // primary's tile stays on show until it lands.
-            if (!window.panelTileVisibleForTest(xy, 0) || window.panelTileVisibleForTest(xy, 1)) {
+            // primary's tile stays on show until it lands, and is not sliced
+            // again meanwhile (a slice at its face would replace it first).
+            if (!window.panelTileVisibleForTest(xy, 0) || window.panelTileVisibleForTest(xy, 1)
+                || !window.layerSliceOnItsWayForTest(xy, 1)
+                || window.layerSliceOnItsWayForTest(xy, 0)) {
                 fail("the XY panel switched to a stale companion tile");
                 return;
             }
@@ -416,7 +419,9 @@ void armMappedCompanionChecks(amrvis::qt::MainWindow& window,
             }
             *phase = 3;
             window.setSlicePositionForTest(2, 0.5);
-            if (window.panelTileVisibleForTest(xy, 0) || !window.panelTileVisibleForTest(xy, 1)) {
+            if (window.panelTileVisibleForTest(xy, 0) || !window.panelTileVisibleForTest(xy, 1)
+                || !window.layerSliceOnItsWayForTest(xy, 0)
+                || window.layerSliceOnItsWayForTest(xy, 1)) {
                 fail("the XY panel switched to a stale primary tile");
                 return;
             }

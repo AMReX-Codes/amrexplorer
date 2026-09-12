@@ -527,7 +527,14 @@ void MainWindow::setSlicePosition(int axis, double value)
     // The other two views only need their crosshair guides redrawn; the view
     // normal to the moved axis gets a fresh (debounced) slice.
     updateCrosshairs();
+    // The layer the position just left keeps the slice it shows: hidden
+    // now, a slice at its face would only replace the tile held on show
+    // until the incoming layer's lands (updateShownLayers). It slices again
+    // when the position comes back into it.
     for (auto* state : statesForPanel(axis)) {
+        if (m_pair && !stateShown(*state)) {
+            continue;
+        }
         scheduleSliceRequest(*state);
     }
     updateShownLayers();

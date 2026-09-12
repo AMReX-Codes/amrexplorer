@@ -1290,6 +1290,15 @@ bool MainWindow::activeViewIsZoomedForTest() const
     return m_activeView != nullptr && m_activeView->visibleRegion.has_value();
 }
 
+bool MainWindow::layerSliceOnItsWayForTest(int normal, int layer) const
+{
+    if (m_viewDimension != 3 || normal < 0 || normal > 2 || layer < 0 || layer > 1) {
+        return false;
+    }
+    return sliceOnItsWay(m_layers[static_cast<std::size_t>(layer)]
+                             .planeViews[static_cast<std::size_t>(normal)]);
+}
+
 bool MainWindow::activeViewLineToolEnabledForTest() const
 {
     return m_activeView != nullptr && m_activeView->view != nullptr

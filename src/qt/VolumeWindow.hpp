@@ -57,7 +57,6 @@ public:
     // Geometry and overlays, pushed by the host as its own change.
     void setDatasetGeometry(const DatasetMetadata& metadata);
     void setSlicePositions(double x, double y, double z);
-    void setSlicePlanesVisible(bool visible);
     void setColorPalette(const Palette* palette);
     // Enables the "use palette alpha" control (the palette carries a ramp).
     void setPaletteHasAlpha(bool hasAlpha);

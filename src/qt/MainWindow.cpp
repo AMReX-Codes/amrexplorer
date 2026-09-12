@@ -780,7 +780,6 @@ MainWindow::MainWindow(QWidget* parent)
             [this] { return primary().range->selection(); },
             [this]() -> const Palette& { return m_paletteController->palette(); },
             [this] { return m_slicePosition3d; },
-            [this] { return m_slicePlanesAction->isChecked(); },
             [this] { return m_closing; },
             [this] {
                 // What the three plane views actually show, as one box. Each
@@ -2115,7 +2114,6 @@ void MainWindow::createMenus()
     connect(m_slicePlanesAction, &QAction::toggled, this,
         [this](bool visible) {
             m_isoWidget->setSlicePlanesVisible(visible);
-            m_volumeController->slicePlanesVisibilityChanged();
             if (m_controlsReady) {
                 updateCrosshairs();
             }

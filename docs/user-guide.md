@@ -450,7 +450,7 @@ field: every pixel accumulates the color and opacity of the cells along its
 line of sight, so translucent structure inside the domain shows through. The
 window has its own copy of the isometric view -- drag to rotate, wheel
 to zoom, and the **XY**, **XZ**, **YZ** buttons for the axis-aligned views --
-with the domain outline and the slice planes drawn over the rendered volume.
+with the domain outline drawn over the rendered volume.
 The AMR grid boxes can be drawn too, though they start off here.
 
 The window follows the main window: the field, the AMR level, the range mode

@@ -149,6 +149,8 @@ private:
     DisplayMap m_displayMap;
     std::vector<LevelBoxes> m_levels;
     std::array<double, 3> m_slicePositions{0.0, 0.0, 0.0};
+    // The main window's view shows them at View > Slice Planes; the volume
+    // window's never does, so they cannot sit over the rendered volume.
     bool m_slicePlanesVisible = false;
     bool m_levelBoxesVisible = true;
     bool m_domainOutlineVisible = true;

@@ -1457,8 +1457,9 @@ void ImageView::showLineGuide(const QPoint& viewPosition)
     constexpr int orientThreshold = 8;
     const bool significantDrag = std::abs(drag.x()) > orientThreshold
         || std::abs(drag.y()) > orientThreshold;
-    if (!m_lineToolEnabled && significantDrag) {
-        // A right drag with the line tool off plots nothing: no guide.
+    if (!m_lineToolEnabled) {
+        // With the line tool off a right press is a slice move alone, and
+        // a drag plots nothing: no guide at any distance.
         clearLineGuide();
         return;
     }

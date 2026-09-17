@@ -264,14 +264,19 @@ The active panel is the one most recently clicked or manipulated.
 | --- | --- |
 | Left click | Probe the value under the cursor |
 | Left drag | Zoom to a rectangular subregion; optionally sync all 3-D panels |
+| Escape | Cancel a rectangle or line selection before releasing the mouse |
 | Shift+left drag | Pan the view |
 | Arrow keys | Pan the focused panel by 5 percent (click a panel to focus it) |
 | Mouse wheel | Zoom only the panel under the pointer |
 | Double click | Reset the zoom to the whole domain |
 | Shift+middle click | Plot a horizontal line through the selected sample |
 | Shift+right click | Plot a vertical line through the selected sample |
-| Right drag | Plot a line; the drag direction chooses the orientation |
+| Right drag | Plot a line; Auto locks the initial drag direction |
 | Right click in a 3-D slice | Move the other two slice planes to the clicked point |
+
+**Line > Horizontal / Vertical** chooses the orientation explicitly, including
+for Shift+right-click. On a Mac trackpad, Control-click supplies the right click.
+**Auto** chooses from the first clear drag direction and keeps it until release.
 
 The **Scale** control offers fixed zooms from 1x to 32x, where the factor is
 screen pixels per finest-level cell. A very wide local domain cannot be shown

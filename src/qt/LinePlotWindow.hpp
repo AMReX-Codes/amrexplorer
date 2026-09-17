@@ -68,6 +68,8 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void leaveEvent(QEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
+    void focusOutEvent(QFocusEvent* event) override;
 
 private:
     // Store endpoints: a QRectF height cannot represent [-1e308, 1e308].
@@ -82,6 +84,7 @@ private:
     [[nodiscard]] std::optional<PlotRange> displayedRange() const;
     [[nodiscard]] QString hoverTextAt(const QPointF& position) const;
     void hideHover();
+    void cancelSelection();
 
     const std::vector<LinePlotCurve>* m_curves = nullptr;
     QString m_numberFormat;
@@ -91,6 +94,7 @@ private:
     QPoint m_pressPosition;
     QRubberBand* m_rubberBand = nullptr;
     bool m_dragging = false;
+    bool m_canceled = false;
 };
 
 // Legacy-style XY line plot window: plot area plus a side panel with a

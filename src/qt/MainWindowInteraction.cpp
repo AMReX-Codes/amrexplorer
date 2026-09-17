@@ -1843,6 +1843,9 @@ void MainWindow::updateLineToolAvailability(const PlaneViewState& state)
         }
     }
     state.view->setLineToolEnabled(!warpedOnPanel);
+    if (m_lineOrientationGroup && m_activeView && m_activeView->view == state.view) {
+        m_lineOrientationGroup->setEnabled(!warpedOnPanel);
+    }
 }
 
 void MainWindow::updateMappedDemand(PlaneViewState& state)

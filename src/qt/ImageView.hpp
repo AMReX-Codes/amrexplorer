@@ -70,6 +70,10 @@ class ImageView final : public QGraphicsView {
     Q_OBJECT
 
 public:
+    enum class LineOrientation { Auto, Horizontal, Vertical };
+    void setLineOrientation(LineOrientation orientation) { m_lineOrientation = orientation; }
+    void cancelSelection();
+
     enum class TransformMode {
         Fit,
         FixedScale,
@@ -371,6 +375,7 @@ protected:
     // palette roles, but a QGraphicsTextItem holds the colour it was given.
     void changeEvent(QEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void focusOutEvent(QFocusEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void drawForeground(QPainter* painter, const QRectF& rect) override;
     void scrollContentsBy(int dx, int dy) override;
@@ -458,6 +463,13 @@ private:
     QString m_indicatorV;
     double m_scaleBarCodeUnitsPerImagePixel = 0.0;
     std::optional<LengthUnit> m_scaleBarLengthUnit;
+    void latchLineDirection(const QPoint& position);
+    LineOrientation m_lineOrientation = LineOrientation::Auto;
+    bool m_lineOrientationLocked = false;
+    bool m_lineHorizontal = false;
+    bool m_lineWasDrag = false;
+    bool m_selectionActive = false;
+    Qt::MouseButtons m_canceledButtons = Qt::NoButton;
     QPoint m_pressPosition;
     QPoint m_lastPanPosition;
     QPointF m_panAccumulated;

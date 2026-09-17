@@ -1517,6 +1517,8 @@ void MainWindow::applyRubberBandZoom(
 void MainWindow::beginPanDrag(PlaneViewState& state)
 {
     beginNavigation(ImageView::NavigationKind::Pan, state.view);
+    m_scanDragAnchor = m_fixedCrosshairAction && m_fixedCrosshairAction->isChecked()
+        ? scanAnchor(state) : std::nullopt;
     setActiveView(state);
     m_panView = &state;
     m_panViewportDelta = {};
@@ -1567,6 +1569,7 @@ void MainWindow::updatePanDrag(PlaneViewState& state,
         }
     } else {
         state.view->panViewport(viewportDelta);
+        if (m_scanDragAnchor) scanAtAnchor(state, *m_scanDragAnchor);
     }
 }
 
@@ -1585,6 +1588,7 @@ void MainWindow::endPanDrag(PlaneViewState& state, const QPointF& totalSceneDelt
     }
     m_panView = nullptr;
     m_panDataRefresh = false;
+    m_scanDragAnchor.reset();
     finishNavigation();
 }
 
@@ -1605,6 +1609,7 @@ void MainWindow::flushPanDrag(bool finalize)
         applyPairZoomWindow(m_panView->normal,
             shiftedPairWindow(m_panView->normal, m_panStartSceneWindow, m_panSceneDelta),
             /*refit=*/false);
+        if (m_scanDragAnchor) scanAtAnchor(*m_panView, *m_scanDragAnchor);
         return;
     }
     const auto region = shiftedPanRegion(*m_panView, m_panStartRegion,
@@ -1616,6 +1621,7 @@ void MainWindow::flushPanDrag(bool finalize)
     m_panView->visibleRegion = *region;
     m_panLastScheduledDelta = m_panSceneDelta;
     scheduleSliceRequest(*m_panView, false);
+    if (m_scanDragAnchor) scanAtAnchor(*m_panView, *m_scanDragAnchor);
 }
 
 std::array<double, 2> MainWindow::viewCenterInData(
@@ -2039,6 +2045,7 @@ void MainWindow::updateMappedDemand(PlaneViewState& state)
 void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
 {
     NavigationScope navigation(*this, true);
+    ScanScope scanning(*this, state);
     if (!state.view->hasImage() || state.plane->width <= 0 || state.plane->height <= 0) {
         return;
     }
@@ -2104,7 +2111,7 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
             remote::RemoteDatasetSession>(layerFor(state).session) != nullptr
             && state.view->transformMode()
                 == ImageView::TransformMode::FixedScale;
-        if (!remoteFixed) {
+        if (!remoteFixed && !scanning.active()) {
             state.view->fitToWindow();
             // One panel refitted; the others kept what they had, so the report
             // is derived rather than asserted (see the fitRequested handler).

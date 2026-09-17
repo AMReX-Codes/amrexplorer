@@ -1,5 +1,6 @@
 #include "LinePlotWindow.hpp"
 #include "NavigationHistory.hpp"
+#include "NavigationGeometry.hpp"
 
 #include <QApplication>
 #include <QKeyEvent>
@@ -31,6 +32,14 @@ void escape(QWidget* target)
 }
 void history()
 {
+    const std::vector<QRectF> domains{{-1, 0, 2, 1}, {0, 1, 1, 1}};
+    require(amrvis::qt::clampScanPath({-0.5, 0.5}, {-0.5, 1.5}, domains)
+        == QPointF(-0.5, 1.0), "scan entered the companion's missing band");
+    require(amrvis::qt::clampScanPath({0.5, 0.5}, {0.5, 1.5}, domains)
+        == QPointF(0.5, 1.5), "scan stopped at a valid companion interface");
+    require(amrvis::qt::clampScanPath({0.5, 0.5}, {0.5, 3.0}, domains)
+        == QPointF(0.5, 2.0), "scan went beyond the domain");
+
     amrvis::qt::NavigationHistory<int> h;
     h.push(0, 1);
     h.push(1, 2);

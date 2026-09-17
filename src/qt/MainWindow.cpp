@@ -1199,7 +1199,7 @@ void MainWindow::wirePanelSignals(ImageView* view, int normal)
     // raster. canvasScrolled cannot carry this: it fires only over a virtual
     // canvas, so a local fixed-scale scroll emitted nothing at all.
     connect(view, &ImageView::viewportMoved, this,
-        [this] { m_volumeController->regionChanged(); });
+        [this] { m_volumeController->regionChanged(); refreshScanAction(); });
     // Whatever moved the scene under the screen -- zoom, fit, scale, stretch,
     // scroll, resize -- a mapped view's warp is drawn for the screen, so it
     // is asked for again (a no-op for every other view).
@@ -1208,6 +1208,10 @@ void MainWindow::wirePanelSignals(ImageView* view, int normal)
             for (auto* state : states()) {
                 updateMappedDemand(*state);
             }
+        });
+    connect(view, &ImageView::scanStepRequested, this,
+        [this, leading](const QPointF& direction) {
+            if (auto* state = leading()) applyScanStep(*state, direction);
         });
     connect(view, &ImageView::panStepRequested, this,
         [this, leading](const QPointF& direction) {
@@ -1301,6 +1305,7 @@ void MainWindow::setActiveView(PlaneViewState& state)
         m_activeView->view->setActiveBorder(false);
     }
     m_activeView = &state;
+    refreshScanAction();
     updateLineToolAvailability(state);
     if (m_viewDimension == 3 && !sameView) {
         state.view->setActiveBorder(true);
@@ -2187,6 +2192,7 @@ void MainWindow::createMenus()
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
     viewMenu->addAction(m_navigationBack);
     viewMenu->addAction(m_navigationForward);
+    viewMenu->addAction(m_fixedCrosshairAction);
     viewMenu->addMenu(scaleMenu);
     auto* lineMenu = viewMenu->addMenu(tr("Line orientation"));
     for (auto* action : m_lineOrientationGroup->actions()) {

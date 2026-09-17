@@ -258,6 +258,7 @@ public:
     [[nodiscard]] ImageView* navigationViewForTest() const { return m_activeView->view; }
     void navigationRefreshForTest();
     void navigationZoomForTest();
+    [[nodiscard]] std::optional<QPointF> navigationAnchorForTest() { return scanAnchor(*m_activeView); }
     [[nodiscard]] bool navigationWorkerWaitingForTest() const;
     void armSliceGateForTest();
     void releaseSliceGateForTest();
@@ -662,6 +663,7 @@ private:
     };
     struct NavigationSnapshot {
         std::vector<NavigationPanel> panels;
+        std::optional<std::array<double, 3>> slicePositions;
         bool operator==(const NavigationSnapshot&) const = default;
     };
     class NavigationScope {
@@ -672,6 +674,21 @@ private:
         MainWindow& m_window;
         bool m_owner;
     };
+    class ScanScope {
+    public:
+        ScanScope(MainWindow& window, PlaneViewState& state);
+        ~ScanScope();
+        [[nodiscard]] bool active() const { return m_anchor.has_value(); }
+    private:
+        MainWindow& m_window;
+        PlaneViewState& m_state;
+        std::optional<QPointF> m_anchor;
+    };
+    [[nodiscard]] std::optional<QPointF> scanAnchor(PlaneViewState& state);
+    void scanAtAnchor(PlaneViewState& state, const QPointF& anchor);
+    void setSlicePositions(const std::array<double, 3>& positions);
+    void applyScanStep(PlaneViewState& state, const QPointF& direction);
+    void refreshScanAction();
     void setupNavigation();
     void connectNavigation(ImageView* view);
     void beginNavigation(ImageView::NavigationKind kind, ImageView* view);
@@ -1643,6 +1660,9 @@ private:
     ImageView::NavigationKind m_navigationKind = ImageView::NavigationKind::Action;
     ImageView* m_navigationView = nullptr;
     QTimer* m_navigationTimer = nullptr;
+    QAction* m_fixedCrosshairAction = nullptr;
+    bool m_temporaryScan = false;
+    std::optional<QPointF> m_scanDragAnchor;
     QAction* m_navigationBack = nullptr;
     QAction* m_navigationForward = nullptr;
     bool m_restoringNavigation = false;

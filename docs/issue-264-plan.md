@@ -5,23 +5,36 @@ Source: https://github.com/AMReX-Codes/amrexplorer/issues/264
 ## Status and handoff
 
 - Approved on 2026-09-17; base: `eef8587f018211afecb519c962b8337bf0c4a9f0`.
-- Delivery is three ordered commits for stacked PRs: selection controls,
-  navigation history, and fixed-crosshair scanning. Each commit builds on the
-  previous one. Local commits are authorized; publishing remains with the user.
-- The first two commits implement Phases 1 and 2. Phase 3 follows in the third
-  commit; its full agreed scope is retained below.
-- Phase 2 adds shared image-window history and independent line-plot history,
-  with asynchronous restoration, wheel/key/scrollbar grouping, lifecycle resets,
-  and local/remote/mapped/companion smoke coverage. Its pan fixes use viewport
-  pixels for drag thresholds and ensure remote arrows advance by one sample.
-- The complete implementation was preserved before splitting at
-  `/tmp/amrexplorer-issue264-stack/complete`.
-- Validation: both stages built with Clang Release and warnings as errors.
-  Phase 1 passed all 212 tests run; Phase 2 passed all 218 tests run. Logs:
-  `/tmp/amrexplorer-issue264-stack/phase{1,2}-{build,tests}.log`.
-- Native macOS Control-click/trackpad behavior and external CI remain untested.
+- Delivery is three ordered local commits on `agent/codex` for stacked PRs:
+  1. `e7d1e68`: selection cancellation and stable line orientation.
+  2. `ee21539`: reversible pan and zoom navigation.
+  3. This commit: fixed-crosshair scanning.
+- Each commit builds on the previous one. For stacked PRs, use the original
+  main base for the first PR and the preceding PR branch as the base of each
+  later PR. No branches were created and no GitHub resources were modified.
+- All three phases below are implemented. The second commit also fixes pan
+  thresholds to use viewport pixels and remote arrow steps to advance by at
+  least one actual sample.
+- Selection tests live in `tests/unit/test_selection_gestures.cpp`; history
+  and scan geometry tests live in `tests/unit/test_navigation.cpp`. The smoke
+  harness covers local 2-D/3-D, remote, mapped, and companion navigation,
+  including a gated background worker and rapid Back/Forward restoration.
+- Validation: Phase 1 passed its Clang Release build and all 212 tests run.
+  Phase 2 passed its build and all 218 tests run. Both use warnings as errors.
+  Phase 3 also passed its build and all 218 tests run, including keyboard/drag
+  scans, fixed guides before and after rendering, and companion boundaries.
+  `git diff --check` passed for each stage.
+- Build: `/tmp/amrexplorer-issue264-build` (Ninja, Release, clang++, ccache,
+  `AMREXPLORER_WARNINGS_AS_ERRORS=ON`, `AMREXPLORER_ENABLE_SERVER_TEST_HOOKS=ON`).
+- Per-commit build/test logs and the preserved combined implementation are in
+  `/tmp/amrexplorer-issue264-stack/`.
+- After a successful build, repeat tests with
+  `ctest --test-dir /tmp/amrexplorer-issue264-build --output-on-failure -j 6 -E '^git_version_generator$'`.
 - The `git_version_generator` CTest is excluded because its temporary Git
   commits and tags are outside the authorization to commit this implementation.
+  Native macOS Control-click/trackpad behavior and external CI remain untested.
+- Local commits are authorized. Publishing the stacked PRs remains with the
+  user; do not push or modify GitHub resources. No sub-agents were requested.
 
 ## Summary
 

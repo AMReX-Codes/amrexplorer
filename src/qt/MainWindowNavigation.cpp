@@ -1,4 +1,5 @@
 #include "MainWindowInternal.hpp"
+#include "NavigationGeometry.hpp"
 
 #include <QKeySequence>
 #include <QScopedValueRollback>
@@ -77,7 +78,15 @@ void MainWindow::setupNavigation()
     for (auto* state : allViewStates()) {
         if (state->view && state->layer == 0) connectNavigation(state->view);
     }
+    m_fixedCrosshairAction = new QAction(tr("Keep crosshair fixed while panning"), this);
+    m_fixedCrosshairAction->setObjectName(QStringLiteral("fixedCrosshairAction"));
+    m_fixedCrosshairAction->setCheckable(true);
+    m_fixedCrosshairAction->setIconText(tr("Fixed crosshair"));
+    auto* scanButton = new QToolButton(m_sliceToolbar);
+    scanButton->setDefaultAction(m_fixedCrosshairAction);
+    m_sliceToolbar->addWidget(scanButton);
     refreshNavigationActions();
+    refreshScanAction();
 }
 
 void MainWindow::connectNavigation(ImageView* view)
@@ -147,6 +156,7 @@ MainWindow::NavigationSnapshot MainWindow::captureNavigation()
             snapshot.panels.push_back(captureNavigationPanel(*state));
         }
     }
+    snapshot.slicePositions = m_slicePosition3d;
     return snapshot;
 }
 
@@ -175,6 +185,10 @@ void MainWindow::finishNavigation()
     if (before.panels.size() != after.panels.size()) {
         clearNavigation();
         return;
+    }
+    if (before.slicePositions == after.slicePositions) {
+        before.slicePositions.reset();
+        after.slicePositions.reset();
     }
     for (std::size_t i = before.panels.size(); i-- > 0;) {
         if (before.panels[i] == after.panels[i]) {
@@ -207,6 +221,7 @@ void MainWindow::clearNavigation()
     m_navigationPending.clear();
     m_navigationHistory.clear();
     m_navigationView = nullptr;
+    m_scanDragAnchor.reset();
     for (auto* state : allViewStates()) {
         if (state->view) state->view->cancelSelection();
     }
@@ -266,11 +281,17 @@ void MainWindow::navigate(bool forward)
     for (auto* state : currentViews()) {
         const bool moved = std::any_of(snapshot.panels.begin(), snapshot.panels.end(),
             [state](const auto& panel) { return panel.state == state; });
-        if (!moved) continue;
+        const bool sliced = snapshot.slicePositions && (*snapshot.slicePositions)[
+            static_cast<std::size_t>(state->normal)] != m_slicePosition3d[
+                static_cast<std::size_t>(state->normal)];
+        if (!moved && !sliced) continue;
         state->stopSource.request_stop();
         ++state->sliceGeneration;
         ++state->renderGeneration;
         state->view->cancelSelection();
+    }
+    if (snapshot.slicePositions) {
+        setSlicePositions(*snapshot.slicePositions);
     }
     for (const auto& panel : snapshot.panels) {
         panel.state->visibleRegion = panel.region;
@@ -299,6 +320,121 @@ void MainWindow::shiftNavigationWindow(PlaneViewState& state,
     panel.window.translate(after.lower[x] - before.lower[x], before.lower[y] - after.lower[y]);
     panel.region = after;
     m_navigationPending[&state] = panel;
+}
+
+MainWindow::ScanScope::ScanScope(MainWindow& window, PlaneViewState& state)
+    : m_window(window), m_state(state)
+{
+    if (window.m_temporaryScan || (window.m_fixedCrosshairAction
+            && window.m_fixedCrosshairAction->isChecked())) {
+        m_anchor = window.scanAnchor(state);
+    }
+}
+MainWindow::ScanScope::~ScanScope()
+{
+    if (m_anchor) m_window.scanAtAnchor(m_state, *m_anchor);
+}
+
+std::optional<QPointF> MainWindow::scanAnchor(PlaneViewState& state)
+{
+    if (m_viewDimension != 3 || !m_slicePlanesAction || !m_slicePlanesAction->isChecked()
+        || !state.view || !state.view->hasImage() || !layerFor(state).session
+        || layerFor(state).session->metadata().coordinateSystem != 0) return std::nullopt;
+    for (const auto* other : statesForPanel(state.normal)) {
+        if (isWarped(other->warp)) return std::nullopt;
+    }
+    const auto axes = displayAxes(state.normal);
+    const auto x = static_cast<std::size_t>(axes[0]);
+    const auto y = static_cast<std::size_t>(axes[1]);
+    QPointF point(m_slicePosition3d[x], -m_slicePosition3d[y]);
+    if (const auto placed = tilePlacement(state); placed && placed->pair) {
+        const auto layer = m_pair->layerAt(m_slicePosition3d[
+            static_cast<std::size_t>(m_pair->perpendicularAxis)]);
+        point = {placed->pair->sceneFromPhysical(layer, axes[0], m_slicePosition3d[x]),
+            placed->pair->sceneFromPhysical(layer, axes[1], m_slicePosition3d[y])};
+    }
+    if (!m_pair) {
+        const auto& region = state.visibleRegion.value_or(state.plane->physicalRegion);
+        if (m_slicePosition3d[x] < region.lower[x] || m_slicePosition3d[x] >= region.upper[x]
+            || m_slicePosition3d[y] < region.lower[y] || m_slicePosition3d[y] >= region.upper[y])
+            return std::nullopt;
+    }
+    const auto window = captureNavigationPanel(state).window;
+    if (window.isEmpty() || !window.contains(point)) return std::nullopt;
+    return QPointF((point.x() - window.x()) / window.width(),
+        (point.y() - window.y()) / window.height());
+}
+
+void MainWindow::scanAtAnchor(PlaneViewState& state, const QPointF& anchor)
+{
+    const auto window = captureNavigationPanel(state).window;
+    QPointF point(window.x() + anchor.x() * window.width(),
+        window.y() + anchor.y() * window.height());
+    const auto axes = displayAxes(state.normal);
+    auto positions = m_slicePosition3d;
+    positions[static_cast<std::size_t>(axes[0])] = point.x();
+    positions[static_cast<std::size_t>(axes[1])] = -point.y();
+    if (const auto placed = tilePlacement(state); placed && placed->pair) {
+        auto layer = m_pair->layerAt(m_slicePosition3d[
+            static_cast<std::size_t>(m_pair->perpendicularAxis)]);
+        const QPointF previous(
+            placed->pair->sceneFromPhysical(layer, axes[0], m_slicePosition3d[static_cast<std::size_t>(axes[0])]),
+            placed->pair->sceneFromPhysical(layer, axes[1], m_slicePosition3d[static_cast<std::size_t>(axes[1])]));
+        std::vector<QRectF> domains;
+        for (auto* other : statesForPanel(state.normal)) {
+            if (stateShown(*other)) domains.push_back(toQRectF(placed->pair->tileRect(other->layer)));
+        }
+        const auto clipped = clampScanPath(previous, point, domains);
+        if (clipped != point) {
+            const auto correction = clipped - point;
+            const auto& framed = m_pairWindows[static_cast<std::size_t>(state.normal)];
+            if (framed) {
+                applyPairZoomWindow(state.normal, framed->translated(correction), false);
+            } else {
+                const auto scene = state.view->mapToScene(state.view->viewport()->rect()).boundingRect();
+                state.view->centerOn(scene.center() + correction);
+            }
+            point = clipped;
+        }
+        // A scan across the interface uses the scale of the band entered.
+        for (std::size_t candidate = 0; candidate < 2; ++candidate) {
+            if (toQRectF(placed->pair->tileRect(candidate)).contains(point)) {
+                layer = candidate;
+                break;
+            }
+        }
+        positions[static_cast<std::size_t>(axes[0])]
+            = placed->pair->physicalFromScene(layer, axes[0], point.x());
+        positions[static_cast<std::size_t>(axes[1])]
+            = placed->pair->physicalFromScene(layer, axes[1], point.y());
+    }
+    const auto domain = m_pair ? m_pair->unionBounds
+        : datasetSampleBounds(primary().session->metadata());
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const auto tolerance = 64 * std::numeric_limits<double>::epsilon()
+            * std::max(std::abs(m_slicePosition3d[axis]),
+                domain.upper[axis] - domain.lower[axis]);
+        if (std::abs(positions[axis] - m_slicePosition3d[axis]) <= tolerance)
+            positions[axis] = m_slicePosition3d[axis];
+    }
+    setSlicePositions(positions);
+}
+
+void MainWindow::applyScanStep(PlaneViewState& state, const QPointF& direction)
+{
+    if (!scanAnchor(state)) return;
+    const QScopedValueRollback<bool> scan(m_temporaryScan, true);
+    applyPanStep(state, direction);
+}
+
+void MainWindow::refreshScanAction()
+{
+    if (m_fixedCrosshairAction) {
+        m_fixedCrosshairAction->setEnabled(m_activeView && scanAnchor(*m_activeView).has_value());
+        m_fixedCrosshairAction->setToolTip(tr(
+            "Pan under the crosshair and scan the other two slices. "
+            "Requires visible Cartesian 3-D slice guides; Shift+arrow scans temporarily."));
+    }
 }
 
 } // namespace amrvis::qt

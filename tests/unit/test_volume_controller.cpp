@@ -20,6 +20,14 @@
 #include <QAction>
 #include <QRectF>
 #include <QCheckBox>
+#include <QComboBox>
+#include <QSettings>
+#include <QTemporaryDir>
+#include <QDoubleSpinBox>
+#include <QGroupBox>
+#include <QLabel>
+#include <QPushButton>
+#include <QSlider>
 #include <QEvent>
 #include <QImage>
 #include <QKeyEvent>
@@ -35,6 +43,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -124,9 +133,33 @@ public:
     {
         throw std::logic_error("not used");
     }
+    // A range request can be slowed, to stand in for a remote round trip,
+    // and made to fail for one field, to stand in for a dropped one.
+    std::atomic<int> rangeDelayMs{0};
+    std::atomic<int> rangeFailingField{-1};
+    std::atomic<int> rangeRequests{0};
+    std::atomic<int> rangeCancellations{0};
     [[nodiscard]] std::optional<amrvis::ValueRange> requestRange(
-        const amrvis::RangeRequest& request, amrvis::StopToken) override
+        const amrvis::RangeRequest& request, amrvis::StopToken cancellation) override
     {
+        ++rangeRequests;
+        // Polled while it waits, the way a real read is: a fetch that is
+        // stopped ends now rather than when the delay runs out.
+        for (int waited = 0; waited < rangeDelayMs.load(); waited += 5) {
+            if (cancellation.stop_requested()) {
+                ++rangeCancellations;
+                throw amrvis::ReadCancelled();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        if (static_cast<int>(request.field.value) == rangeFailingField) {
+            throw std::runtime_error("synthetic range failure");
+        }
+        // The second field spans most of the double line, so arithmetic on
+        // its bounds that goes through their sum or difference overflows.
+        if (request.field.value == 1) {
+            return amrvis::ValueRange{-1.0e308, 1.0e308};
+        }
         // Level-dependent on purpose: level 0 spans to 10, level 1 to 20, so
         // a range resolved for the level that was asked for instead of the
         // one that rendered shows up as the wrong maximum.
@@ -154,6 +187,18 @@ public:
     [[nodiscard]] bool supportsVolumeSampling() const noexcept override
     {
         return supportsVolumeRendering() && samplingSupported;
+    }
+    // Likewise for isosurfaces: off, it stands in for a 1.5 server.
+    std::atomic<bool> isosurfaceSupported{true};
+    [[nodiscard]] bool supportsVolumeIsosurface() const noexcept override
+    {
+        return supportsVolumeRendering() && isosurfaceSupported;
+    }
+    // And for a camera with roll: off, a 1.7 server.
+    std::atomic<bool> orientationSupported{true};
+    [[nodiscard]] bool supportsVolumeOrientation() const noexcept override
+    {
+        return supportsVolumeRendering() && orientationSupported;
     }
     [[nodiscard]] amrvis::VolumeFrame renderVolume(
         const amrvis::VolumeRenderRequest& request,
@@ -518,6 +563,14 @@ int main(int argc, char** argv)
     rangeSelection.mode = amrvis::RangeMode::User;
     rangeSelection.userRange = std::pair{0.0, 4.0};
     amrvis::LevelSelection level{amrvis::CompositionPolicy::FinestAvailable, 1};
+    std::vector<std::pair<amrvis::FieldId, QString>> fieldList{
+        {amrvis::FieldId{0}, QString("density")},
+        {amrvis::FieldId{1}, QString("pressure")}};
+    // A scratch settings file, so what the controller remembers is checked
+    // against a store this test owns rather than the user's.
+    const QTemporaryDir scratch;
+    require(scratch.isValid(), "no scratch directory for settings");
+    const auto settingsPath = scratch.filePath(QStringLiteral("settings.ini"));
     const auto& palette = amrvis::builtinPalette(amrvis::BuiltinPalette::Rainbow);
     const auto hooks = [&] {
         return VolumeController::Hooks{
@@ -527,7 +580,6 @@ int main(int argc, char** argv)
             [&rangeSelection] { return rangeSelection; },
             [&palette]() -> const amrvis::Palette& { return palette; },
             [] { return std::array<double, 3>{0.5, 1.0, 1.5}; },
-            [] { return true; },
             [&shuttingDown] { return shuttingDown; },
             [&viewRegions, &session] {
                 return amrvis::qt::volumeVisibleRegion(
@@ -535,6 +587,10 @@ int main(int argc, char** argv)
                     viewRegions);
             },
             [&playingSequence] { return playingSequence; },
+            [&fieldList] { return fieldList; },
+            [&settingsPath] {
+                return std::make_unique<QSettings>(settingsPath, QSettings::IniFormat);
+            },
         };
     };
 
@@ -1530,12 +1586,15 @@ int main(int argc, char** argv)
             "refusing to remove an end point rendered anyway");
 
         // Dragging turns the domain rather than walking the camera around it:
-        // whichever face is nearest follows the cursor, on both axes. The two
-        // disagreed once -- a drag down tipped the top toward you while a drag
-        // right slid the near face the other way -- and one axis obeying the
-        // hand while the other opposes it reads as the second being backwards.
-        // Written against the projection rather than against the angles, since
-        // which way an angle turns the picture is the thing that was wrong.
+        // whichever face is nearest follows the cursor, on both axes, in any
+        // orientation -- the default view, upside down, and looking straight
+        // down z, where a turn about world z was once a spin in the screen
+        // plane. The two disagreed once -- a drag down tipped the top toward
+        // you while a drag right slid the near face the other way -- and one
+        // axis obeying the hand while the other opposes it reads as the
+        // second being backwards. Written against the projection rather than
+        // against the angles, since which way an angle turns the picture is
+        // the thing that was wrong.
         {
             const auto domain = amrvis::datasetSampleBounds(session->metadata());
             const auto frame
@@ -1545,19 +1604,11 @@ int main(int argc, char** argv)
                 amrvis::Real3{{0.5, 1.0, 0.5}}, amrvis::Real3{{0.5, 0.0, 0.5}},
                 amrvis::Real3{{0.5, 0.5, 1.0}}, amrvis::Real3{{0.5, 0.5, 0.0}}};
             // In the domain's own coordinates, and the nearest of them:
-            // depth increases toward the viewer. A horizontal drag turns the
-            // domain about z, so the z faces sit on that axis and do not move
-            // sideways however far it turns -- picking one of those to follow
-            // would compare zero against zero. They are left out when the
-            // drag is horizontal.
-            const auto nearestFace = [&](const amrvis::OrthoCamera& camera,
-                                         bool aboutZ) {
+            // depth increases toward the viewer.
+            const auto nearestFace = [&](const amrvis::OrthoCamera& camera) {
                 amrvis::Real3 best{};
                 auto bestDepth = -std::numeric_limits<double>::infinity();
                 for (std::size_t index = 0; index < faces.size(); ++index) {
-                    if (aboutZ && index >= 4) {
-                        continue;
-                    }
                     const auto& unit = faces[index];
                     amrvis::Real3 point;
                     for (std::size_t axis = 0; axis < 3; ++axis) {
@@ -1590,24 +1641,102 @@ int main(int argc, char** argv)
             };
             const std::array<std::array<int, 2>, 4> drags{
                 {{{40, 0}}, {{-40, 0}}, {{0, 40}}, {{0, -40}}}};
-            for (const auto& pull : drags) {
-                const auto start = view->camera();
-                const auto face = nearestFace(start, pull[0] != 0);
-                const auto was
-                    = amrvis::projectPoint(start, frame, domain, face);
-                dragBy(pull[0], pull[1]);
-                const auto now = amrvis::projectPoint(
-                    view->camera(), frame, domain, face);
-                const auto shift = pull[0] != 0 ? now.x - was.x : now.y - was.y;
-                const auto asked = pull[0] != 0 ? pull[0] : pull[1];
-                require(shift * asked > 0.0,
-                    "the face under the cursor moved against the drag, so the "
-                    "view walks the camera around the domain on that axis "
-                    "instead of turning it");
+            const auto followsTheHand = [&](const char* failure) {
+                for (const auto& pull : drags) {
+                    const auto start = view->camera();
+                    const auto face = nearestFace(start);
+                    const auto was
+                        = amrvis::projectPoint(start, frame, domain, face);
+                    dragBy(pull[0], pull[1]);
+                    const auto now = amrvis::projectPoint(
+                        view->camera(), frame, domain, face);
+                    const auto shift = pull[0] != 0 ? now.x - was.x : now.y - was.y;
+                    const auto asked = pull[0] != 0 ? pull[0] : pull[1];
+                    require(shift * asked > 0.0, failure);
+                }
+            };
+            require(view->freeRotation(), "the view does not start turning freely");
+            followsTheHand("the face under the cursor moved against the drag at the "
+                           "default view");
+            dragBy(0, 400);
+            followsTheHand("the face under the cursor moved against the drag with the "
+                           "domain upside down");
+            QPushButton* xyButton = nullptr;
+            for (auto* button : view->findChildren<QPushButton*>()) {
+                if (button->text() == QStringLiteral("XY")) {
+                    xyButton = button;
+                }
             }
+            require(xyButton != nullptr, "the view has no XY button");
+            xyButton->click();
+            require(amrvis::orthoAnglesOf(view->camera()).has_value(),
+                "the XY preset is not a two-angle camera");
+            followsTheHand("the face under the cursor moved against the drag looking "
+                           "down z, where a turn about z spun the picture");
+            // A drag right then down leaves a camera no two angles describe.
+            dragBy(40, 0);
+            dragBy(0, 40);
+            require(!amrvis::orthoAnglesOf(view->camera()).has_value(),
+                "two drags did not roll the camera off its two angles");
             settle(application, 500);
             waitFor(application, [&] { return !controller.renderInFlight(); },
                 "the renders from the drags did not finish");
+
+            // Against a session that reads two angles (a 1.7 server) the drag
+            // turns about world z and the turned x axis, the view says so, and
+            // the rolled camera goes onto its nearest two angles at once -- so
+            // every request such a server sees is one it can render. A
+            // vertical drag still tumbles past the pole, and a long drag
+            // leaves the angles wrapped.
+            session->orientationSupported = false;
+            controller.configureForDataset();
+            application.processEvents();
+            require(!view->freeRotation()
+                    && view->toolTip().contains(QStringLiteral("protocol 1.8")),
+                "a session that cannot take a rolled camera did not put the view "
+                "on two angles");
+            require(amrvis::orthoAnglesOf(view->camera()).has_value(),
+                "switching to two angles left a rolled camera on the view");
+            {
+                // Nor does a rolled camera set from outside stay rolled there.
+                auto rolled = view->camera();
+                rolled.rotation = amrvis::axisAngle({{0.0, 0.0, 1.0}}, 0.3) * rolled.rotation;
+                view->setCamera(rolled);
+                require(amrvis::orthoAnglesOf(view->camera()).has_value(),
+                    "a rolled camera set on a two-angle view stayed rolled");
+            }
+            settle(application, 500);
+            waitFor(application, [&] { return !controller.renderInFlight(); },
+                "the render from squaring the camera did not finish");
+            {
+                const std::scoped_lock lock(session->requestsMutex);
+                require(!session->recorded.empty()
+                        && amrvis::orthoAnglesOf(session->recorded.back().camera).has_value(),
+                    "the last request to a two-angle session carried a rolled camera");
+            }
+            constexpr double kPi = 3.14159265358979323846;
+            const auto anglesBefore = amrvis::nearestOrthoAngles(view->camera());
+            dragBy(0, 300);
+            const auto anglesAfter = amrvis::nearestOrthoAngles(view->camera());
+            auto tilt = anglesAfter.elevation - anglesBefore.elevation;
+            tilt -= 2.0 * kPi * std::floor((tilt + kPi) / (2.0 * kPi));
+            require(std::abs(tilt - 2.4) < 1.0e-9
+                    && amrvis::orthoAnglesOf(view->camera()).has_value(),
+                "a vertical drag on two angles did not tumble by the drag, past the pole");
+            dragBy(2000, 2000);
+            const auto wrapped = amrvis::nearestOrthoAngles(view->camera());
+            require(std::abs(wrapped.azimuth) <= kPi && std::abs(wrapped.elevation) <= kPi
+                    && amrvis::orthoAnglesOf(view->camera()).has_value(),
+                "a long drag on two angles rolled the camera or ran the angles off");
+            session->orientationSupported = true;
+            controller.configureForDataset();
+            application.processEvents();
+            require(view->freeRotation()
+                    && !view->toolTip().contains(QStringLiteral("protocol 1.8")),
+                "a session that can take a rolled camera did not free the view again");
+            settle(application, 500);
+            waitFor(application, [&] { return !controller.renderInFlight(); },
+                "the renders from the two-angle drags did not finish");
         }
         controller.closeWindow();
     }
@@ -1778,6 +1907,421 @@ int main(int argc, char** argv)
         waitFor(application, [&] { return !controller.renderInFlight(); },
             "the last playback render did not finish");
         controller.closeWindow();
+    }
+
+    // --- the isosurface controls reach the request ---------------------------
+    // Off by default and the volume always shown; on, the request carries the
+    // chosen field, the value, the colour and the opacity, and the volume can
+    // be hidden. The value slider spans the field's range fetched from the
+    // session (the fake's is [0, 20] at level 1) and defaults the value to its
+    // midpoint; a drag drafts and the release settles; a typed value holds. A
+    // session that cannot be asked disables the group and the request goes
+    // back to the volume alone, the tick surviving for when it can.
+    {
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return observed.frames == 1; },
+            "the opening frame was not displayed");
+        auto* const window = volumeWindow();
+        require(window != nullptr, "no volume window on screen");
+        auto* const group = window->findChild<QGroupBox*>(
+            QStringLiteral("volumeIsosurfaceGroup"));
+        auto* const showVolume = window->findChild<QCheckBox*>(
+            QStringLiteral("volumeShowVolumeCheck"));
+        auto* const fieldCombo = window->findChild<QComboBox*>(
+            QStringLiteral("volumeIsosurfaceFieldCombo"));
+        auto* const valueSpin = window->findChild<QDoubleSpinBox*>(
+            QStringLiteral("volumeIsosurfaceValueSpin"));
+        auto* const valueSlider = window->findChild<QSlider*>(
+            QStringLiteral("volumeIsosurfaceValueSlider"));
+        auto* const opacitySlider = window->findChild<QSlider*>(
+            QStringLiteral("volumeIsosurfaceOpacitySlider"));
+        auto* const status = window->findChild<QLabel*>(
+            QStringLiteral("volumeStatusLabel"));
+        require(group != nullptr && showVolume != nullptr && fieldCombo != nullptr
+                && valueSpin != nullptr && valueSlider != nullptr
+                && opacitySlider != nullptr && status != nullptr,
+            "the isosurface controls are missing from the volume window");
+        {
+            const auto opening = session->requestsSoFar().back();
+            require(!opening.isosurface.has_value() && opening.showVolume,
+                "the opening request carried an isosurface nobody asked for");
+        }
+        require(!group->isChecked() && !showVolume->isEnabled()
+                && showVolume->isChecked(),
+            "with no isosurface the volume box still had a say");
+        require(fieldCombo->count() == 2 && fieldCombo->currentIndex() == 0
+                && fieldCombo->currentText() == QStringLiteral("density"),
+            "the isosurface field list is not the host's, or does not follow "
+            "the volume's field");
+        require(!valueSlider->isEnabled(),
+            "the value slider was enabled before there was a surface");
+
+        // Ticking the group fetches the field's range on a worker and, once
+        // it lands, defaults the value to its midpoint and renders with the
+        // surface at it.
+        auto before = session->requests.load();
+        QMetaObject::invokeMethod(window, [group] { group->setChecked(true); });
+        waitFor(application, [&] {
+            if (session->requests <= before || controller.renderInFlight()) {
+                return false;
+            }
+            const auto request = session->requestsSoFar().back();
+            return request.isosurface.has_value() && request.isosurface->value == 10.0;
+        }, "ticking the isosurface did not render at the range's midpoint");
+        auto latest = session->requestsSoFar().back();
+        require(latest.isosurface.has_value()
+                && latest.isosurface->field == amrvis::FieldId{0}
+                && latest.isosurface->component == 0
+                && latest.isosurface->color == 0xFFFFFFU
+                && latest.isosurface->opacity == 1.0F && latest.showVolume
+                && latest.samplesPerVoxel == 2,
+            "the request does not carry the isosurface the controls describe");
+        require(showVolume->isEnabled() && valueSlider->isEnabled()
+                && valueSlider->value() == 500,
+            "the volume box and the slider did not follow the surface");
+        waitFor(application, [&] { return observed.frames >= 2; },
+            "the isosurface frame was not displayed");
+        require(status->text().contains(QStringLiteral("iso density = 10")),
+            "the status line does not name the isosurface");
+
+        // Hiding the volume.
+        before = session->requests.load();
+        QMetaObject::invokeMethod(
+            window, [showVolume] { showVolume->setChecked(false); });
+        waitFor(application,
+            [&] { return session->requests == before + 1 && !controller.renderInFlight(); },
+            "hiding the volume did not render");
+        latest = session->requestsSoFar().back();
+        require(!latest.showVolume && latest.isosurface.has_value(),
+            "the request still showed the volume");
+        waitFor(application, [&] { return !status->text().contains(QStringLiteral("range")); },
+            "the status line kept a range for a hidden volume");
+
+        // A drag of the value slider drafts at the dragged value -- a quarter
+        // of the way is 5 -- and the release renders it in full.
+        before = session->requests.load();
+        QMetaObject::invokeMethod(window, [valueSlider] {
+            valueSlider->setSliderDown(true);
+            valueSlider->setValue(250);
+        });
+        waitFor(application, [&] { return session->requests == before + 1; },
+            "the slider drag did not draft");
+        latest = session->requestsSoFar().back();
+        require(latest.samplesPerVoxel == 1 && latest.isosurface.has_value()
+                && std::abs(latest.isosurface->value - 5.0) < 1.0e-9
+                && valueSpin->value() == 5.0,
+            "the drag did not draft at the dragged value");
+        QMetaObject::invokeMethod(window, [valueSlider] {
+            valueSlider->setSliderDown(false);
+            emit valueSlider->sliderReleased();
+        });
+        waitFor(application,
+            [&] { return session->requests == before + 2 && !controller.renderInFlight(); },
+            "the release did not render in full");
+        latest = session->requestsSoFar().back();
+        require(latest.samplesPerVoxel == 2
+                && std::abs(latest.isosurface->value - 5.0) < 1.0e-9,
+            "the settled frame is not at the released value");
+
+        // A typed value is kept, and the slider follows it.
+        before = session->requests.load();
+        QMetaObject::invokeMethod(window, [valueSpin] { valueSpin->setValue(15.0); });
+        waitFor(application,
+            [&] { return session->requests == before + 1 && !controller.renderInFlight(); },
+            "a typed value did not render");
+        latest = session->requestsSoFar().back();
+        require(latest.isosurface->value == 15.0 && valueSlider->value() == 750,
+            "the typed value did not reach the request or the slider");
+
+        // Opacity and colour.
+        before = session->requests.load();
+        QMetaObject::invokeMethod(
+            window, [opacitySlider] { opacitySlider->setValue(40); });
+        waitFor(application,
+            [&] { return session->requests == before + 1 && !controller.renderInFlight(); },
+            "the opacity did not render");
+        latest = session->requestsSoFar().back();
+        require(std::abs(latest.isosurface->opacity - 0.4F) < 1.0e-6F,
+            "the opacity did not reach the request");
+        // Never zero: with the volume hidden that would be a blank frame.
+        require(opacitySlider->minimum() == 1,
+            "the opacity slider allows an invisible surface");
+        before = session->requests.load();
+        QMetaObject::invokeMethod(window, [window] {
+            window->setIsosurfaceColor(QColor(0x40, 0xC0, 0xFF));
+            emit window->isosurfaceChanged();
+        });
+        waitFor(application,
+            [&] { return session->requests == before + 1 && !controller.renderInFlight(); },
+            "the colour did not render");
+        latest = session->requestsSoFar().back();
+        require(latest.isosurface->color == 0x40C0FFU,
+            "the colour did not reach the request");
+
+        // Another field: the request names it, and once its range arrives the
+        // value defaults again -- the typed 15 belonged to the other field.
+        // This field spans [-1e308, 1e308], so the midpoint is 0 only if it
+        // is not taken through the bounds' sum.
+        QMetaObject::invokeMethod(
+            window, [fieldCombo] { fieldCombo->setCurrentIndex(1); });
+        waitFor(application, [&] {
+            if (controller.renderInFlight()) {
+                return false;
+            }
+            const auto request = session->requestsSoFar().back();
+            return request.isosurface.has_value()
+                && request.isosurface->field == amrvis::FieldId{1}
+                && request.isosurface->value == 0.0;
+        }, "the new field did not render at its range's midpoint");
+        // And three quarters of the way along it is 5e307, not the overflow
+        // of its span.
+        before = session->requests.load();
+        QMetaObject::invokeMethod(window, [valueSlider] {
+            valueSlider->setSliderDown(true);
+            valueSlider->setValue(750);
+        });
+        waitFor(application, [&] { return session->requests == before + 1; },
+            "the slider drag over the huge range did not draft");
+        require(std::abs(valueSpin->value() - 5.0e307) <= 1.0e293
+                && valueSlider->value() == 750,
+            "a slider position over a huge range did not map to its value");
+        QMetaObject::invokeMethod(window, [valueSlider] {
+            valueSlider->setSliderDown(false);
+            emit valueSlider->sliderReleased();
+        });
+        waitFor(application,
+            [&] { return session->requests == before + 2 && !controller.renderInFlight(); },
+            "the release over the huge range did not render");
+
+        // A session that cannot be asked: the group is disabled, the request
+        // is the volume alone, and the tick and the hidden volume come back
+        // with a session that can.
+        before = session->requests.load();
+        session->isosurfaceSupported = false;
+        controller.configureForDataset();
+        waitFor(application,
+            [&] { return session->requests > before && !controller.renderInFlight(); },
+            "the unsupporting session did not render");
+        latest = session->requestsSoFar().back();
+        require(!group->isEnabled() && !latest.isosurface.has_value()
+                && latest.showVolume,
+            "a session that cannot be asked was asked for an isosurface");
+        before = session->requests.load();
+        session->isosurfaceSupported = true;
+        controller.configureForDataset();
+        waitFor(application, [&] {
+            if (session->requests <= before || controller.renderInFlight()) {
+                return false;
+            }
+            const auto request = session->requestsSoFar().back();
+            return request.isosurface.has_value() && !request.showVolume;
+        }, "the isosurface and the hidden volume did not come back");
+        require(group->isEnabled() && group->isChecked() && !showVolume->isChecked(),
+            "the controls did not come back as they were");
+
+        // Unticking the group: the volume is drawn whatever the box said.
+        before = session->requests.load();
+        QMetaObject::invokeMethod(window, [group] { group->setChecked(false); });
+        waitFor(application,
+            [&] { return session->requests == before + 1 && !controller.renderInFlight(); },
+            "unticking the isosurface did not render");
+        latest = session->requestsSoFar().back();
+        require(!latest.isosurface.has_value() && latest.showVolume
+                && !showVolume->isEnabled() && showVolume->isChecked(),
+            "unticking the isosurface left the volume hidden");
+        controller.closeWindow();
+    }
+
+    // --- a volume fraction is the isosurface's first choice ------------------
+    // An embedded-boundary plotfile's vfrac at 0.5 is the geometry, so with
+    // such a field in the list the surface starts there rather than on the
+    // volume's field; without one it starts on the volume's field. Matched by
+    // name, case-insensitively, exact before prefix.
+    {
+        using amrvis::qt::volumeFractionField;
+        using Fields = std::vector<std::pair<amrvis::FieldId, QString>>;
+        require(!volumeFractionField(fieldList).has_value(),
+            "a list without a volume fraction reported one");
+        require(volumeFractionField(Fields{{amrvis::FieldId{0}, "density"},
+                    {amrvis::FieldId{3}, "vfrac"}})
+                == amrvis::FieldId{3},
+            "vfrac was not picked");
+        require(volumeFractionField(Fields{{amrvis::FieldId{0}, "density"},
+                    {amrvis::FieldId{2}, "VolFrac"}})
+                == amrvis::FieldId{2},
+            "VolFrac was not picked case-insensitively");
+        require(volumeFractionField(Fields{{amrvis::FieldId{0}, "vfrac_x"},
+                    {amrvis::FieldId{1}, "density"}, {amrvis::FieldId{2}, "vfrac"}})
+                == amrvis::FieldId{2},
+            "an exact vfrac lost to a prefix match");
+        require(volumeFractionField(Fields{{amrvis::FieldId{0}, "density"},
+                    {amrvis::FieldId{1}, "vfrac_x"}})
+                == amrvis::FieldId{1},
+            "a prefix match was not picked when nothing matched exactly");
+
+        fieldList.push_back({amrvis::FieldId{2}, QString("vfrac")});
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return observed.frames == 1; },
+            "the opening frame was not displayed");
+        auto* const fieldCombo = volumeWindow()->findChild<QComboBox*>(
+            QStringLiteral("volumeIsosurfaceFieldCombo"));
+        require(fieldCombo != nullptr && fieldCombo->count() == 3
+                && fieldCombo->currentText() == QStringLiteral("vfrac"),
+            "the isosurface did not start on the volume fraction");
+        controller.closeWindow();
+        fieldList.pop_back();
+    }
+
+    // --- the colour is remembered across windows; the field and value not ----
+    // A chosen colour goes to the settings and comes back in the next window
+    // opened; the group starts off and the value and field start afresh.
+    {
+        // Earlier blocks chose colours into the same scratch store.
+        QSettings(settingsPath, QSettings::IniFormat)
+            .remove(QStringLiteral("volume/isosurfaceColor"));
+        {
+            VolumeController controller(hooks());
+            Observed observed;
+            observe(controller, observed);
+            controller.showWindow(nullptr);
+            waitFor(application, [&] { return observed.frames == 1; },
+                "the opening frame was not displayed");
+            auto* const window = volumeWindow();
+            require(window->isosurfaceColor() == QColor(Qt::white),
+                "a fresh store did not leave the default colour");
+            QMetaObject::invokeMethod(window, [window] {
+                window->setIsosurfaceColor(QColor(0x40, 0xC0, 0xFF));
+                emit window->isosurfaceChanged();
+            });
+            waitFor(application, [&] { return !controller.renderInFlight(); },
+                "the colour change did not render");
+            require(QSettings(settingsPath, QSettings::IniFormat)
+                        .value(QStringLiteral("volume/isosurfaceColor"))
+                        .toString()
+                    == QStringLiteral("#40c0ff"),
+                "the chosen colour was not written to the settings");
+            auto* const valueSpin = window->findChild<QDoubleSpinBox*>(
+                QStringLiteral("volumeIsosurfaceValueSpin"));
+            QMetaObject::invokeMethod(window, [valueSpin] { valueSpin->setValue(7.0); });
+            waitFor(application, [&] { return !controller.renderInFlight(); },
+                "the value change did not render");
+            controller.closeWindow();
+        }
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return observed.frames == 1; },
+            "the reopened frame was not displayed");
+        auto* const window = volumeWindow();
+        auto* const group = window->findChild<QGroupBox*>(
+            QStringLiteral("volumeIsosurfaceGroup"));
+        auto* const valueSpin = window->findChild<QDoubleSpinBox*>(
+            QStringLiteral("volumeIsosurfaceValueSpin"));
+        require(window->isosurfaceColor() == QColor(0x40, 0xC0, 0xFF),
+            "the remembered colour did not come back");
+        require(!group->isChecked() && valueSpin->value() != 7.0,
+            "the surface's state came back along with its colour");
+        const auto before = session->requests.load();
+        QMetaObject::invokeMethod(window, [group] { group->setChecked(true); });
+        waitFor(application, [&] {
+            if (session->requests <= before || controller.renderInFlight()) {
+                return false;
+            }
+            const auto request = session->requestsSoFar().back();
+            return request.isosurface.has_value()
+                && request.isosurface->color == 0x40C0FFU;
+        }, "the remembered colour did not reach the request");
+        controller.closeWindow();
+    }
+
+    // --- the range fetch neither lags nor latches ----------------------------
+    // While a new field's range is on its way the slider is disabled, so a
+    // drag cannot commit a value from the old field's span; and a fetch that
+    // fails is asked again on the next change rather than leaving the slider
+    // off for that field for good.
+    {
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return observed.frames == 1; },
+            "the opening frame was not displayed");
+        auto* const window = volumeWindow();
+        auto* const group = window->findChild<QGroupBox*>(
+            QStringLiteral("volumeIsosurfaceGroup"));
+        auto* const fieldCombo = window->findChild<QComboBox*>(
+            QStringLiteral("volumeIsosurfaceFieldCombo"));
+        auto* const valueSlider = window->findChild<QSlider*>(
+            QStringLiteral("volumeIsosurfaceValueSlider"));
+        require(group != nullptr && fieldCombo != nullptr && valueSlider != nullptr,
+            "the isosurface controls are missing from the volume window");
+        // With the group off nothing is fetched, however many frames arrive:
+        // each would be a round trip for a range nothing reads.
+        const auto fetchesBefore = session->rangeRequests.load();
+        controller.configureForDataset();
+        controller.configureForDataset();
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the frames did not render");
+        settle(application, 100);
+        require(session->rangeRequests == fetchesBefore,
+            "frames with the isosurface off fetched its range");
+        QMetaObject::invokeMethod(window, [group] { group->setChecked(true); });
+        waitFor(application, [&] { return valueSlider->isEnabled(); },
+            "the first field's range did not enable the slider");
+        require(session->rangeRequests == fetchesBefore + 1,
+            "ticking the group did not fetch the range exactly once");
+
+        // A slow fetch for the next field: the slider goes off at once and
+        // comes back only with the answer.
+        session->rangeDelayMs = 300;
+        QMetaObject::invokeMethod(
+            window, [fieldCombo] { fieldCombo->setCurrentIndex(1); });
+        application.processEvents();
+        require(!valueSlider->isEnabled(),
+            "the slider kept the old field's range while the new one was fetched");
+        waitFor(application, [&] { return valueSlider->isEnabled(); },
+            "the new field's range never enabled the slider");
+        session->rangeDelayMs = 0;
+
+        // A fetch that fails: the slider stays off, and the next change
+        // (here a refresh with the session healthy again) fetches and enables.
+        session->rangeFailingField = 0;
+        QMetaObject::invokeMethod(
+            window, [fieldCombo] { fieldCombo->setCurrentIndex(0); });
+        settle(application, 200);
+        require(!valueSlider->isEnabled(),
+            "a failed range fetch left the slider enabled");
+        session->rangeFailingField = -1;
+        controller.refresh();
+        waitFor(application, [&] { return valueSlider->isEnabled(); },
+            "a failed range fetch was never retried");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the last render did not finish");
+
+        // A fetch still out when the window closes is stopped, not left to
+        // run: a remote round trip would otherwise hold the session and the
+        // pool until it timed out. The fake's delay is far longer than the
+        // wait allows, so only a stop can end it in time.
+        session->rangeDelayMs = 20000;
+        const auto cancellationsBefore = session->rangeCancellations.load();
+        const auto fetchesBeforeClose = session->rangeRequests.load();
+        QMetaObject::invokeMethod(
+            window, [fieldCombo] { fieldCombo->setCurrentIndex(1); });
+        waitFor(application,
+            [&] { return session->rangeRequests > fetchesBeforeClose; },
+            "the field change did not start a fetch");
+        controller.closeWindow();
+        waitFor(application,
+            [&] { return session->rangeCancellations > cancellationsBefore; },
+            "closing the window did not stop the range fetch");
+        session->rangeDelayMs = 0;
     }
     return 0;
 }

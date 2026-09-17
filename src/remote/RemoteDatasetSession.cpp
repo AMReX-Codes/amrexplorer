@@ -100,6 +100,7 @@ RemoteDatasetSession::RemoteDatasetSession(
     , m_storedFieldCount(
           m_metadata.fields.size() - opened.derivedFieldCount)
     , m_derivedFieldSkips(std::move(opened.derivedFieldSkips))
+    , m_mappedGridComponentNames(std::move(opened.mappedGridComponentNames))
 {
 }
 
@@ -191,6 +192,16 @@ bool RemoteDatasetSession::supportsVolumeSampling() const noexcept
     return supportsVolumeRendering() && m_connection->supportsVolumeSampling();
 }
 
+bool RemoteDatasetSession::supportsVolumeIsosurface() const noexcept
+{
+    return supportsVolumeRendering() && m_connection->supportsVolumeIsosurface();
+}
+
+bool RemoteDatasetSession::supportsVolumeOrientation() const noexcept
+{
+    return supportsVolumeRendering() && m_connection->supportsVolumeOrientation();
+}
+
 VolumeFrame RemoteDatasetSession::renderVolume(
     const VolumeRenderRequest& request, StopToken cancellation)
 {
@@ -216,12 +227,79 @@ VolumeFrame RemoteDatasetSession::renderVolume(
         && !m_connection->supportsVolumeSampling()) {
         throw std::runtime_error(volumeSamplingUnsupportedMessage);
     }
+    // The same for an isosurface or a hidden volume: a 1.5 server would draw
+    // the volume alone and nothing downstream could tell.
+    if ((request.isosurface || !request.showVolume)
+        && !m_connection->supportsVolumeIsosurface()) {
+        throw std::runtime_error(volumeIsosurfaceUnsupportedMessage);
+    }
+    // And for a camera with roll: a 1.7 server reads the two angles, which
+    // such a camera has none of, and would turn the picture the wrong way.
+    if (!orthoAnglesOf(request.camera) && !m_connection->supportsVolumeOrientation()) {
+        throw std::runtime_error(volumeOrientationUnsupportedMessage);
+    }
     validateSessionVolumeRequest(m_metadata, m_id, request);
     return refusingInvalidResponses(*m_connection, [&] {
         auto frame = m_connection->renderVolume(request, cancellation);
         validateSessionVolumeResult(m_metadata, request, frame);
         return frame;
     });
+}
+
+bool RemoteDatasetSession::peerSupportsMappedGrid() const noexcept
+{
+    return m_connection && m_connection->supportsMappedGrid();
+}
+
+bool RemoteDatasetSession::supportsMappedGrid() const noexcept
+{
+    // Both halves: the protocol carries the plane and the plotfile has one.
+    return m_connection && m_connection->supportsMappedGrid()
+        && m_metadata.hasMappedGrid;
+}
+
+const std::vector<std::string>&
+RemoteDatasetSession::mappedGridComponentNames() const noexcept
+{
+    return m_mappedGridComponentNames;
+}
+
+MappedGridPlane RemoteDatasetSession::requestMappedGridPlane(
+    const MappedGridPlaneRequest& request, StopToken cancellation)
+{
+    requireOpen();
+    // Outside refusingInvalidResponses, as renderVolume's refusals are: a
+    // peer too old for the plane, or a plotfile without one, is not a peer
+    // that stopped speaking the protocol.
+    if (!m_connection->supportsMappedGrid()) {
+        throw std::runtime_error(mappedGridUnsupportedMessage);
+    }
+    if (!m_metadata.hasMappedGrid) {
+        throw std::runtime_error("mapped grid is not supported by this session");
+    }
+    if (request.dataset != m_id) {
+        throw std::invalid_argument("mapped-grid request uses the wrong dataset");
+    }
+    if (request.maximumLevel > m_metadata.finestLevel) {
+        throw std::invalid_argument(
+            "mapped-grid request level exceeds the finest level");
+    }
+    if (const auto errors
+        = validateMappedGridPlaneRequest(request, m_metadata.dimension);
+        !errors.empty()) {
+        throw std::invalid_argument(errors.front());
+    }
+    try {
+        return refusingInvalidResponses(*m_connection, [&] {
+            auto plane = m_connection->requestMappedGridPlane(request, cancellation);
+            validateSessionMappedGridResult(m_metadata, request, plane);
+            return plane;
+        });
+    } catch (const RemoteError& error) {
+        // The peer answered, with a refusal: past its frame budget, or a
+        // node file it could not read. The slice stands without the warp.
+        throw MappedGridUnavailable(error.what());
+    }
 }
 
 DatasetPage RemoteDatasetSession::requestDatasetPage(

@@ -2,6 +2,7 @@
 
 #include "ScientificDoubleSpinBox.hpp"
 
+#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QSignalBlocker>
@@ -18,10 +19,11 @@ RangeController::RangeController(QObject* parent)
 {
 }
 
-void RangeController::createToolbarWidgets(QToolBar* toolbar)
+void RangeController::createToolbarWidgets(QToolBar* toolbar,
+    const QString& objectNamePrefix)
 {
     m_mode = new QComboBox(toolbar);
-    m_mode->setObjectName(QStringLiteral("rangeModeSelector"));
+    m_mode->setObjectName(objectNamePrefix + QStringLiteral("rangeModeSelector"));
     m_mode->addItem(tr("File"), static_cast<int>(RangeMode::File));
     m_mode->addItem(tr("Level"), static_cast<int>(RangeMode::Level));
     m_mode->addItem(tr("Visible"), static_cast<int>(RangeMode::Visible));
@@ -43,7 +45,7 @@ void RangeController::createToolbarWidgets(QToolBar* toolbar)
     // per-group separators on the Slice Controls toolbar.
     toolbar->addSeparator();
     m_logarithmic = new QCheckBox(tr("Log"), toolbar);
-    toolbar->addWidget(m_logarithmic);
+    m_logarithmicAction = toolbar->addWidget(m_logarithmic);
     m_mode->setEnabled(false);
     m_logarithmic->setEnabled(false);
 
@@ -246,6 +248,13 @@ void RangeController::updateAvailability(
     }
     emit statusMessage(
         tr("Metadata range unavailable; using the visible-data range."), 0);
+}
+
+void RangeController::setLogarithmicVisible(bool visible)
+{
+    if (m_logarithmicAction != nullptr) {
+        m_logarithmicAction->setVisible(visible);
+    }
 }
 
 } // namespace amrvis::qt

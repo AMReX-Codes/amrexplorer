@@ -11,19 +11,24 @@ namespace amrvis::qt {
 // reads and writes. Collaborators that persist state take a settings factory
 // through their Hooks rather than calling this directly, so their unit tests
 // can point them at a scratch file.
+//
+// The format is QSettings::defaultFormat(): NativeFormat unless main() has
+// switched it, which the smoke tests do to keep every run's settings in a
+// directory of its own (the two-argument constructor would ignore that).
 inline constexpr auto kSettingsOrganization = "amrex-codes";
 inline constexpr auto kSettingsApplication = "amrexplorer";
 
 inline QSettings makeSettings()
 {
-    return QSettings(QString::fromLatin1(kSettingsOrganization),
+    return QSettings(QSettings::defaultFormat(), QSettings::UserScope,
+        QString::fromLatin1(kSettingsOrganization),
         QString::fromLatin1(kSettingsApplication));
 }
 
 inline std::unique_ptr<QSettings> makeSettingsPtr()
 {
-    return std::make_unique<QSettings>(
-        QString::fromLatin1(kSettingsOrganization),
+    return std::make_unique<QSettings>(QSettings::defaultFormat(),
+        QSettings::UserScope, QString::fromLatin1(kSettingsOrganization),
         QString::fromLatin1(kSettingsApplication));
 }
 

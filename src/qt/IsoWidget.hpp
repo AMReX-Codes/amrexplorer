@@ -9,6 +9,7 @@
 #include <QWidget>
 
 #include <array>
+#include <functional>
 #include <vector>
 
 class QMouseEvent;
@@ -37,7 +38,22 @@ public:
     explicit IsoWidget(QWidget* parent = nullptr);
 
     using QWidget::setGeometry;
-    void setGeometry(const DatasetMetadata& metadata);
+    // The map takes a dataset index and a physical point to the display
+    // coordinates the wireframe is drawn in, so the view keeps the panels'
+    // proportions rather than the physical ones; empty draws physical
+    // coordinates.
+    using DisplayMap = std::function<Real3(std::size_t dataset, const Real3& point)>;
+    // One dataset, drawn through the map when one is given (the main window
+    // passes its Axis Scaling factors; the volume window passes none so the
+    // wireframe lines up with the ray-cast backdrop).
+    void setGeometry(const DatasetMetadata& metadata, DisplayMap displayMap = {});
+    // Two datasets sharing a plane: the outline and the projection span the
+    // union of their domains, each domain is outlined on its own, and both
+    // level box sets are drawn.
+    void setPairedGeometry(const DatasetMetadata& primary,
+        const DatasetMetadata& companion, DisplayMap displayMap);
+    // The outlined domain in display coordinates (the union for two datasets).
+    [[nodiscard]] const RealBox& displayDomain() const noexcept { return m_domain; }
     void setSlicePositions(double x, double y, double z);
     void setSlicePlanesVisible(bool visible);
     void setColorPalette(const Palette* palette);
@@ -47,6 +63,16 @@ public:
     // interactionEnded.
     [[nodiscard]] const OrthoCamera& camera() const noexcept { return m_camera; }
     void setCamera(const OrthoCamera& camera);
+    // A preset's orientation at the current zoom, as its button applies it:
+    // emits cameraChanged and then interactionEnded, the move being over.
+    void setPreset(const OrthoCamera& preset);
+    // Whether a drag turns the view about the screen's own axes, so the face
+    // under the cursor follows the cursor in any orientation (the default),
+    // or about world z and the turned x axis, the two angles an older
+    // server reads. Turning it off puts a rolled camera on its nearest two
+    // angles, and says so as a camera change.
+    void setFreeRotation(bool free);
+    [[nodiscard]] bool freeRotation() const noexcept { return m_freeRotation; }
 
     // A rendered volume frame drawn under the wireframe, with the camera it
     // was rendered with: a premultiplied image produced at some viewport size
@@ -96,6 +122,7 @@ protected:
 private:
     struct LevelBoxes {
         int level = 0;
+        std::size_t dataset = 0;
         IntBox domain;
         Real3 cellSize;
         Real3 indexOrigin;
@@ -112,12 +139,29 @@ private:
         const IntBox& box) const;
     [[nodiscard]] QColor levelOutlineColor(int level) const;
     [[nodiscard]] QColor slicePlaneColor(int axis) const;
-    void setViewAngles(double azimuth, double elevation);
     void layoutButtons();
+    // The two-angle state the drag turns, and the camera rebuilt from it.
+    void seedAnglesFromCamera();
 
+    void setGeometries(const std::vector<const DatasetMetadata*>& metadata,
+        DisplayMap displayMap);
+    // A dataset's physical point in the coordinates the wireframe uses:
+    // the display map's when one is set, physical otherwise.
+    [[nodiscard]] Real3 toDisplay(std::size_t dataset, const Real3& point) const;
+    [[nodiscard]] RealBox toDisplay(std::size_t dataset, const RealBox& box) const;
+    [[nodiscard]] std::size_t datasetHolding(int axis, double position) const;
+
+    // In display coordinates (see toDisplay).
     RealBox m_domain{};
+    // Each dataset's own domain when several share the widget; empty for one.
+    std::vector<RealBox> m_datasetDomains;
+    // The same in physical coordinates, to place the slice positions.
+    std::vector<RealBox> m_physicalDomains;
+    DisplayMap m_displayMap;
     std::vector<LevelBoxes> m_levels;
     std::array<double, 3> m_slicePositions{0.0, 0.0, 0.0};
+    // The main window's view shows them at View > Slice Planes; the volume
+    // window's never does, so they cannot sit over the rendered volume.
     bool m_slicePlanesVisible = false;
     bool m_levelBoxesVisible = true;
     bool m_domainOutlineVisible = true;
@@ -127,6 +171,11 @@ private:
     bool m_hasGeometry = false;
 
     OrthoCamera m_camera;
+    // The drag's turn about world z and tilt about the turned x axis, the
+    // camera's angles (nearestOrthoAngles); unbounded, wrapped into [-pi, pi).
+    double m_azimuth = 0.0;
+    double m_elevation = 0.0;
+    bool m_freeRotation = true;
     QPoint m_lastMousePos;
     bool m_dragging = false;
 

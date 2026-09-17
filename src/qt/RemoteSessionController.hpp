@@ -77,16 +77,37 @@ public:
     // starts a new one and opens the paths once it is ready. Browse... goes
     // through browse() the same way.
     void promptOpen(QWidget* parent, bool sequence);
+    // The Open Remote Companion Plotfile dialog, modal on `parent`: a
+    // plotfile on a server to show beside the open one, handed back through
+    // companionRequested(). With `sameServer` a plotfile on show came over
+    // the live session and the companion must too, so changed connection
+    // fields are refused; otherwise a new destination starts a session first,
+    // as promptOpen does, and the pick comes once it is ready.
+    void promptCompanion(QWidget* parent, bool sameServer);
     // The remote directory browser over the live connection, modal on
     // `parent`; what it picks goes out through openRequested(). Starts at the
     // directory last browsed on this destination, else the server's home.
     void browse(QWidget* parent, bool sequence);
+    // The remote directory browser for one plotfile over `connection` -- the
+    // primary's own connection, for a companion -- modal on `parent`. Returns
+    // the server-side path picked; empty when cancelled, or when the
+    // connection is not live (an error is reported then).
+    [[nodiscard]] std::string chooseRemotePlotfile(QWidget* parent,
+        const std::shared_ptr<remote::Connection>& connection);
     // The server executable to use for a destination: the one last used for
     // it, else "amrexplorer-server". Per destination only: an explicit path
     // is a property of one machine.
     [[nodiscard]] QString serverExecutableFor(const QString& destination) const;
     // The Diagnostics panel's remote lines, or empty when there is no session.
     [[nodiscard]] QString diagnosticsLines() const;
+    // Non-empty while a live connection's server predates full-precision
+    // values (protocol 1.5). The one capability gap that refuses nothing, so
+    // it is shown for as long as the session lasts rather than announced
+    // once -- and no longer: a dead session sends no values to warn about.
+    [[nodiscard]] QString valuePrecisionNotice() const
+    {
+        return connected() ? m_precisionNotice : QString();
+    }
     // Ends the ssh session; the host's close path.
     void shutdown();
 
@@ -97,6 +118,9 @@ signals:
     // The host should open these server-visible paths over connection(): as
     // a sequence when `sequence`, else the (single) path as a dataset.
     void openRequested(std::vector<std::string> paths, bool sequence);
+    // The host should show this server-visible path beside the open
+    // plotfile, over connection().
+    void companionRequested(std::string path);
     void statusMessage(const QString& message, int timeoutMs);
     void errorReported(const QString& message);
 
@@ -107,12 +131,18 @@ private:
         const QString& destination, const QString& executable) const;
     void rememberDestination(
         const QString& destination, const QString& executable);
+    // The browser over `connection`, starting at the directory last browsed
+    // on this destination; what it picked (empty when cancelled), with the
+    // directory remembered.
+    [[nodiscard]] std::vector<std::string> runBrowser(QWidget* parent,
+        const std::shared_ptr<remote::Connection>& connection, bool sequence);
 
     Hooks m_hooks;
     std::string m_softwareVersion;
     std::unique_ptr<SshRemoteSession> m_session;
     std::shared_ptr<remote::Connection> m_connection;
     QString m_label;
+    QString m_precisionNotice;
     std::uint64_t m_connectionGeneration = 0;
 };
 

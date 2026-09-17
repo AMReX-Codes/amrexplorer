@@ -136,6 +136,16 @@ target_link_libraries(test_spherical_coords
     PRIVATE amrexplorer::core amrexplorer::render2d amrexplorer::warnings)
 add_test(NAME spherical_coords COMMAND test_spherical_coords)
 
+add_executable(test_mapped_grid_warp unit/test_mapped_grid_warp.cpp)
+target_link_libraries(test_mapped_grid_warp
+    PRIVATE amrexplorer::core amrexplorer::render2d amrexplorer::warnings)
+add_test(NAME mapped_grid_warp COMMAND test_mapped_grid_warp)
+
+add_executable(test_spherical_warp unit/test_spherical_warp.cpp)
+target_link_libraries(test_spherical_warp
+    PRIVATE amrexplorer::core amrexplorer::render2d amrexplorer::warnings)
+add_test(NAME spherical_warp COMMAND test_spherical_warp)
+
 add_executable(test_vector_glyphs unit/test_vector_glyphs.cpp)
 target_link_libraries(test_vector_glyphs PRIVATE amrexplorer::render2d amrexplorer::warnings)
 add_test(NAME vector_glyphs COMMAND test_vector_glyphs)
@@ -266,6 +276,22 @@ if(TARGET amrexplorer_remote)
             "${remote_server_fixture_spherical_dir}")
     set_tests_properties(remote_server_fixture_spherical PROPERTIES
         FIXTURES_SETUP remote_server_spherical_materialized)
+    set(remote_server_fixture_mapped_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_server_mapped")
+    add_test(NAME remote_server_fixture_mapped
+        COMMAND "$<TARGET_FILE:fixture_materializer>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped"
+            "${remote_server_fixture_mapped_dir}")
+    set_tests_properties(remote_server_fixture_mapped PROPERTIES
+        FIXTURES_SETUP remote_server_mapped_materialized)
+    set(remote_server_fixture_mapped_wide_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_server_mapped_wide")
+    add_test(NAME remote_server_fixture_mapped_wide
+        COMMAND "$<TARGET_FILE:fixture_materializer>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped_wide"
+            "${remote_server_fixture_mapped_wide_dir}")
+    set_tests_properties(remote_server_fixture_mapped_wide PROPERTIES
+        FIXTURES_SETUP remote_server_mapped_wide_materialized)
     add_test(NAME remote_server
         COMMAND test_remote_server "${remote_server_private_fixture_dir}")
     # The trickle case now paces the write through the test hook instead of
@@ -310,9 +336,10 @@ if(TARGET amrexplorer_remote)
             Threads::Threads
     )
     add_test(NAME remote_session
-        COMMAND test_remote_session "${remote_server_fixture_dir}")
+        COMMAND test_remote_session "${remote_server_fixture_dir}"
+            "${remote_server_fixture_mapped_dir}")
     set_tests_properties(remote_session PROPERTIES
-        FIXTURES_REQUIRED remote_server_materialized
+        FIXTURES_REQUIRED "remote_server_materialized;remote_server_mapped_materialized"
         TIMEOUT 30)
 
     add_executable(test_remote_volume
@@ -430,6 +457,7 @@ add_test(
         "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
         "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_nonuniform"
         "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped"
 )
 
 add_executable(test_selective_block_read integration/test_selective_block_read.cpp)
@@ -554,6 +582,58 @@ add_test(NAME tool_dataset_inspect_json
     COMMAND dataset_inspect --json "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d")
 set_tests_properties(tool_dataset_inspect_json PROPERTIES
     PASS_REGULAR_EXPRESSION "\"dimension\": 2")
+# The mapped-grid fixture reports its Nu_nd hierarchy.
+add_test(NAME tool_dataset_inspect_mapped
+    COMMAND dataset_inspect "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped")
+set_tests_properties(tool_dataset_inspect_mapped PROPERTIES
+    PASS_REGULAR_EXPRESSION "mapped_grid: 3 components")
+
+# The mapped-grid fixture with its Cell and Nu_nd payloads, for the tests that
+# read node positions (FIXTURES_REQUIRED mapped_grid_materialized).
+set(mapped_grid_fixture_dir
+    "${CMAKE_CURRENT_BINARY_DIR}/fixtures_mapped_grid")
+add_test(NAME mapped_grid_fixture
+    COMMAND "$<TARGET_FILE:fixture_materializer>"
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped"
+        "${mapped_grid_fixture_dir}")
+set_tests_properties(mapped_grid_fixture PROPERTIES
+    FIXTURES_SETUP mapped_grid_materialized)
+
+# The two-level variant: level 1 refines the x < 0.5 half, so the other half
+# is covered by level 0 alone (FIXTURES_REQUIRED mapped_grid_refined_materialized).
+set(mapped_grid_refined_fixture_dir
+    "${CMAKE_CURRENT_BINARY_DIR}/fixtures_mapped_grid_refined")
+add_test(NAME mapped_grid_refined_fixture
+    COMMAND "$<TARGET_FILE:fixture_materializer>"
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped_refined"
+        "${mapped_grid_refined_fixture_dir}")
+set_tests_properties(mapped_grid_refined_fixture PROPERTIES
+    FIXTURES_SETUP mapped_grid_refined_materialized)
+
+# Node positions through the local session, against the recipe the
+# materializer wrote; the plain 3-D fixture must report no grid.
+add_executable(test_mapped_grid_query integration/test_mapped_grid_query.cpp)
+target_link_libraries(
+    test_mapped_grid_query PRIVATE amrexplorer::data amrexplorer::warnings
+)
+add_test(NAME mapped_grid_query
+    COMMAND test_mapped_grid_query
+        "${mapped_grid_fixture_dir}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+        "${mapped_grid_refined_fixture_dir}")
+set_tests_properties(mapped_grid_query PROPERTIES
+    FIXTURES_REQUIRED "mapped_grid_materialized;mapped_grid_refined_materialized")
+
+add_executable(test_mapped_grid_pipeline integration/test_mapped_grid_pipeline.cpp)
+target_link_libraries(
+    test_mapped_grid_pipeline PRIVATE amrexplorer::pipeline amrexplorer::warnings
+)
+add_test(NAME mapped_grid_pipeline
+    COMMAND test_mapped_grid_pipeline
+        "${mapped_grid_fixture_dir}"
+        "${CMAKE_CURRENT_BINARY_DIR}/fixtures_mapped_grid_plain")
+set_tests_properties(mapped_grid_pipeline PROPERTIES
+    FIXTURES_REQUIRED mapped_grid_materialized)
 
 add_test(NAME tool_query_benchmark
     COMMAND "${CMAKE_COMMAND}"
@@ -886,6 +966,8 @@ if(TARGET amrexplorer_qt)
         "${PROJECT_SOURCE_DIR}/src/qt/VolumeWindow.hpp"
         "${PROJECT_SOURCE_DIR}/src/qt/IsoWidget.cpp"
         "${PROJECT_SOURCE_DIR}/src/qt/OpacityCurveWidget.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ScientificDoubleSpinBox.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp"
         "${PROJECT_SOURCE_DIR}/src/qt/IsoWidget.hpp"
     )
     set_target_properties(test_volume_controller PROPERTIES AUTOMOC ON)
@@ -993,7 +1075,8 @@ if(TARGET amrexplorer_qt)
 
     # RemoteSessionController: install() over a loopback Server, start() over
     # the stand-in ssh script running the real server, per-destination
-    # settings, diagnostics lines. Never opens a modal dialog.
+    # settings, diagnostics lines, and a hand-rolled older peer for the
+    # precision notice. Never opens a modal dialog.
     add_executable(test_remote_session_controller
         unit/test_remote_session_controller.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/RemoteSessionController.cpp"
@@ -1007,10 +1090,13 @@ if(TARGET amrexplorer_qt)
     set_target_properties(test_remote_session_controller
         PROPERTIES AUTOMOC ON)
     target_include_directories(test_remote_session_controller
-        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt"
+            "${PROJECT_SOURCE_DIR}/src/remote"
+            "${PROJECT_BINARY_DIR}/src/remote/generated")
     target_link_libraries(test_remote_session_controller
         PRIVATE amrexplorer::remote amrexplorer::warnings
-            Qt6::Widgets Qt6::Concurrent)
+            ${AMREXPLORER_FLATBUFFERS_LIBRARY_TARGET}
+            Qt6::Widgets Qt6::Concurrent Threads::Threads)
     add_test(NAME remote_session_controller
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
             "$<TARGET_FILE:test_remote_session_controller>"
@@ -1195,6 +1281,200 @@ if(TARGET amrexplorer_qt)
     )
     set_tests_properties(qt_remote_cell_aspect_smoke PROPERTIES TIMEOUT 30)
 
+    # View > Aspect Ratio on the same 64:1 cells: Physical Size stretches the
+    # view by the cell aspect and leaves the raster at the cell aspect; the
+    # scale bar follows the on-screen isotropy; a fixed scale is stated along
+    # the less stretched axis.
+    add_test(
+        NAME qt_physical_aspect_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_tall"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_physical_aspect"
+            -DMODE=physical-aspect
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_physical_aspect_smoke PROPERTIES TIMEOUT 30)
+
+    # In Physical Size a fixed scale is the same pixels per length on every
+    # 3-D panel: x is as wide on the XY panel as on the XZ panel beside it.
+    add_test(
+        NAME qt_physical_fixed_scale_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_lower"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_physical_fixed_scale"
+            -DMODE=physical-fixed-scale
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_physical_fixed_scale_smoke PROPERTIES TIMEOUT 30)
+
+    # View > Mapped Grid on a plotfile carrying Nu_nd node positions: off by
+    # default; on, the warp is drawn for the window on screen at the panel's
+    # pixels (Physical Size pinned, probe following the warp) and drawn again
+    # after a wheel zoom, a rubber band (synced panels too) and a scroll that
+    # leaves the view where it is; contours keep the probe; off returns the
+    # logical grid.
+    add_test(
+        NAME qt_mapped_grid_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_mapped_grid_smoke"
+            -DMODE=mapped-grid
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_mapped_grid_smoke PROPERTIES TIMEOUT 90)
+    # A mapped-grid sequence: the view's ask for its window once a frame lands
+    # must not restart that frame, so each frame is displayed once.
+    add_test(
+        NAME qt_mapped_grid_sequence_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_mapped_grid_sequence"
+            -DMODE=mapped-grid-sequence
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_mapped_grid_sequence_smoke PROPERTIES TIMEOUT 90)
+    # A mapped plane wider than the output cap: zoomed in, the view re-slices
+    # the cells on show; a scroll within that plane only re-draws, and one far
+    # past it re-slices where the view went.
+    add_test(
+        NAME qt_mapped_grid_cap_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped_wide"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_mapped_grid_cap"
+            -DMODE=mapped-grid-cap
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_mapped_grid_cap_smoke PROPERTIES TIMEOUT 90)
+
+    # A remote Fit raster sized for the viewport must be re-fetched at native
+    # width when a stretch puts its few columns across the whole viewport.
+    add_test(
+        NAME qt_remote_physical_aspect_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_tall"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_physical_aspect"
+            -DMODE=remote-physical-aspect
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_remote_physical_aspect_smoke PROPERTIES TIMEOUT 30)
+
+    # Two plotfiles in one window: an atmosphere over an ocean touching at
+    # z = 0 (tests/data/plotfile_3d_pair_*). Tiles stack at their physical
+    # positions, the XY panel follows the slice position across the
+    # interface, each layer keeps its own field, and closing restores one.
+    add_test(
+        NAME qt_companion_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_upper"
+            "-DSOURCE2=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_lower"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_companion"
+            -DMODE=companion
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_companion_smoke PROPERTIES TIMEOUT 30)
+
+    # Mapped grids over a pair: both plotfiles on their node positions, and a
+    # mapped primary over a flat companion.
+    add_test(
+        NAME qt_mapped_companion_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped_pair_upper"
+            "-DSOURCE2=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped_pair_lower"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_mapped_companion"
+            -DMODE=mapped-companion
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_mapped_companion_smoke PROPERTIES TIMEOUT 90)
+    add_test(
+        NAME qt_mixed_mapped_companion_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped_pair_upper"
+            "-DSOURCE2=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_lower"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_mixed_mapped_companion"
+            -DMODE=mixed-mapped-companion
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_mixed_mapped_companion_smoke PROPERTIES TIMEOUT 90)
+
+    # The same pair over the in-process loopback server: a remote primary
+    # takes a companion from its own server, a local path is refused.
+    add_test(
+        NAME qt_remote_companion_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_upper"
+            "-DSOURCE2=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_lower"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_companion"
+            -DMODE=remote-companion
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_remote_companion_smoke PROPERTIES TIMEOUT 60)
+
+    # Derived fields over a pair: the list reaches the companion, each layer
+    # greys what it cannot resolve, Apply reloads both, the companion keeps
+    # its field by name, and an unchanged list reloads nothing.
+    add_test(
+        NAME qt_companion_derived_field_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_upper"
+            "-DSOURCE2=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_lower"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_companion_derived"
+            -DMODE=companion-derived
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_companion_derived_field_smoke PROPERTIES TIMEOUT 60)
+
+    # Real zoom over a pair: a selection straddling the interface re-slices
+    # each layer within its own domain, the panel frames it, Reset restores.
+    add_test(
+        NAME qt_companion_zoom_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_upper"
+            "-DSOURCE2=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_lower"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_companion_zoom"
+            -DMODE=companion-zoom
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_companion_zoom_smoke PROPERTIES TIMEOUT 60)
+
+    # The mixed pairs over the loopback server: a remote companion beside a
+    # local primary, then a local companion beside a remote primary.
+    add_test(
+        NAME qt_mixed_companion_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_upper"
+            "-DSOURCE2=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_lower"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_mixed_companion"
+            -DMODE=mixed-companion
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_mixed_companion_smoke PROPERTIES TIMEOUT 60)
+
     add_test(
         NAME qt_remote_rubber_aspect_smoke
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
@@ -1241,6 +1521,29 @@ if(TARGET amrexplorer_qt)
         FIXTURES_REQUIRED remote_server_spherical_materialized
         TIMEOUT 30)
 
+    # Protocol 1.7: View > Mapped Grid over the loopback server, and over a
+    # server whose frame cannot hold the whole plane's nodes at native
+    # resolution.
+    add_test(
+        NAME qt_remote_mapped_grid_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>"
+            --remote-mapped-grid-smoke-test
+            "${remote_server_fixture_mapped_dir}"
+    )
+    set_tests_properties(qt_remote_mapped_grid_smoke PROPERTIES
+        FIXTURES_REQUIRED remote_server_mapped_materialized
+        TIMEOUT 90)
+    add_test(
+        NAME qt_remote_mapped_grid_cap_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>"
+            --remote-mapped-grid-cap-smoke-test
+            "${remote_server_fixture_mapped_wide_dir}"
+    )
+    set_tests_properties(qt_remote_mapped_grid_cap_smoke PROPERTIES
+        FIXTURES_REQUIRED remote_server_mapped_wide_materialized
+        TIMEOUT 90)
     add_test(
         NAME qt_remote_grid_boxes_smoke
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
@@ -1285,9 +1588,37 @@ if(TARGET amrexplorer_qt)
         PRIVATE "${PROJECT_SOURCE_DIR}/src/qt"
     )
     target_link_libraries(test_plane_mapping
-        PRIVATE amrexplorer::core amrexplorer::warnings Qt6::Core
+        PRIVATE amrexplorer::core amrexplorer::render2d amrexplorer::warnings
+            Qt6::Core
     )
     add_test(NAME plane_mapping COMMAND test_plane_mapping)
+
+    add_executable(test_aspect_mode unit/test_aspect_mode.cpp)
+    target_include_directories(test_aspect_mode
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt"
+    )
+    target_link_libraries(test_aspect_mode
+        PRIVATE amrexplorer::core amrexplorer::warnings
+    )
+    add_test(NAME aspect_mode COMMAND test_aspect_mode)
+
+    add_executable(test_pair_geometry unit/test_pair_geometry.cpp)
+    target_include_directories(test_pair_geometry
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt"
+    )
+    target_link_libraries(test_pair_geometry
+        PRIVATE amrexplorer::core amrexplorer::warnings
+    )
+    add_test(NAME pair_geometry COMMAND test_pair_geometry)
+
+    add_executable(test_mapped_layout unit/test_mapped_layout.cpp)
+    target_include_directories(test_mapped_layout
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt"
+    )
+    target_link_libraries(test_mapped_layout
+        PRIVATE amrexplorer::core amrexplorer::warnings
+    )
+    add_test(NAME mapped_layout COMMAND test_mapped_layout)
 
     add_executable(test_scientific_double_spin_box
         unit/test_scientific_double_spin_box.cpp
@@ -1411,20 +1742,21 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_raster_zoom_smoke_2d PROPERTIES TIMEOUT 30)
-    # Regression test for the 2-D spherical supersample control: zooming a
-    # spherical view then changing the warp factor must resize the warped raster
-    # while preserving the zoomed framing (not refit to the whole sector).
+    # The 2-D spherical R-Z view drawn the mapped-grid way: the warp of the
+    # sector at the screen's pixels at Fit, drawn again after a wheel zoom, a
+    # rubber band and a scroll that leaves the view where it is, kept through
+    # contours; r-theta is the flat raster again, and R-Z lands on the canvas.
     add_test(
-        NAME qt_spherical_supersample_smoke_2d
+        NAME qt_spherical_rz_smoke_2d
         COMMAND "${CMAKE_COMMAND}"
             "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
             "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
             "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_spherical"
-            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_spherical_supersample_2d"
-            -DMODE=spherical-supersample
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_spherical_rz_2d"
+            -DMODE=spherical-rz
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
-    set_tests_properties(qt_spherical_supersample_smoke_2d PROPERTIES TIMEOUT 30)
+    set_tests_properties(qt_spherical_rz_smoke_2d PROPERTIES TIMEOUT 90)
     # Regression test for sequence-frame-range-cache-goes-stale: across sequence
     # frames the full-domain range cache must invalidate (its key includes the
     # dataset), so a zoomed Visible color bar tracks the current frame instead
@@ -1454,6 +1786,8 @@ if(TARGET amrexplorer_qt)
     # The Volume Rendering window over the 3-D fixture, locally: opened as the
     # View menu action opens it, its first frame must have lit pixels (the
     # ray caster ran end to end through the session, pipeline and window).
+    # Then again with an isosurface alone and the volume hidden, set through
+    # the window's own controls, so the lit pixels are the surface's.
     add_test(
         NAME qt_volume_smoke_3d
         COMMAND "${CMAKE_COMMAND}"
@@ -1952,7 +2286,7 @@ if(TARGET amrexplorer_qt)
             -DMODE=spherical-scale-report
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
-    set_tests_properties(qt_spherical_scale_report_smoke PROPERTIES TIMEOUT 30)
+    set_tests_properties(qt_spherical_scale_report_smoke PROPERTIES TIMEOUT 90)
     # Check sibling mnemonics at every menu depth and window-wide shortcuts,
     # before opening data and after the dynamic menus have been populated.
     add_test(
@@ -1980,6 +2314,19 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_idle_ui_state_smoke PROPERTIES TIMEOUT 30)
+    # View > Slice Planes (I) shows and hides the lines a 3-D panel draws for
+    # the other two planes, on by default.
+    add_test(
+        NAME qt_slice_planes_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_slice_planes"
+            -DMODE=slice-planes
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_slice_planes_smoke PROPERTIES TIMEOUT 30)
     # Hiding the Animation panel while it holds the 3-D sweep controls must not
     # keep it hidden when a sequence arrives and it holds the transport.
     add_test(

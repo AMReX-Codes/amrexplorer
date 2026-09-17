@@ -115,7 +115,7 @@ Files: `include/amrexplorer/render2d/Palette.hpp`, `src/render2d/Palette.cpp`,
 ### PR2 — Core types, validator, shared ortho camera; IsoWidget uses it (S/M)
 New `include/amrexplorer/core/Volume.hpp` (+ `src/core/Volume.cpp`):
 ```cpp
-struct OrthoCamera { double azimuth = 0.0, elevation = 0.0, zoom = 1.0; };   // radians
+struct OrthoCamera { double azimuth = 0.0, elevation = 0.0, zoom = 1.0; };   // radians; a unit quaternion since protocol 1.8
 struct VolumeTransferFunction { std::vector<std::uint32_t> colors; std::vector<float> opacities; };
 struct VolumeRange { double minimum = 0.0, maximum = 1.0; bool logarithmic = false; };
 struct VolumeRenderRequest {
@@ -250,7 +250,8 @@ registered like `bench_slice_query` (functional guard, generous timeout).
 
 ### PR6 — Remote protocol 1.2 (L)
 `schemas/amrexplorer_wire.fbs`: `RenderedFrameRequest` (dataset_id, field,
-component, maximum_level, composition, region, azimuth, elevation, zoom, width,
+component, maximum_level, composition, region, azimuth, elevation, zoom (the
+orientation as a quaternion beside them from 1.8), width,
 height, has_range, minimum, maximum, logarithmic, transfer_colors:[uint],
 transfer_opacities:[float], samples_per_voxel, maximum_voxels) and
 `RenderedFrameResponse` (width, height, pixels:[uint], used_minimum/maximum/
@@ -376,9 +377,19 @@ row, threading note; `docs/building.md` unchanged.
   over the palette (Amrvis's palette window), replacing the two-threshold
   window + maximum as the way to shape the transfer function; the request
   already carries an explicit lookup, so this is UI only.
-- **Isosurfaces** — extracted and shaded iso-value surfaces alongside the
-  translucent volume; needs a marching-cubes pass over the sampled grid and
-  a depth-composited draw.
+- ~~**Isosurfaces**~~ — done (protocol 1.6), and not by marching cubes: the
+  surface is ray-marched inside the existing caster. Each ray samples a second
+  grid trilinearly, detects where it crosses the iso-value between consecutive
+  samples, bisects the bracket twice, shades the hit from a central-difference
+  normal under a fixed headlight, and composites it in depth order with the
+  volume samples -- so a translucent surface inside a translucent volume is
+  right for free, with no mesh, no z-buffer and nothing new on the server.
+  The second grid shares the volume grid's geometry (the sampler's dims do not
+  depend on the field) and its cache. One run of
+  `bench_volume_render 256 900 2 3 0 1 <iso>`, 900^2 over 256^3 on 24
+  threads: 84 ms volume alone, 87 ms with an isosurface over it, 94 ms the
+  isosurface alone -- the second grid's cell cache absorbs most of the
+  fetches, so the cost is far below the doubling the extra read suggests.
 - ~~**Trilinear sampling**~~ — done: a request/wire field (protocol 1.3) and a
   **Smooth sampling** box, on by default rather than tied to the High preset,
   since terracing shows most while rotating and that is when Draft is in use.

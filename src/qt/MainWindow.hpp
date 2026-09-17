@@ -1,5 +1,8 @@
 #pragma once
 
+#include "AspectMode.hpp"
+#include "MappedGeometry.hpp"
+#include "PairGeometry.hpp"
 #include "DatasetWindow.hpp"
 #include "ExportFrame.hpp"
 #include "ImageView.hpp"
@@ -44,7 +47,9 @@ class QActionGroup;
 class QCloseEvent;
 class QComboBox;
 class QDockWidget;
+class QCheckBox;
 class QLabel;
+class QToolBar;
 class QSpinBox;
 class QLineF;
 class QMenu;
@@ -53,6 +58,7 @@ class QPushButton;
 class QStackedWidget;
 class QTimer;
 class QTreeWidget;
+class QTreeWidgetItem;
 class QRectF;
 class QWidget;
 
@@ -73,6 +79,7 @@ class AnimationPanel;
 class ColorBarWidget;
 class DatasetWindow;
 class FabSelectorDock;
+class VolumeWindow;
 class ImageView;
 class IsoWidget;
 class LinePlotWindow;
@@ -112,8 +119,12 @@ public:
     // RemoteSessionController::install and ::start.
     void useRemoteConnection(
         std::shared_ptr<remote::Connection> connection, QString label);
+    // `companion` names a plotfile on the same server to show beside the
+    // one path once its slices are up (the --ssh ... --companion form);
+    // tied to that load, so a startup that fails leaves nothing waiting.
     void startSshRemoteSession(std::string destination,
-        std::string serverExecutable, std::vector<std::string> remotePaths);
+        std::string serverExecutable, std::vector<std::string> remotePaths,
+        std::string companion = {});
     // Open a server-visible path, or a sequence of them, over the installed
     // remote connection.
     void openRemoteDataset(std::string remotePath);
@@ -122,6 +133,18 @@ public:
     // the plotfile directories, sorted by name; requires at least two valid
     // plotfiles. Opening a single dataset closes the sequence again.
     void openSequence(const std::vector<std::filesystem::path>& frames);
+    // Show a second 3-D plotfile beside the open one: the two must share a
+    // plane (see PairGeometry). The companion is a secondary load onto the
+    // installed dataset; it is closed again by closeCompanion, by any other
+    // open, and when its geometry cannot pair. Emits companionOpenFinished
+    // either way. A local plotfile pairs with either kind of primary; a
+    // remote one (openRemoteCompanion) comes over the primary's own
+    // connection when the primary is remote, else over the window's remote
+    // session. Plotfiles on two servers cannot pair.
+    void openCompanion(const std::filesystem::path& path);
+    void openRemoteCompanion(std::string remotePath);
+    void closeCompanion();
+    [[nodiscard]] bool companionOpen() const noexcept { return m_layers[1].active; }
     // Steps the open sequence by direction frames, wrapping at the ends; the
     // same slot the sequence step buttons and the smoke test hook use.
     void stepSequence(int direction);
@@ -202,6 +225,9 @@ public:
     // when that batch finishes.
     void configureContourSyncForTest(
         int count, bool logarithmic, std::array<double, 3> slicePositions);
+    // Test-only: change the display mode and contour count alone (range and
+    // positions untouched) and re-render every view through the cache path.
+    void setDisplayModeForTest(DisplayMode mode, int contourCount);
 
     // Test-only: drive the visible-range sync staleness guard deterministically.
     // Gate a sync mid-flight, re-render every panel through the cache path
@@ -223,6 +249,10 @@ public:
     // completion's failure path can be driven: a current failure is reported,
     // a superseded one counted stale.
     void failNextVisibleSyncForTest();
+    // Test-only: hold every cache-path slice worker at a gate until released,
+    // so a refresh can be made to overtake a redraw still on its way.
+    void armSliceGateForTest();
+    void releaseSliceGateForTest();
     void adjustActiveRequestsForTest(int delta);
     [[nodiscard]] std::uint64_t activeViewRenderGenerationForTest() const;
     [[nodiscard]] bool visibleSyncWorkerWaitingForTest() const;
@@ -281,13 +311,17 @@ public:
     // Test-only: send a real Shift+left drag through the active view's
     // viewport, exercising the same event path as interactive panning.
     void shiftDragActiveViewForTest(int dx, int dy);
+    // Test-only: a plain right click at a viewport position of the active
+    // view, as the mouse would deliver it.
+    void rightClickActiveViewForTest(const QPoint& viewportPosition);
     [[nodiscard]] bool activeViewScrollBarsVisibleForTest() const;
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;
     // Test-only: the active view's raster has the aspect of the region it
-    // covers measured in finest cells -- the display's unit, one square pixel
-    // per cell -- rather than in physical units. The two differ only when
-    // the cells are not square (see remote-fit-anisotropic-cells).
+    // covers measured in finest cells -- the raster's unit, one sample per
+    // cell -- rather than in physical units. The two differ only when the
+    // cells are not square (see remote-fit-anisotropic-cells); a physical
+    // proportion is a view-side stretch and leaves the raster alone.
     [[nodiscard]] bool activeViewRasterHasCellAspectForTest() const;
     // Test-only: a second independent top-level window, made exactly as the
     // "Open New Window" menu action makes it, for the close-window test to
@@ -299,6 +333,9 @@ public:
     void showVolumeWindowForTest();
     [[nodiscard]] bool volumeWindowOpenForTest() const;
     [[nodiscard]] double volumeFrameAlphaCoverageForTest() const;
+    // Test-only: the open Volume Rendering window, or null, so a harness can
+    // drive its controls the way a user would.
+    [[nodiscard]] VolumeWindow* volumeWindowForTest() const;
     [[nodiscard]] bool fabStateClearedForTest() const;
     // Test-only: how many failures have been reported non-modally. The FAB
     // rollback smoke tests assert on this so a passing run proves the failure
@@ -313,6 +350,11 @@ public:
     void openStandaloneFabForTest(const std::filesystem::path& path);
     void setGridBoxesVisibleForTest(bool visible);
     [[nodiscard]] std::size_t activeViewGridBoxCountForTest() const;
+    // Test-only: View > Slice Planes, and the guide lines the active view
+    // draws for the other two planes.
+    void setSlicePlanesVisibleForTest(bool visible);
+    [[nodiscard]] bool slicePlanesVisibleForTest() const;
+    [[nodiscard]] std::size_t activeViewCrosshairCountForTest() const;
 
     // Test-only: rubber-band the central half of the active 3-D panel through
     // the same handler used by ImageView::rubberBandSelected.
@@ -407,6 +449,13 @@ public:
     [[nodiscard]] bool fixedScaleStateMatchesForTest(int factor) const;
     void wheelZoomAndPanActiveViewForTest();
     [[nodiscard]] QRectF activeViewVisibleDataWindowForTest() const;
+    // The part of the active view's pixmap inside the viewport, in pixmap
+    // pixels (the warp's own pixels on a mapped grid).
+    [[nodiscard]] QRectF activeViewVisibleImageRectForTest() const;
+    [[nodiscard]] RealBox volumeRegionOfInterestForTest() const
+    {
+        return volumeRegionOfInterest();
+    }
     void panActiveViewForTest(double sceneDeltaX, double sceneDeltaY);
     [[nodiscard]] qreal activeViewScaleForTest() const;
     // Test-only: compare the current transform with ImageView's own fitted
@@ -426,13 +475,14 @@ public:
     // Test-only: true when the active view holds a zoom (visibleRegion set).
     // See fab-round-trip-loses-visible-region.
     [[nodiscard]] bool activeViewIsZoomedForTest() const;
+    [[nodiscard]] bool activeViewLineToolEnabledForTest() const;
+    // Test-only: whether a layer's view on a 3-D panel has a slice queued or
+    // on a worker.
+    [[nodiscard]] bool layerSliceOnItsWayForTest(int normal, int layer) const;
 
-    // Test-only, for the spherical supersample zoom-preserve regression:
-    // change the warp factor through the same path as the menu, read the active
-    // view's warped-pixmap width (to confirm the raster resized), and read
-    // whether it is at fit-to-window without mutating it (unlike
-    // activeViewIsFitToWindowForTest, which refits as a side effect).
-    void setSphericalSupersampleForTest(int factor);
+    // Test-only: the active view's pixmap width, and whether it is at
+    // fit-to-window without mutating it (unlike activeViewIsFitToWindowForTest,
+    // which refits as a side effect).
     [[nodiscard]] int activeViewImageWidthForTest() const;
     [[nodiscard]] std::array<int, 2> activeViewImageSizeForTest() const;
     [[nodiscard]] std::array<int, 2> activeViewViewportSizeForTest() const;
@@ -441,6 +491,104 @@ public:
     [[nodiscard]] bool scaleBarActionEnabledForTest() const;
     [[nodiscard]] bool activeViewHasScaleBarForTest() const;
     [[nodiscard]] bool activeViewFitsWindowForTest() const;
+    // Test-only: the Aspect Ratio controls, driven as the menu and the Axis
+    // Scaling dialog drive them, and the stretch they leave on the active
+    // view: its vertical screen pixels per scene unit over its horizontal.
+    void setAspectModeForTest(AspectMode mode) { setAspectMode(mode); }
+    void setAxisScaleForTest(const std::array<double, 3>& axisScale)
+    {
+        applyAxisScale(axisScale);
+    }
+    [[nodiscard]] bool aspectMenuEnabledForTest() const;
+    [[nodiscard]] double activeViewStretchRatioForTest() const;
+    // The isometric view's outlined domain in its display coordinates.
+    [[nodiscard]] RealBox isoDomainDisplayBoxForTest() const;
+    // Test-only: the Aspect Ratio radio shown checked (the mode in effect,
+    // which a mapped grid pins to Physical Size without touching the
+    // preference) and whether both radios are offered.
+    [[nodiscard]] AspectMode aspectMenuCheckedModeForTest() const;
+    [[nodiscard]] bool aspectRadiosEnabledForTest() const;
+    [[nodiscard]] AspectMode aspectModePreferenceForTest() const noexcept
+    {
+        return m_aspectMode;
+    }
+    // Test-only: View > Mapped Grid, driven as the menu drives it, and what
+    // the active view shows: mapped (the physical warp) or the logical grid.
+    void setMappedGridForTest(bool enabled);
+    [[nodiscard]] bool mappedGridMenuEnabledForTest() const;
+    [[nodiscard]] bool displayIsMappedForTest() const;
+    [[nodiscard]] bool activeViewIsMappedForTest() const;
+    // The physical window the active view's mapped warp was last requested
+    // for, on the panel's two axes (x = first in-plane axis); empty until
+    // the demand loop has asked for one.
+    [[nodiscard]] QRectF activeViewMappedWindowForTest() const;
+    // Test-only: a 3-D panel's mapped warp, read without making the panel
+    // active (its border would resize the view): mapped, Fit, re-sliced; the
+    // window drawn (as above); the image; the tile on screen in device
+    // pixels; the tile, canvas and visible rect in scene units; the scale.
+    struct MappedPanelForTest {
+        bool warped = false;
+        bool fit = false;
+        bool resliced = false;
+        QRectF window;
+        QRectF drawn;  // the window the pixmap on screen was drawn for
+        QSize image;
+        QRectF tileDevice;
+        QRectF tile;
+        QRectF canvas;
+        QRectF visible;
+        double scale = 0.0;
+    };
+    [[nodiscard]] MappedPanelForTest mappedPanelForTest(int normal, int layer = 0) const;
+    // Test-only: the probe readout for a pixmap pixel of one layer's tile on
+    // a 3-D panel.
+    [[nodiscard]] QString probeReadoutPanelForTest(int normal, int layer, int x, int y) const;
+    // Test-only: the active view's transform scale and scroll position
+    // {m11, m22, h, v}; a scroll by viewport pixels, as a drag or the scroll
+    // bars would; and the physical region of the plane it holds (x = first
+    // in-plane axis).
+    [[nodiscard]] std::array<double, 4> activeViewTransformAndScrollForTest() const;
+    void scrollActiveViewForTest(int dx, int dy);
+    [[nodiscard]] QRectF activeViewPlaneRegionForTest() const;
+    // Test-only: make the 3-D panel with this normal the active view.
+    void setActiveViewForTest(int normal);
+    // Test-only: the probe readout for a pixmap pixel of the active view
+    // (x from the left, y from the top), as the status bar would show it.
+    [[nodiscard]] QString probeReadoutActiveViewForTest(int x, int y) const;
+    // Test-only: the companion (paired) display. Tiles are indexed by layer;
+    // rects are in the panel's scene units.
+    [[nodiscard]] int panelTileCountForTest(int normal) const;
+    [[nodiscard]] QRectF panelTileRectForTest(int normal, int tile) const;
+    [[nodiscard]] bool panelTileVisibleForTest(int normal, int tile) const;
+    [[nodiscard]] QString layerFieldNameForTest(int layer, int normal) const;
+    // The Log setting a layer's next slice request will carry.
+    [[nodiscard]] bool layerLogarithmicSelectedForTest(int layer) const;
+    [[nodiscard]] std::pair<double, double> layerDisplayRangeForTest(
+        int layer, int normal) const;
+    [[nodiscard]] bool companionColorBarVisibleForTest() const;
+    [[nodiscard]] bool layerSessionIsRemoteForTest(int layer) const;
+    void selectLayerFieldItemForTest(int layer, int index);
+    [[nodiscard]] QString layerSelectedFieldForTest(int layer) const;
+    // Paired zoom: a scene-rect selection on a panel, that panel's tile
+    // raster sizes, and its scene rect (the pair canvas as framed).
+    void rubberBandZoomPanelSceneForTest(int normal, const QRectF& sceneRect);
+    [[nodiscard]] QSize panelTileImageSizeForTest(int normal, int tile) const;
+    [[nodiscard]] QRectF panelCanvasRectForTest(int normal) const;
+    [[nodiscard]] QSize panelExportSizeForTest(int normal) const;
+    void panStepActiveViewForTest(const QPointF& direction);
+    // A panel's view transform scale (m11, m22) and whether it sits on a
+    // virtual canvas, for panels other than the active one.
+    [[nodiscard]] std::pair<qreal, qreal> panelTransformScaleForTest(int normal) const;
+    [[nodiscard]] bool panelVirtualCanvasActiveForTest(int normal) const;
+    void setSlicePositionForTest(int axis, double value)
+    {
+        setSlicePosition(axis, value);
+    }
+    void setCompanionPerpendicularScaleForTest(double factor);
+    [[nodiscard]] double slicePositionForTest(int axis) const
+    {
+        return m_slicePosition3d[static_cast<std::size_t>(std::clamp(axis, 0, 2))];
+    }
 
     // Test-only: shrink the open dataset's cache budget to force cache-pressure
     // fallback on the next non-cache slice, and read the current resident bytes
@@ -478,6 +626,9 @@ public:
 signals:
     void datasetOpenFinished(bool success);
     void initialSliceFinished(bool success);
+    // Emitted once a companion's slices are on screen, or when its load or
+    // pairing failed (the primary stays as it was).
+    void companionOpenFinished(bool success);
     // Emitted when an interactive re-slice batch (a mode/range/log/field
     // change, pan, or zoom) finishes with no slice work left in flight. The
     // contour-sync smoke test waits on it. Not emitted for the initial load.
@@ -507,6 +658,10 @@ private:
         ImageView* view = nullptr;
         int normal = 1;
         QString label;      // "2-D" / "YZ" / "XZ" / "XY"
+        // The dataset layer this state slices for, and the tile of `view` it
+        // draws into: 0 for the primary dataset, 1 for a companion.
+        std::size_t layer = 0;
+        std::size_t tile = 0;
         // The displayed plane and its contour-mode companions are immutable
         // shared snapshots, never null (empty planes when nothing is shown),
         // never mutated in place. An executeSlice arrival installs a *fresh*
@@ -540,6 +695,31 @@ private:
         int coordinateSystem = 0;
         SphericalDisplay sphericalDisplay = SphericalDisplay::RZ;
         RealBox displayRegion;
+        // The display region the pixmap on screen was drawn for: displayRegion
+        // follows every arrival, this one only those that brought a raster.
+        RealBox pixmapRegion;
+        // The raster on screen was drawn warped (DisplayWarp): the pixmap is
+        // physical and uniform over displayRegion while `plane` stays
+        // logical. displaySourceIndex, parallel to the pixmap with row 0 at
+        // the bottom, says which plane pixel each pixmap pixel came from;
+        // gridNodes (a mapped grid only) places plane pixels (bilinear). Both
+        // shared with the arrival that produced them, never copied.
+        DisplayWarp warp = DisplayWarp::None;
+        std::shared_ptr<const MappedGridPlane> gridNodes;
+        std::shared_ptr<const std::vector<std::int32_t>> displaySourceIndex;
+        // The canvas a mapped view is laid out on: the node bounding box of
+        // the whole domain on this panel's axes, grown by every arrival's
+        // bounds and never shrunk, so the anchor of the scene (MappedLayout)
+        // holds still while the slice, the region and the window change.
+        std::optional<RealBox> mappedCanvasBounds;
+        // The physical window and device-pixel size the demand loop last
+        // asked the warp for (SliceRequest::displayWindow / displayPixels);
+        // the window is empty until it has asked.
+        RealBox mappedWindow;
+        std::array<int, 2> mappedWindowPixels{0, 0};
+        // The node bounding box of the plane on hand
+        // (SliceDisplayResult::mappedBounds): how far it can serve a window.
+        RealBox mappedNodeBounds;
         std::optional<DisplayCoordinator::RasterGeometry> rasterGeometry;
         double displayMinimum = 0.0;
         double displayMaximum = 1.0;
@@ -588,7 +768,198 @@ private:
         int pendingRequests = 0;
     };
 
+    // One dataset shown in this window and everything that belongs to it
+    // alone: its session and catalog, its field and level selectors, its
+    // range controls and colour bar, and one PlaneViewState per 3-D panel.
+    // The primary layer is always index 0; a companion dataset occupies
+    // index 1 while one is open. The array is fixed so every PlaneViewState
+    // keeps its address for the lambdas that capture it.
+    struct DatasetLayer {
+        bool active = false;
+        std::shared_ptr<DatasetSession> session;
+        std::shared_ptr<const DatasetMetadata> openMetadata;
+        std::string fileVersion;
+        std::filesystem::path path;
+        QString name;
+        QComboBox* fieldSelector = nullptr;
+        QComboBox* levelSelector = nullptr;
+        // Owns the range mode, User min/max and Log widgets and the per-field
+        // range memory; selection() feeds every slice request and frame spec.
+        RangeController* range = nullptr;
+        ColorBarWidget* colorBar = nullptr;
+        // Which session is installed. Bumped wherever the session is replaced
+        // or cleared, and captured by a slice request at submission: an
+        // arrival whose stamp no longer matches was computed against a
+        // session that is gone, and the catalog, field list and colour bar on
+        // screen are the new one's.
+        //
+        // Note what this cannot do on its own. In the common ordering an
+        // interactive slice finishes *before* the reload installs, so its
+        // stamp still matches and it is rightly accepted -- it only goes stale
+        // a moment later. Acceptance is therefore only half the invariant; the
+        // other half is that a view whose display the reload skipped is
+        // re-sliced, so no view keeps a raster from a session that is no
+        // longer installed.
+        std::uint64_t sessionEpoch = 0;
+        // A companion's display stretch along the axis perpendicular to the
+        // plane it shares with the primary (see PairGeometry). The primary's
+        // own factor is m_axisScale on that axis, as with one dataset.
+        double perpendicularScale = 1.0;
+        std::array<PlaneViewState, 3> planeViews;
+        // The 3-D visible-range sync's single-flight state (see
+        // syncVisibleRanges) and the full-domain range store it defers.
+        bool visibleSyncInFlight = false;
+        bool visibleSyncRerun = false;
+        std::optional<amrvis::DisplayCoordinator::RangeKey> pendingRangeStore;
+    };
+
+    [[nodiscard]] DatasetLayer& primary() noexcept { return m_layers[0]; }
+    [[nodiscard]] const DatasetLayer& primary() const noexcept
+    {
+        return m_layers[0];
+    }
+    [[nodiscard]] DatasetLayer& layerFor(const PlaneViewState& state) noexcept
+    {
+        return m_layers[state.layer];
+    }
+    [[nodiscard]] const DatasetLayer& layerFor(
+        const PlaneViewState& state) const noexcept
+    {
+        return m_layers[state.layer];
+    }
+    // Whether a state's layer shows a remote dataset. Asked per layer, since
+    // a companion has a session of its own.
+    [[nodiscard]] bool layerIsRemote(const PlaneViewState& state) const;
+
     void chooseDataset();
+    // The local directory dialog, and the remote one (RemoteSessionController).
+    void chooseCompanion();
+    void chooseRemoteCompanion();
+    // What a companion load hands back: the catalog it read, how it pairs
+    // with the primary, and the rendered first slices.
+    struct CompanionLoad {
+        PlotfileMetadataResult metadata;
+        PairGeometry geometry;
+        InitialSliceResult result;
+    };
+    // What a companion reload puts back once the new session is in: its
+    // selections, the field by name since a reinstalled list can move ids.
+    struct CompanionRestore {
+        QString fieldName;
+        int levelData = -1;
+        RangeMode rangeMode = RangeMode::File;
+        std::optional<std::pair<double, double>> userRange;
+        // The shared position and the companion's zoomed regions, per
+        // panel, so a reload renders what was on show and a change made
+        // while it loaded is told from what it rendered.
+        std::array<double, 3> slicePositions{0.0, 0.0, 0.0};
+        std::array<std::optional<RealBox>, 3> regions;
+    };
+    // The companion's selections as they stand now, in the same shape.
+    [[nodiscard]] CompanionRestore currentCompanionSelections() const;
+    // Whether a reload's selections still stand: the same field, level,
+    // range, shared position and zoom as when its load was sent.
+    [[nodiscard]] static bool sameCompanionSelections(
+        const CompanionRestore& a, const CompanionRestore& b);
+    void installCompanion(const std::filesystem::path& path, CompanionLoad load,
+        const std::optional<CompanionRestore>& restore = std::nullopt);
+    // closeCompanion's body; a replacement keeps follow mode and the shared
+    // slice position for the companion about to take the slot.
+    void tearDownCompanion(bool replacing);
+    // Fills the companion's controls for its session; `loadedField` is the
+    // field the load rendered, which the selector shows unless `selections`
+    // (a reload's, as they stand at install) name a field this list has.
+    void configureCompanionControls(std::optional<std::uint32_t> loadedField,
+        const std::optional<CompanionRestore>& selections);
+    // Which views a companion's controls and states reach.
+    void scheduleLayerSliceRequests(DatasetLayer& layer);
+    // The per-panel layouts follow the pair geometry, the aspect settings and
+    // the layers' display bounds; true when a tile rect changed. Applying
+    // them re-places every tile without re-rendering.
+    bool updatePairLayouts();
+    void applyPairLayouts();
+    // What a layer's tiles cover: its logical bounds, widened on each panel's
+    // axes by the node box its warped views have brought (mappedCanvasBounds).
+    [[nodiscard]] RealBox pairDisplayBounds(std::size_t layer) const;
+    // The scene rect a panel frames: what arrivals assert as the scene rect
+    // and Fit frames. The layout's whole canvas until a layer on the panel is
+    // zoomed; then the panel's framed window (m_pairWindows), so a confined
+    // zoom is not re-grown by the next arrival.
+    [[nodiscard]] SceneRect pairCanvasRect(int normal) const;
+    // Rubber-band zoom over two datasets: a scene window on a panel becomes
+    // each layer's region (the part of its domain under the window, grown
+    // out to a local layer's cell edges; a remote layer keeps the exact
+    // window), the layers re-slice for them, and the view frames the window.
+    [[nodiscard]] RealBox snappedPairRegion(
+        std::size_t layer, int normal, const RealBox& region) const;
+    // A layer whose tile is a warp gets no region: its warp follows the
+    // view (updateMappedDemand), and its part of the framed window is the
+    // window cut to its tile (pairFramedWindow). The tile on screen decides,
+    // not the request: a layer whose plane fell back, or whose first warp
+    // has not landed, zooms as a flat one.
+    [[nodiscard]] std::array<std::optional<RealBox>, 2> pairRegionsForSceneWindow(
+        int normal, const QRectF& window) const;
+    [[nodiscard]] std::optional<QRectF> pairFramedWindow(int normal,
+        const QRectF& window,
+        const std::array<std::optional<RealBox>, 2>& regions) const;
+    // The rect a panel's regions occupy, if any layer on it has one; a
+    // warped layer's is the window its warp is drawn for.
+    [[nodiscard]] std::optional<QRectF> pairRegionsRect(int normal) const;
+    // Sets the panel's flat layers to these regions (none: back to the whole
+    // domain), records the framed window (the selection's parts over the
+    // layers, or the pan's `window` itself) and re-slices. `refit` frames the
+    // window (a selection); a pan keeps the view's scale and only moves it
+    // onto the window. False when the window covers no layer; nothing
+    // changes then.
+    bool applyPairRegions(int normal,
+        const std::array<std::optional<RealBox>, 2>& regions,
+        const QRectF& window, bool refit);
+    bool applyPairZoomWindow(int normal, const QRectF& window, bool refit = true);
+    void pairRubberBandZoom(int normal, const QRectF& sceneRect);
+    // A pan over a pair: the framed window moved against the drag, stopped
+    // at the edge of the domains it covers with its size kept.
+    [[nodiscard]] QRectF shiftedPairWindow(
+        int normal, const QRectF& window, const QPointF& sceneDelta) const;
+    // Both layers on the panel back to their whole domains, fitted.
+    void resetPairPanelZoom(int normal);
+    [[nodiscard]] const PairLayout& pairLayout(int normal) const noexcept
+    {
+        return m_pairLayouts[static_cast<std::size_t>(std::clamp(normal, 0, 2))];
+    }
+    // The panel normal to the perpendicular axis shows one layer at a time:
+    // the one whose domain holds the slice position along that axis.
+    [[nodiscard]] bool stateShown(const PlaneViewState& state) const noexcept;
+    // A slice for the view's current position queued or on a worker: the
+    // tile it holds is a stale one.
+    [[nodiscard]] bool sliceOnItsWay(const PlaneViewState& state) const;
+    // Tile visibility over a pair after this state's tile was installed: the
+    // layer on show is seen and the other hidden, except that an outgoing
+    // tile keeps showing while the incoming layer still waits for its slice,
+    // so the switch shows no stale slice in between (see updateShownLayers).
+    void applyPairTileVisibility(PlaneViewState& state);
+    // Which tiles the position puts on show. Driven by a position change it
+    // also slices a layer newly on show for the panel's framed window; the
+    // recovery call after a slice completes applies visibility only, so a
+    // failed slice is not asked for again.
+    void updateShownLayers(bool sliceNewlyShown = true);
+    // Actions that have no meaning with two datasets open are disabled while
+    // a companion is, and restored when it closes.
+    void updatePairedModeControls();
+    // Whether the open dataset can take a companion: a 3-D plotfile with
+    // physical geometry, local or remote, outside a sequence.
+    [[nodiscard]] bool canOpenCompanion() const;
+    // Push the primary's geometry to the isometric view, stretched by the
+    // Axis Scaling factors as the slice panels are; physical proportions
+    // otherwise, in either aspect mode.
+    void updateIsoGeometry();
+    // Push the pair geometry, in the panels' display proportions, to the
+    // isometric view.
+    void updatePairedIsoGeometry();
+    void setCompanionFollowsPrimary(bool follows);
+    // Re-slice a following companion's panel when the primary's displayed
+    // range or mapping there differs from what the companion shows.
+    void refreshFollowingCompanion(std::size_t normal, double minimum,
+        double maximum, bool logarithmic);
     void chooseStandaloneDataset(const QString& caption, bool rawFab);
     struct RemoteOpen {
         std::shared_ptr<remote::Connection> connection;
@@ -599,6 +970,39 @@ private:
         std::filesystem::path dataRoot, bool preserveFabSelector,
         std::optional<FrameSliceSpec> initialSpec,
         std::optional<RemoteOpen> remoteOpen = std::nullopt);
+    // Where a companion comes from: a local plotfile, or one on the server
+    // the primary came from (`path` then carries the remote path, for its
+    // name and the metadata dock).
+    struct CompanionSource {
+        std::filesystem::path path;
+        std::optional<RemoteOpen> remote;
+    };
+    // Why the source cannot pair with the open dataset, if it cannot: a
+    // remote companion needs a live connection, and beside a remote primary
+    // it must be the primary's own.
+    [[nodiscard]] std::optional<QString> companionSourceRefusal(
+        const CompanionSource& source) const;
+    void openCompanionImpl(CompanionSource source,
+        std::optional<CompanionRestore> restore = std::nullopt);
+    // Whether the companion's session was opened with the list the editor now
+    // holds; true with no companion, or one that cannot take definitions.
+    [[nodiscard]] bool companionSessionHasCurrentDefinitions() const;
+    // The companion's reloadIfDefinitionsMoved, asked after the primary's
+    // own reload has landed (which is what bumps m_generation).
+    void reloadCompanionIfDefinitionsMoved();
+    // Reopens the companion with the list as it stands, keeping its
+    // selections. False when there is none to reload.
+    bool reloadCompanion();
+    // The worker halves of a companion open: read, pair, render. The local
+    // one makes the session from the path with the id given; the remote one
+    // opens a session on the primary's connection and takes the server's id.
+    [[nodiscard]] static CompanionLoad loadLocalCompanion(
+        const std::filesystem::path& path, FrameSliceSpec spec,
+        const DatasetMetadata& primaryMetadata, DatasetId id,
+        StopToken cancellation);
+    [[nodiscard]] static CompanionLoad loadRemoteCompanion(
+        const RemoteOpen& remote, FrameSliceSpec spec,
+        const DatasetMetadata& primaryMetadata, StopToken cancellation);
     // A fresh independent top-level window (WA_DeleteOnClose) for the
     // "Open New Window" menu action; it shares no view/cache state with this one.
     MainWindow* createNewWindow();
@@ -662,10 +1066,16 @@ private:
     // `rows` is derivedFieldRows(), which the caller shares with
     // rebuildVariableMenu: the two views are the same list, and building it
     // twice per load means twice the work per sequence frame.
-    void populateFieldSelector(const std::vector<DerivedFieldRow>& rows);
+    void populateFieldSelector(
+        DatasetLayer& layer, const std::vector<DerivedFieldRow>& rows);
+    void populateFieldSelector(const std::vector<DerivedFieldRow>& rows)
+    {
+        populateFieldSelector(primary(), rows);
+    }
     // Selects a field entry: `index` is where to start looking, and the
     // selection comes to rest on the nearest row that is actually a field.
-    void selectFieldItem(int index);
+    void selectFieldItem(DatasetLayer& layer, int index);
+    void selectFieldItem(int index) { selectFieldItem(primary(), index); }
     // The session's definitions as rows to list, in the order they were
     // written. The field selector and the Variable menu are the same list
     // shown twice, and the comment saying so kept them in step by hand.
@@ -674,16 +1084,26 @@ private:
     // independently -- the field selector, the Variable menu, the derived rows,
     // and both editor hooks -- and the clamp is what guards a session whose
     // count outruns the field list it carries.
-    [[nodiscard]] std::size_t storedFieldCount() const;
-    [[nodiscard]] std::vector<DerivedFieldRow> derivedFieldRows() const;
+    // Per layer: a companion has a session and a field list of its own.
+    [[nodiscard]] std::size_t storedFieldCount(const DatasetLayer& layer) const;
+    [[nodiscard]] std::size_t storedFieldCount() const
+    {
+        return storedFieldCount(primary());
+    }
+    [[nodiscard]] std::vector<DerivedFieldRow> derivedFieldRows(
+        const DatasetLayer& layer) const;
+    [[nodiscard]] std::vector<DerivedFieldRow> derivedFieldRows() const
+    {
+        return derivedFieldRows(primary());
+    }
     // Adds a listed-but-unchoosable row to the field selector. False when the
     // combo's model is not one whose item flags can be set, in which case no
     // row is added at all: a row that looks selectable but carries no field id
     // is read as field 0 by everything downstream.
-    [[nodiscard]] bool addUnavailableFieldItem(
-        const QString& name, const QString& tooltip);
+    [[nodiscard]] static bool addUnavailableFieldItem(
+        QComboBox* selector, const QString& name, const QString& tooltip);
     // Whether a load built from the window's state as it stands can install
-    // derived fields. Deliberately not asked of m_dataset: a sequence builds
+    // derived fields. Deliberately not asked of primary().session: a sequence builds
     // its first spec while the *outgoing* dataset is still installed (see
     // prepareSequence), so frame 0 would load without the definitions and
     // frame 1 would make them appear. A prepared session cannot take them
@@ -741,6 +1161,7 @@ private:
     // Which metadata-backed range modes the current field/level offers,
     // handed to the RangeController (which falls back to Visible if needed).
     void updateRangeModeAvailability();
+    void updateRangeModeAvailability(DatasetLayer& layer);
     void showContoursDialog();
     // Draws the ParticleController's samples into a view: the projection and
     // the plane mapping are the host's, the settings and samples are its.
@@ -758,6 +1179,53 @@ private:
     void pushDisplayFormat();
     void showLengthUnitsDialog();
     void applyLengthUnit(const QString& unitId);
+    // View > Aspect Ratio: the per-axis display stretch (see AspectMode.hpp).
+    // The dialog edits m_axisScale; applyAxisScale installs a new set and
+    // resetAxisScale returns to unit factors when a dataset is opened.
+    void showAxisScalingDialog();
+    // The per-axis factors (the primary's along every axis) and, with a
+    // companion, the companion's factor along the perpendicular axis.
+    void applyAxisScale(const std::array<double, 3>& axisScale,
+        std::optional<double> companionPerpendicularScale = std::nullopt);
+    void resetAxisScale();
+    void setAspectMode(AspectMode mode);
+    [[nodiscard]] std::array<double, 3> displayStretchPerAxis() const;
+    // The two factors a panel shows, normalized so the smaller is one.
+    [[nodiscard]] std::array<double, 2> displayStretchFor(
+        const PlaneViewState& state) const;
+    // viewportPixelSize enlarged along the less stretched axis, the bound a
+    // remote raster is sized to (see sliceOutputSize and the sequence spec).
+    [[nodiscard]] std::array<int, 2> stretchedViewportPixelSize(
+        const PlaneViewState& state) const;
+    // Push the current stretch to one view (showSlice, before the raster is
+    // installed) or to every view after an option change, when a remote view
+    // also re-requests a raster sized for the new stretch.
+    void applyDisplayStretch(PlaneViewState& state);
+    void applyDisplayStretches();
+    // The scene layout of a mapped view: its canvas on this panel's axes at
+    // the current axis factors. Nothing until the first mapped arrival has
+    // brought the canvas bounds.
+    [[nodiscard]] std::optional<MappedLayout> mappedLayout(
+        const PlaneViewState& state) const;
+    // Where the view's tile sits: on the pair's canvas as its layer while a
+    // companion is open, on its own mapped canvas when warped, and nowhere
+    // in particular (the classic raster at the origin) otherwise.
+    [[nodiscard]] std::optional<TilePlacement> tilePlacement(
+        const PlaneViewState& state) const;
+    // Ask the warp for what the viewport shows: the visible physical window
+    // at the viewport's own device pixels, re-sliced first when the plane on
+    // hand cannot serve it (capped below native resolution, or not covering
+    // the window). Runs on every view change; a no-op unless the view shows
+    // a mapped raster on a known canvas.
+    void updateMappedDemand(PlaneViewState& state);
+    // Whether the demand loop has asked the view's warp for a window yet.
+    [[nodiscard]] bool hasMappedWindow(const PlaneViewState& state) const;
+    // A frame spec's per-view mapped windows and pixels, from what each view
+    // shows now (FrameSliceSpec::displayWindows).
+    void fillMappedDisplays(FrameSliceSpec& spec,
+        const std::vector<PlaneViewState*>& views) const;
+    // Enable/disable the Aspect Ratio submenu for the current dataset.
+    void updateAspectControls();
     void validateVectorMode();
     void ensureVectorFieldDefaults();
     void showDatasetWindow();
@@ -782,6 +1250,11 @@ private:
     void showKeyboardMouseReference();
     void showAboutDialog();
     void showMetadata(const PlotfileMetadataResult& result, const std::filesystem::path& path);
+    // The rows for one dataset, at the top level (root null) or under a parent
+    // row when two datasets are listed; the session is the dataset's own.
+    void appendMetadataRows(QTreeWidgetItem* root,
+        const PlotfileMetadataResult& result, const std::filesystem::path& path,
+        const std::shared_ptr<DatasetSession>& session);
     // Re-renders the Diagnostics panel; the model owns the counters, this
     // window only supplies the lines it alone knows (see the model's Hooks).
     void updateDiagnostics();
@@ -796,15 +1269,29 @@ private:
     void restoreSettings();
     void saveSettings();
 
-    // Per-view wiring and display updates.
-    void wireView(PlaneViewState& state);
-    // Every view state, whatever the current dimension -- the 2-D view and all
-    // three slice panels. currentViews() answers a narrower question: the views
-    // the *displayed* dataset uses. Teardown and failure states have to reach
-    // all four, since the dimension they were showing is already gone.
-    [[nodiscard]] std::array<PlaneViewState*, 4> allViewStates();
+    // Per-view wiring and display updates. A panel's ImageView is wired once
+    // for the signals that belong to the panel (zoom, fit, resize, scroll,
+    // pan) and fanned out to every layer's state on it; each state is wired
+    // for the tile-addressed signals (probe, line plot, slice move), taking
+    // only those for its own tile. Wiring per state for everything would
+    // fire the panel signals once per layer.
+    void wirePanelSignals(ImageView* view, int normal);
+    void wireTileSignals(PlaneViewState& state);
+    // Every view state of every layer, whatever the current dimension -- the
+    // 2-D view and both layers' slice panels. currentViews() answers a
+    // narrower question: the views the *displayed* datasets use. Teardown and
+    // failure states have to reach them all, since the dimension they were
+    // showing is already gone.
+    [[nodiscard]] std::vector<PlaneViewState*> allViewStates();
     void setAllViewPlaceholders(const QString& text);
+    // The active layers' states for the current dimension: three per layer in
+    // 3-D, the 2-D view otherwise.
     [[nodiscard]] std::vector<PlaneViewState*> currentViews();
+    // The primary layer's states only: what a dataset load produces one
+    // display per, and what frame specs and exports enumerate.
+    [[nodiscard]] std::vector<PlaneViewState*> primaryViews();
+    // The states drawn on one 3-D panel, one per active layer.
+    [[nodiscard]] std::vector<PlaneViewState*> statesForPanel(int normal);
     void setActiveView(PlaneViewState& state);
     // Give the active view keyboard focus so the arrow-key pan works on a
     // freshly opened dataset without a click first -- unless the user is
@@ -830,25 +1317,59 @@ private:
     // linear plane-pixel-to-scene mapping (line plots, particle points, vector
     // glyphs) work in the logical r-theta / theta-r layouts but not here.
     [[nodiscard]] bool displayIsSphericalWarp() const;
+    // The line tool is the view's: off while any tile on its panel is a warp.
+    void updateLineToolAvailability(const PlaneViewState& state);
     // Coordinate mapper for a view: logical (x, y)/(r, theta) <-> scene pixels,
     // built from the plane, the warped display region, and the pixmap size.
+    // The volume's "limit to visible region" box: the part of the domain the
+    // three panels show, in the logical coordinates the volume samples.
+    [[nodiscard]] RealBox volumeRegionOfInterest() const;
     [[nodiscard]] PlaneMapping planeMapping(const PlaneViewState& state) const;
-    // Enable/disable and re-check the 2-D Spherical menus for the current
-    // dataset and display mode (Supersampling applies only to the R-Z warp).
+    // Enable/disable the 2-D Spherical menu for the current dataset.
     void updateSphericalControls();
+    // Whether the primary dataset can be drawn on its mapped grid: its
+    // session carries the nodal positions and no companion is open (a pair's
+    // tiles are placed affinely, which a physically uniform pixmap of a
+    // stretched grid does not satisfy).
+    [[nodiscard]] bool mappedGridAvailable() const;
+    // The View > Mapped Grid choice as it applies now: on, and available.
+    [[nodiscard]] bool displayIsMapped() const;
+    // The warp a slice request for this view asks for: the mapped grid for
+    // the primary while it is shown, the R-Z wedge for a 2-D spherical
+    // plane in that layout, else none.
+    [[nodiscard]] DisplayWarp requestedWarpFor(const PlaneViewState& state) const;
+    // Enable/disable the Mapped Grid menu for the current dataset, with a
+    // tooltip saying why it is off.
+    void updateMappedGridControls();
     // Horizontal and vertical axis names for a spherical layout ({"R","Z"},
     // {"r","theta"}, or {"theta","r"}). Callers pass the displayed view
     // state's mode so labels always describe the raster on screen.
     [[nodiscard]] static std::array<QString, 2> sphericalAxisLabels(
         SphericalDisplay mode);
     void probeMoved(PlaneViewState& state, int x, int displayY);
+    // The readout for the status bar: probeReadout, prefixed with the
+    // dataset's name while a companion is open.
+    [[nodiscard]] QString probeLine(
+        const PlaneViewState& state, int x, int displayY) const;
     void probeClicked(PlaneViewState& state, int x, int displayY);
     [[nodiscard]] QString probeReadout(
         const PlaneViewState& state, int x, int displayY) const;
     void rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect);
+    // A rubber band over a mapped view: the scene is the physical canvas, so
+    // the selection is a physical window and the zoom is the view's alone
+    // (updateMappedDemand draws the warp for what it then shows). With sync
+    // on, each other 3-D panel is zoomed to the selection's extent along the
+    // axis it shares with this one, over its own canvas.
+    void mappedRubberBandZoom(PlaneViewState& state, const QRectF& sceneRect);
+    // The normalized plane rect (top-down) of the raster cells drawn inside a
+    // pixmap-pixel rect of a mapped view, found through the source index.
+    // Nothing when no cell was drawn in it.
+    [[nodiscard]] std::optional<QRectF> mappedPlaneBounds(
+        const PlaneViewState& state, const QRectF& pixmapRect) const;
     // The physical box a view has asked to show: its visible subregion, else
-    // the whole domain. This is the region of the plane on screen once its
-    // slice has landed, and runs ahead of that plane while one is in flight.
+    // its layer's whole domain. This is the region of the plane on screen
+    // once its slice has landed, and runs ahead of that plane while one is in
+    // flight.
     [[nodiscard]] RealBox requestedRegion(const PlaneViewState& state) const;
     // Zooms one view to a physical region: clamped to the domain, snapped to
     // cells for local data, framed over the raster on screen as feedback,
@@ -895,13 +1416,6 @@ private:
     // correct. See issue #45.
     [[nodiscard]] std::optional<QRectF> preservedDataWindow(
         const PlaneViewState& state, const ScalarPlane& incoming) const;
-    // Spherical supersample change: the physical (R, Z) bounds are unchanged
-    // but the warped pixmap is resized. Returns the scene rect that keeps the
-    // currently-visible physical window on screen at the new resolution, or
-    // nullopt when a plain refit is correct (first frame, dataset/domain
-    // change, or no resolution change).
-    [[nodiscard]] std::optional<QRectF> sphericalReframe(
-        const PlaneViewState& state, const SliceDisplayResult& display) const;
     // By value, and callers move into it: the planes are the largest thing an
     // arrival carries -- at the 4096 output cap a ScalarPlane is around 117 MB
     // and the ImageBuffer around 67 MB -- and a const& forced this function to
@@ -922,6 +1436,10 @@ private:
     void updateGridBoxes();
     void updateScaleBar(PlaneViewState& state);
     void updateScaleBars();
+    // The scale bar is offered only while the screen has one pixel density
+    // per physical unit on both in-plane axes, which depends on the dataset's
+    // cell sizes and on the aspect settings; re-evaluated when either changes.
+    void updateScaleBarAvailability();
     void resetLengthUnit();
     void updateCrosshairs(PlaneViewState& state);
     void updateCrosshairs();
@@ -953,12 +1471,21 @@ private:
     // on the per-view render generation (see PlaneViewState::renderGeneration) --
     // if any panel was re-sliced mid-sync the whole outcome is dropped and the
     // rerun recomputes it.
+    // Per layer: each dataset has its own range and colour bar, so its three
+    // panels are synchronized on their own. The no-argument form runs it for
+    // every active layer.
     void syncVisibleRanges();
+    void syncVisibleRanges(DatasetLayer& layer);
     // Panel slices currently on a worker (summed PlaneViewState::pendingRequests);
     // the visible-range sync defers dispatch until this is zero. Panel work only
     // -- excludes particle/line-plot/prefetch requests, which the
     // DiagnosticsModel's active count tracks.
     [[nodiscard]] int slicesInFlight() const;
+    [[nodiscard]] int slicesInFlight(const DatasetLayer& layer) const;
+    // Emits interactiveSlicesSettled once the DiagnosticsModel's active count
+    // is zero; otherwise leaves the signal to the activity that is still
+    // running (a frame prefetch, see the loadActivityChanged handler).
+    void settleIfDrained();
 
     // Slice requests: the debounce timer coalesces into per-view requests.
     // rasterDirty false means the trigger (contour mode/count) cannot change
@@ -1066,7 +1593,10 @@ private:
     QStackedWidget* m_stack = nullptr;
     IsoWidget* m_isoWidget = nullptr;
     QLabel* m_probeLabel = nullptr;
-    ColorBarWidget* m_colorBar = nullptr;
+    // Permanent status-bar item, shown only while the remote server
+    // predates full-precision values; a status message would be
+    // overwritten by the open that follows the session's ready line.
+    QLabel* m_remotePrecisionLabel = nullptr;
     LinePlotWindow* m_linePlotWindow = nullptr;
     // Cancels in-flight line-plot queries on dataset switch or window close so
     // a late result neither reopens a closed window nor wastes I/O.
@@ -1075,12 +1605,8 @@ private:
     SetContoursDialog* m_contoursDialog = nullptr;
     QDialog* m_numberFormatDialog = nullptr;
     QDialog* m_lengthUnitsDialog = nullptr;
+    QDialog* m_axisScalingDialog = nullptr;
     UserGuideDialog* m_userGuideDialog = nullptr;
-    QComboBox* m_fieldSelector = nullptr;
-    QComboBox* m_levelSelector = nullptr;
-    // Owns the range mode, User min/max and Log widgets and the per-field
-    // range memory; selection() feeds every slice request and frame spec.
-    RangeController* m_range = nullptr;
     QWidget* m_slicePositionControls = nullptr;
     QAction* m_positionSeparator = nullptr;
     std::array<QSpinBox*, 3> m_sliceSpinboxes{nullptr, nullptr, nullptr};
@@ -1088,6 +1614,9 @@ private:
     QTimer* m_panDebounce = nullptr;
     PlaneViewState* m_panView = nullptr;
     RealBox m_panStartRegion{};
+    // Over a pair: the panel's framed window when the drag began, which the
+    // drag shifts (see flushPanDrag's paired arm).
+    QRectF m_panStartSceneWindow;
     int m_panPlaneWidth = 0;
     int m_panPlaneHeight = 0;
     QPointF m_panSceneDelta;
@@ -1103,9 +1632,6 @@ private:
     // pending range-store key carries the "cache the full-domain union after
     // the sync" step (see the slice-arrival completion) into the sync
     // completion, where the union is actually known.
-    bool m_visibleSyncInFlight = false;
-    bool m_visibleSyncRerun = false;
-    std::optional<amrvis::DisplayCoordinator::RangeKey> m_pendingRangeStore;
 #ifdef AMREXPLORER_QT_TEST_ACCESS
     // Test-only: run just after an initial-slice load is launched; see
     // setInitialSliceLaunchedHookForTest.
@@ -1121,22 +1647,10 @@ private:
     std::uint64_t m_visibleSyncStaleSkips = 0;
 #endif
     // Whether the connection a remote sequence was opened on can install
-    // derived fields. Captured there rather than asked of m_dataset, for the
+    // derived fields. Captured there rather than asked of primary().session, for the
     // reason derivedFieldsReachNextLoad gives: frame 0's spec is built while
     // the outgoing dataset is still installed.
     bool m_remoteSequenceDerivedFields = false;
-    // Which session is installed. Bumped wherever m_dataset is replaced or
-    // cleared, and captured by a slice request at submission: an arrival whose
-    // stamp no longer matches was computed against a session that is gone, and
-    // the catalog, field list and colour bar on screen are the new one's.
-    //
-    // Note what this cannot do on its own. In the common ordering an
-    // interactive slice finishes *before* the reload installs, so its stamp
-    // still matches and it is rightly accepted -- it only goes stale a moment
-    // later. Acceptance is therefore only half the invariant; the other half is
-    // that a view whose display the reload skipped is re-sliced, so no view
-    // keeps a raster from a session that is no longer installed.
-    std::uint64_t m_sessionEpoch = 0;
     // The list a reload has already been asked for, with the session epoch it
     // was asked under. What bounds the reopens is no longer the memo itself:
     // any install invalidates it, so the bound rests on no install ever leaving
@@ -1151,6 +1665,10 @@ private:
     // which installs anything.
     std::optional<std::pair<std::vector<DerivedFieldDefinition>, std::uint64_t>>
         m_reloadAskedFor;
+    // The same memo for the companion's session (see
+    // reloadCompanionIfDefinitionsMoved).
+    std::optional<std::pair<std::vector<DerivedFieldDefinition>, std::uint64_t>>
+        m_companionReloadAskedFor;
     QTreeWidget* m_metadataTree = nullptr;
     QDockWidget* m_metadataDock = nullptr;
     QDockWidget* m_diagnosticsDock = nullptr;
@@ -1178,12 +1696,19 @@ private:
     QMenu* m_variableMenu = nullptr;
     // "2-D Spherical" View section grouping the warped-display options; the
     // whole submenu is enabled only while a 2-D spherical dataset is shown.
-    // Supersampling is its first child; more options will join it.
     QMenu* m_sphericalMenu = nullptr;
     QMenu* m_sphericalDisplayMenu = nullptr;
     QActionGroup* m_sphericalDisplayGroup = nullptr;
-    QMenu* m_sphericalSupersampleMenu = nullptr;
-    QActionGroup* m_sphericalSupersampleGroup = nullptr;
+    // View > Aspect Ratio: disabled for 2-D spherical data; the Physical
+    // Size radio is further disabled without physical geometry.
+    QMenu* m_aspectMenu = nullptr;
+    QActionGroup* m_aspectGroup = nullptr;
+    QAction* m_aspectCellCountsAction = nullptr;
+    QAction* m_aspectPhysicalAction = nullptr;
+    // View > Mapped Grid: enabled only while the primary dataset carries
+    // nodal positions and no companion is open (updateMappedGridControls).
+    QMenu* m_mappedGridMenu = nullptr;
+    QAction* m_mappedGridAction = nullptr;
     QActionGroup* m_scaleGroup = nullptr;
     QActionGroup* m_levelGroup = nullptr;
     QActionGroup* m_variableGroup = nullptr;
@@ -1209,11 +1734,39 @@ private:
     // (progress, cancellation, FFmpeg encoding). This window supplies frame
     // rendering and sequence navigation, and restores its UI on finished().
     AnimationExporter* m_animationExporter = nullptr;
-    std::shared_ptr<DatasetSession> m_dataset;
-    std::shared_ptr<const DatasetMetadata> m_openMetadata;
-    std::string m_fileVersion;
+    std::array<DatasetLayer, 2> m_layers;
+    // Set while a companion is open: how the two layers' domains meet, and the
+    // scene layout of each 3-D panel derived from it (index = normal).
+    std::optional<PairGeometry> m_pair;
+    std::array<PairLayout, 3> m_pairLayouts;
+    // Per panel, the window a zoom or pan framed, kept apart from the
+    // layers' regions: those are rounded to each layer's cells, and a window
+    // rebuilt from them would drift a cell per step where the cells of the
+    // two layers do not line up.
+    std::array<std::optional<QRectF>, 3> m_pairWindows;
+    QToolBar* m_companionToolbar = nullptr;
+    QLabel* m_companionLabel = nullptr;
+    // "Same as primary": the companion's slices take the primary's displayed
+    // range on the same panel and its own range controls and colour bar are
+    // withheld.
+    QCheckBox* m_companionFollowBox = nullptr;
+    bool m_companionFollowsPrimary = false;
+    QAction* m_openCompanionAction = nullptr;
+    QAction* m_openRemoteCompanionAction = nullptr;
+    // A --companion given with --ssh, waiting for the load it belongs to
+    // (by generation) to finish; any other open drops it.
+    struct PendingRemoteCompanion {
+        std::string remotePath;
+        std::uint64_t generation = 0;
+    };
+    std::optional<PendingRemoteCompanion> m_pendingRemoteCompanion;
+    QAction* m_closeCompanionAction = nullptr;
+    QAction* m_volumeAction = nullptr;
+    QAction* m_particlesAction = nullptr;
+    StopSource m_companionStopSource;
+    std::uint64_t m_companionGeneration = 0;
+    // The 2-D page's one view state; it always slices the primary layer.
     PlaneViewState m_view2d;
-    std::array<PlaneViewState, 3> m_planeViews;
     PlaneViewState* m_activeView = nullptr;
     int m_viewDimension = 0;
     std::array<double, 3> m_slicePosition3d{0.0, 0.0, 0.0};
@@ -1221,14 +1774,24 @@ private:
     std::vector<PlaneViewState*> m_pendingViews;
     // OR of the rasterDirty flags of the coalesced pending requests.
     bool m_pendingRasterDirty = false;
+    // A slice landed while other activity ran: the settle is still owed.
+    bool m_settleDeferred = false;
+    // A slice request queued behind the debounce, or waiting to be flushed.
+    [[nodiscard]] bool sliceRequestQueued() const;
     StopSource m_initialStopSource;
     StopSource m_metadataStopSource;
     DisplayMode m_displayMode = DisplayMode::Raster;
     int m_contourCount = 15;
-    // 2-D spherical warp supersample factor (see SliceRequest::sphericalSupersample).
-    int m_sphericalSupersample = 4;
     // 2-D spherical display layout (see SliceRequest::sphericalDisplay).
     SphericalDisplay m_sphericalDisplay = SphericalDisplay::RZ;
+    // View > Mapped Grid: draw slices on the plotfile's stretched grid when
+    // it carries one (see SliceRequest::mappedGrid). A persisted preference
+    // that applies whenever the open dataset can honour it.
+    bool m_mappedGrid = false;
+    // Persisted preference; the per-axis factors belong to the open dataset
+    // and reset to one with each new one (they survive sequence frames).
+    AspectMode m_aspectMode = AspectMode::CellCounts;
+    std::array<double, 3> m_axisScale{1.0, 1.0, 1.0};
     int m_contourColor = contourColorBlack;
     int m_vectorUField = -1;
     int m_vectorVField = -1;
@@ -1264,6 +1827,10 @@ private:
     double m_lastDisplayMinimum = 0.0;
     double m_lastDisplayMaximum = 1.0;
     bool m_controlsReady = false;
+    // Set while showSlice installs an arrival: the view changes it makes
+    // (a Fit, a stretch) must not ask the warp for a window against the
+    // request that is being replaced; showSlice asks once itself afterwards.
+    bool m_applyingArrival = false;
     std::uint64_t m_generation = 0;
     bool m_closing = false;
     // Owns the Diagnostics panel's counters (background requests, stale

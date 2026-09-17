@@ -173,15 +173,28 @@ void paintScaleBar(QPainter* painter, const QRectF& imageBounds, double codeUnit
     painter->restore();
 }
 
+// Deletes a tile-owned item and forgets it; children go with their parent.
+template <typename Item>
+void deleteItems(QGraphicsScene* scene, std::vector<Item*>& items)
+{
+    for (auto* item : items) {
+        scene->removeItem(item);
+        delete item;
+    }
+    items.clear();
+}
+
 } // namespace
 
 ImageView::ImageView(QWidget* parent)
     : QGraphicsView(parent)
     , m_scene(new QGraphicsScene(this))
+    , m_tiles(1)
 {
     setScene(m_scene);
     setAlignment(Qt::AlignCenter);
     setBackgroundBrush(palette().window());
+    setActiveBorder(false);
     setDragMode(QGraphicsView::RubberBandDrag);
     setMouseTracking(true);
     setRenderHint(QPainter::Antialiasing);
@@ -194,11 +207,146 @@ ImageView::ImageView(QWidget* parent)
     setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
 }
 
+ImageView::Tile& ImageView::tile(std::size_t index)
+{
+    if (index >= m_tiles.size()) {
+        m_tiles.resize(index + 1);
+    }
+    return m_tiles[index];
+}
+
+const ImageView::Tile* ImageView::tileIfPresent(std::size_t index) const noexcept
+{
+    return index < m_tiles.size() ? &m_tiles[index] : nullptr;
+}
+
+ImageView::Tile* ImageView::tileIfPresent(std::size_t index) noexcept
+{
+    return index < m_tiles.size() ? &m_tiles[index] : nullptr;
+}
+
+void ImageView::clearTileItems(Tile& tile)
+{
+    // Deleting the pixmap item takes every child overlay with it; the lists
+    // are then dangling and are dropped rather than deleted again.
+    if (m_lineGuide != nullptr && m_lineGuide->parentItem() == tile.item) {
+        m_lineGuide = nullptr;
+    }
+    if (tile.item != nullptr) {
+        m_scene->removeItem(tile.item);
+        delete tile.item;
+        tile.item = nullptr;
+    }
+    tile.gridItems.clear();
+    tile.overlayItems.clear();
+    tile.pathItems.clear();
+    tile.pointItems.clear();
+    tile.pointOverlayColors.clear();
+    tile.pointOverlayPointCount = 0;
+    tile.crosshairVerticalItem = nullptr;
+    tile.crosshairHorizontalItem = nullptr;
+    tile.cellHighlightItem = nullptr;
+}
+
+void ImageView::applyTilePlacement(Tile& tile)
+{
+    if (tile.item == nullptr) {
+        updateSceneRect();
+        return;
+    }
+    const QRectF imageRect(QPointF(0.0, 0.0), QSizeF(tile.image.size()));
+    if (tile.sceneRect == imageRect) {
+        // The classic raster-at-origin scene: an identity, exactly.
+        tile.item->setTransform(QTransform());
+        tile.item->setPos(QPointF());
+    } else {
+        QTransform placement;
+        if (tile.image.width() > 0 && tile.image.height() > 0) {
+            placement.scale(tile.sceneRect.width() / tile.image.width(),
+                tile.sceneRect.height() / tile.image.height());
+        }
+        tile.item->setTransform(placement);
+        tile.item->setPos(tile.sceneRect.topLeft());
+    }
+    tile.item->setVisible(tile.visible);
+    updateSceneRect();
+}
+
+QRectF ImageView::tilesRect() const
+{
+    QRectF union_;
+    for (const auto& tile : m_tiles) {
+        if (tile.item != nullptr && tile.visible) {
+            union_ = union_.isNull() ? tile.sceneRect : union_.united(tile.sceneRect);
+        }
+    }
+    return union_;
+}
+
+QRectF ImageView::exportSceneRect() const
+{
+    const auto tiles = tilesRect();
+    if (m_canvasRect.has_value() && !m_placement.has_value()) {
+        // A framed window with no tile under it (the layer on show lies
+        // elsewhere) exports as the empty window, not as the tile outside it.
+        const auto cut = tiles.intersected(*m_canvasRect);
+        return cut.isEmpty() ? *m_canvasRect : cut;
+    }
+    return tiles;
+}
+
+void ImageView::updateSceneRect()
+{
+    m_scene->setSceneRect(m_canvasRect.value_or(tilesRect()));
+}
+
+std::size_t ImageView::tileAt(const QPointF& scenePoint) const
+{
+    for (std::size_t index = m_tiles.size(); index-- > 0;) {
+        const auto& tile = m_tiles[index];
+        if (tile.item != nullptr && tile.visible
+            && tile.sceneRect.contains(scenePoint)) {
+            return index;
+        }
+    }
+    // Outside every tile: the first one on show, never a hidden raster.
+    for (std::size_t index = 0; index < m_tiles.size(); ++index) {
+        if (m_tiles[index].item != nullptr && m_tiles[index].visible) {
+            return index;
+        }
+    }
+    return 0;
+}
+
+QPointF ImageView::imagePositionIn(
+    std::size_t index, const QPointF& scenePoint) const
+{
+    const auto* tile = tileIfPresent(index);
+    return tile != nullptr && tile->item != nullptr
+        ? tile->item->mapFromScene(scenePoint) : scenePoint;
+}
+
 void ImageView::setImage(
     const QImage& image, ImageTransformPolicy transformPolicy,
     QSize logicalSize, const std::optional<VirtualPlacement>& placement)
 {
-    const bool sizeChanged = m_image.isNull() || m_image.size() != image.size();
+    // One tile again: every other tile goes with the scene.
+    m_scene->clear();
+    m_lineGuide = nullptr;
+    m_lineDragButton = Qt::NoButton;
+    auto& first = m_tiles.front();
+    const auto crosshairVertical = first.crosshairVertical;
+    const auto crosshairHorizontal = first.crosshairHorizontal;
+    const auto verticalColor = first.crosshairVerticalColor;
+    const auto horizontalColor = first.crosshairHorizontalColor;
+    const bool sizeChanged = first.image.isNull() || first.image.size() != image.size();
+    m_tiles.assign(1, Tile{});
+    auto& tile0 = m_tiles.front();
+    tile0.crosshairVertical = crosshairVertical;
+    tile0.crosshairHorizontal = crosshairHorizontal;
+    tile0.crosshairVerticalColor = verticalColor;
+    tile0.crosshairHorizontalColor = horizontalColor;
+    m_canvasRect.reset();
     // An explicitly incompatible raster resets Custom mode. Fixed scale is a
     // user-selected persistent mode and therefore survives every replacement,
     // including a delayed result whose policy was computed before the scale
@@ -207,22 +355,11 @@ void ImageView::setImage(
         && m_transformMode == TransformMode::Custom) {
         m_transformMode = TransformMode::Fit;
     }
-    m_scene->clear();
-    m_gridItems.clear();
-    m_overlayItems.clear();
-    m_pathItems.clear();
-    m_pointItems.clear();
-    m_pointOverlayColors.clear();
-    m_pointOverlayPointCount = 0;
-    m_crosshairVerticalItem = nullptr;
-    m_crosshairHorizontalItem = nullptr;
-    m_cellHighlightItem = nullptr;
-    m_lineGuide = nullptr;
-    m_lineDragButton = Qt::NoButton;
-    m_image = image;
+    tile0.image = image;
     m_placeholderText.clear();
-    m_logicalSize = logicalSize.isValid() ? logicalSize : image.size();
-    m_item = m_scene->addPixmap(QPixmap::fromImage(m_image));
+    tile0.logicalSize = logicalSize.isValid() ? logicalSize : image.size();
+    tile0.item = m_scene->addPixmap(QPixmap::fromImage(tile0.image));
+    applyPixmapTransformationMode(tile0);
     m_placement = placement;
     applyPlacement();
     setBackgroundBrush(viewportBackground());
@@ -235,7 +372,113 @@ void ImageView::setImage(
         m_transformMode = TransformMode::Fit;
         fitImage();
     }
-    applyCrosshairs();
+    applyCrosshairs(tile0);
+}
+
+void ImageView::setTileImage(std::size_t index, const QImage& image,
+    const QRectF& sceneRect, const std::optional<QRectF>& canvasRect,
+    ImageTransformPolicy transformPolicy)
+{
+    auto& tile = this->tile(index);
+    const bool sizeChanged = tile.image.isNull() || tile.image.size() != image.size();
+    const bool wasEmpty = !hasImage();
+    clearTileItems(tile);
+    if (transformPolicy == ImageTransformPolicy::Refit
+        && m_transformMode == TransformMode::Custom) {
+        m_transformMode = TransformMode::Fit;
+    }
+    tile.image = image;
+    tile.logicalSize = image.size();
+    tile.sceneRect = sceneRect;
+    tile.visible = true;
+    tile.item = m_scene->addPixmap(QPixmap::fromImage(tile.image));
+    applyPixmapTransformationMode(tile);
+    if (canvasRect.has_value()) {
+        m_canvasRect = canvasRect;
+    }
+    if (!m_placeholderText.isEmpty()) {
+        // A placeholder text item is still in the scene from setPlaceholder.
+        for (auto* item : m_scene->items()) {
+            if (item->parentItem() == nullptr
+                && dynamic_cast<QGraphicsPixmapItem*>(item) == nullptr) {
+                m_scene->removeItem(item);
+                delete item;
+            }
+        }
+        m_placeholderText.clear();
+    }
+    applyTilePlacement(tile);
+    setBackgroundBrush(viewportBackground());
+    if (m_transformMode == TransformMode::Fit) {
+        fitImage();
+    } else if (m_transformMode == TransformMode::FixedScale) {
+        applyFixedScale();
+    } else if (transformPolicy == ImageTransformPolicy::GeometryAware
+        && (sizeChanged || wasEmpty)) {
+        m_transformMode = TransformMode::Fit;
+        fitImage();
+    }
+    applyCrosshairs(tile);
+}
+
+void ImageView::placeTile(std::size_t index, const QRectF& sceneRect,
+    const std::optional<QRectF>& canvasRect)
+{
+    auto* tile = index < m_tiles.size() ? &m_tiles[index] : nullptr;
+    if (tile == nullptr || tile->item == nullptr) {
+        return;
+    }
+    tile->sceneRect = sceneRect;
+    m_canvasRect = canvasRect;
+    applyTilePlacement(*tile);
+    if (m_transformMode == TransformMode::Fit) {
+        fitImage();
+    } else if (m_transformMode == TransformMode::FixedScale) {
+        applyFixedScale();
+    }
+}
+
+void ImageView::setTileVisible(std::size_t index, bool visible)
+{
+    auto* tile = index < m_tiles.size() ? &m_tiles[index] : nullptr;
+    if (tile == nullptr || tile->visible == visible) {
+        return;
+    }
+    tile->visible = visible;
+    if (tile->item != nullptr) {
+        tile->item->setVisible(visible);
+    }
+    updateSceneRect();
+}
+
+void ImageView::removeTile(std::size_t index)
+{
+    if (index == 0 || index >= m_tiles.size()) {
+        return;
+    }
+    clearTileItems(m_tiles[index]);
+    m_tiles[index] = Tile{};
+    while (m_tiles.size() > 1 && m_tiles.back().item == nullptr) {
+        m_tiles.pop_back();
+    }
+    updateSceneRect();
+}
+
+bool ImageView::hasTileImage(std::size_t index) const noexcept
+{
+    const auto* tile = tileIfPresent(index);
+    return tile != nullptr && tile->item != nullptr && !tile->image.isNull();
+}
+
+bool ImageView::isTileVisible(std::size_t index) const noexcept
+{
+    const auto* tile = tileIfPresent(index);
+    return tile != nullptr && tile->item != nullptr && tile->visible;
+}
+
+QRectF ImageView::tileSceneRect(std::size_t index) const
+{
+    return hasTileImage(index) ? m_tiles[index].sceneRect : QRectF();
 }
 
 void ImageView::setVirtualCanvas(
@@ -245,70 +488,106 @@ void ImageView::setVirtualCanvas(
         m_placement.reset();
         return;
     }
+    if (!placement.has_value() && !m_placement.has_value()) {
+        // Nothing to leave. applyPlacement would also drop an explicit
+        // canvas from setTileImage and snap its tile back to the origin,
+        // which is not what "no virtual canvas" asks for.
+        return;
+    }
     m_placement = placement;
     applyPlacement();
     if (m_transformMode == TransformMode::FixedScale) {
         applyFixedScale();
     }
+    noteViewChanged();
+}
+
+void ImageView::setSmoothPixmapTransformation(bool smooth)
+{
+    if (m_smoothPixmaps == smooth) {
+        return;
+    }
+    m_smoothPixmaps = smooth;
+    for (auto& tile : m_tiles) {
+        applyPixmapTransformationMode(tile);
+    }
+}
+
+void ImageView::applyPixmapTransformationMode(Tile& tile)
+{
+    if (tile.item != nullptr) {
+        tile.item->setTransformationMode(
+            m_smoothPixmaps ? Qt::SmoothTransformation : Qt::FastTransformation);
+    }
+}
+
+void ImageView::noteViewChanged()
+{
+    ViewSnapshot now;
+    now.transform = transform();
+    now.horizontalScroll = horizontalScrollBar()->value();
+    now.verticalScroll = verticalScrollBar()->value();
+    now.viewportSize = viewport() != nullptr ? viewport()->size() : QSize();
+    now.sceneRect = m_scene != nullptr ? m_scene->sceneRect() : QRectF();
+    if (now == m_notedView) {
+        return;
+    }
+    m_notedView = now;
+    emit viewChanged();
 }
 
 QRectF ImageView::imageSceneRect() const
 {
-    return m_item == nullptr ? QRectF() : m_item->sceneBoundingRect();
+    const auto& tile0 = m_tiles.front();
+    return tile0.item == nullptr ? QRectF() : tile0.item->sceneBoundingRect();
 }
 
-QRectF ImageView::visibleImageRect() const
+QRectF ImageView::visibleImageRect(std::size_t index) const
 {
-    if (m_item == nullptr || viewport() == nullptr) {
+    const auto* tile = tileIfPresent(index);
+    if (tile == nullptr || tile->item == nullptr || viewport() == nullptr) {
         return {};
     }
     // mapRectFromScene undoes the item's placement -- identity in the classic
     // scene, the cell offset and pixel-to-cell scale on a virtual canvas -- so
     // the result is in raster pixels either way.
-    return m_item->mapRectFromScene(
+    return tile->item->mapRectFromScene(
         mapToScene(viewport()->rect()).boundingRect()).intersected(
-            m_item->boundingRect());
+            tile->item->boundingRect());
 }
 
-// Position the raster item and size the scene. On a virtual canvas the scene
+// Position tile 0 for the virtual canvas. On a virtual canvas the scene
 // spans the whole domain in finest-cell units and the item maps its pixels
 // onto its fetched cell window; the classic scene is the raster at the
 // origin. Neither the view transform nor the scroll bars are touched here, so
 // a raster replacement on an unchanged canvas never moves the view.
 void ImageView::applyPlacement()
 {
-    if (m_item == nullptr) {
-        return;
-    }
+    auto& tile0 = m_tiles.front();
     if (m_placement.has_value()) {
-        const auto& cells = m_placement->itemCells;
-        QTransform toCells;
-        if (m_image.width() > 0 && m_image.height() > 0) {
-            toCells.scale(cells.width() / m_image.width(),
-                cells.height() / m_image.height());
-        }
-        m_item->setTransform(toCells);
-        m_item->setPos(cells.topLeft());
-        m_scene->setSceneRect(
-            QRectF(QPointF(0.0, 0.0), m_placement->domainCells));
+        tile0.sceneRect = m_placement->itemCells;
+        m_canvasRect = QRectF(QPointF(0.0, 0.0), m_placement->domainCells);
     } else {
-        m_item->setTransform(QTransform());
-        m_item->setPos(QPointF());
-        m_scene->setSceneRect(m_item->boundingRect());
+        tile0.sceneRect = QRectF(QPointF(0.0, 0.0), QSizeF(tile0.image.size()));
+        m_canvasRect.reset();
     }
+    applyTilePlacement(tile0);
 }
 
-void ImageView::setGridBoxes(const std::vector<GridBoxOverlay>& boxes)
+void ImageView::setGridBoxes(const std::vector<GridBoxOverlay>& boxes,
+    std::size_t index)
 {
-    for (auto* item : m_gridItems) {
-        m_scene->removeItem(item);
-        delete item;
-    }
-    m_gridItems.clear();
-    if (!hasImage()) {
+    // A tile that was never placed has nothing to clear and nothing to draw
+    // on; looking it up must not grow the tile list (see displaySize).
+    auto* tile = tileIfPresent(index);
+    if (tile == nullptr) {
         return;
     }
-    m_gridItems.reserve(boxes.size());
+    deleteItems(m_scene, tile->gridItems);
+    if (tile->item == nullptr) {
+        return;
+    }
+    tile->gridItems.reserve(boxes.size());
     // All overlays are children of the raster item: their raster-pixel
     // coordinates then hold on a virtual canvas, where the item carries the
     // pixel-to-cell transform and its offset within the domain.
@@ -321,186 +600,227 @@ void ImageView::setGridBoxes(const std::vector<GridBoxOverlay>& boxes)
             // view default) so the arcs stay smooth; the crisp-rect trick only
             // helps axis-aligned edges.
             auto* item = m_scene->addPath(box.path, pen);
-            item->setParentItem(m_item);
+            item->setParentItem(tile->item);
             item->setBrush(Qt::NoBrush);
             item->setZValue(1.0);
-            m_gridItems.push_back(item);
+            tile->gridItems.push_back(item);
             continue;
         }
-        auto* item = new CrispRectItem(box.rectangle, m_item);
+        auto* item = new CrispRectItem(box.rectangle, tile->item);
         item->setPen(pen);
         item->setBrush(Qt::NoBrush);
         item->setZValue(1.0);
-        m_gridItems.push_back(item);
+        tile->gridItems.push_back(item);
     }
 }
 
-void ImageView::setOverlaySegments(const std::vector<OverlaySegment>& segments)
+void ImageView::setOverlaySegments(const std::vector<OverlaySegment>& segments,
+    std::size_t index)
 {
-    for (auto* item : m_overlayItems) {
-        m_scene->removeItem(item);
-        delete item;
-    }
-    m_overlayItems.clear();
-    if (!hasImage()) {
+    auto* tile = tileIfPresent(index);
+    if (tile == nullptr) {
         return;
     }
-    m_overlayItems.reserve(segments.size());
+    deleteItems(m_scene, tile->overlayItems);
+    if (tile->item == nullptr) {
+        return;
+    }
+    tile->overlayItems.reserve(segments.size());
     for (const auto& segment : segments) {
         QPen pen(segment.color);
         pen.setCosmetic(true);
         pen.setWidthF(segment.width);
         auto* item = m_scene->addLine(segment.line, pen);
-        item->setParentItem(m_item);
+        item->setParentItem(tile->item);
         item->setZValue(2.0);
-        m_overlayItems.push_back(item);
+        tile->overlayItems.push_back(item);
     }
 }
 
-void ImageView::setOverlayPaths(const std::vector<OverlayPath>& paths)
+void ImageView::setOverlayPaths(const std::vector<OverlayPath>& paths,
+    std::size_t index)
 {
-    for (auto* item : m_pathItems) {
-        m_scene->removeItem(item);
-        delete item;
-    }
-    m_pathItems.clear();
-    if (!hasImage()) {
+    auto* tile = tileIfPresent(index);
+    if (tile == nullptr) {
         return;
     }
-    m_pathItems.reserve(paths.size());
+    deleteItems(m_scene, tile->pathItems);
+    if (tile->item == nullptr) {
+        return;
+    }
+    tile->pathItems.reserve(paths.size());
     for (const auto& overlay : paths) {
         QPen pen(overlay.color);
         pen.setCosmetic(true);
         pen.setWidthF(overlay.width);
         auto* item = m_scene->addPath(overlay.path, pen);
-        item->setParentItem(m_item);
+        item->setParentItem(tile->item);
         item->setZValue(2.0);
-        m_pathItems.push_back(item);
+        tile->pathItems.push_back(item);
     }
 }
 
-void ImageView::setPointOverlays(const std::vector<PointOverlay>& overlays)
+void ImageView::setPointOverlays(const std::vector<PointOverlay>& overlays,
+    std::size_t index)
 {
-    for (auto* item : m_pointItems) {
-        m_scene->removeItem(item);
-        delete item;
-    }
-    m_pointItems.clear();
-    m_pointOverlayColors.clear();
-    m_pointOverlayPointCount = 0;
-    if (!hasImage()) {
+    auto* tile = tileIfPresent(index);
+    if (tile == nullptr) {
         return;
     }
-    m_pointItems.reserve(overlays.size());
+    deleteItems(m_scene, tile->pointItems);
+    tile->pointOverlayColors.clear();
+    tile->pointOverlayPointCount = 0;
+    if (tile->item == nullptr) {
+        return;
+    }
+    tile->pointItems.reserve(overlays.size());
     for (const auto& overlay : overlays) {
         if (overlay.points.empty()) {
             continue;
         }
         auto* item = new PointCloudItem(
-            overlay.points, m_item->boundingRect(), overlay.color,
+            overlay.points, tile->item->boundingRect(), overlay.color,
             overlay.size);
-        item->setParentItem(m_item);
+        item->setParentItem(tile->item);
         item->setZValue(3.0);
-        m_pointItems.push_back(item);
-        m_pointOverlayColors.push_back(overlay.color);
-        m_pointOverlayPointCount += overlay.points.size();
+        tile->pointItems.push_back(item);
+        tile->pointOverlayColors.push_back(overlay.color);
+        tile->pointOverlayPointCount += overlay.points.size();
     }
+}
+
+std::size_t ImageView::gridBoxCount() const noexcept
+{
+    std::size_t count = 0;
+    for (const auto& tile : m_tiles) {
+        count += tile.gridItems.size();
+    }
+    return count;
+}
+
+std::size_t ImageView::crosshairCount() const noexcept
+{
+    std::size_t count = 0;
+    for (const auto& tile : m_tiles) {
+        count += tile.crosshairVertical.has_value() ? 1U : 0U;
+        count += tile.crosshairHorizontal.has_value() ? 1U : 0U;
+    }
+    return count;
 }
 
 std::size_t ImageView::pointOverlayCount() const noexcept
 {
-    return m_pointItems.size();
+    std::size_t count = 0;
+    for (const auto& tile : m_tiles) {
+        count += tile.pointItems.size();
+    }
+    return count;
 }
 
 std::size_t ImageView::pointOverlayPointCount() const noexcept
 {
-    return m_pointOverlayPointCount;
+    std::size_t count = 0;
+    for (const auto& tile : m_tiles) {
+        count += tile.pointOverlayPointCount;
+    }
+    return count;
 }
 
 const std::vector<QColor>& ImageView::pointOverlayColors() const noexcept
 {
-    return m_pointOverlayColors;
+    return m_tiles.front().pointOverlayColors;
 }
 
 void ImageView::setCrosshairs(const std::optional<QLineF>& vertical,
     const std::optional<QLineF>& horizontal, const QColor& verticalColor,
-    const QColor& horizontalColor)
+    const QColor& horizontalColor, std::size_t index)
 {
-    m_crosshairVertical = vertical;
-    m_crosshairHorizontal = horizontal;
-    m_crosshairVerticalColor = verticalColor;
-    m_crosshairHorizontalColor = horizontalColor;
-    applyCrosshairs();
+    auto& tile = this->tile(index);
+    tile.crosshairVertical = vertical;
+    tile.crosshairHorizontal = horizontal;
+    tile.crosshairVerticalColor = verticalColor;
+    tile.crosshairHorizontalColor = horizontalColor;
+    applyCrosshairs(tile);
 }
 
-void ImageView::applyCrosshairs()
+void ImageView::applyCrosshairs(Tile& tile)
 {
-    for (auto* item : {m_crosshairVerticalItem, m_crosshairHorizontalItem}) {
+    for (auto* item : {tile.crosshairVerticalItem, tile.crosshairHorizontalItem}) {
         if (item != nullptr) {
             m_scene->removeItem(item);
             delete item;
         }
     }
-    m_crosshairVerticalItem = nullptr;
-    m_crosshairHorizontalItem = nullptr;
-    if (!hasImage()) {
+    tile.crosshairVerticalItem = nullptr;
+    tile.crosshairHorizontalItem = nullptr;
+    if (tile.item == nullptr || tile.image.isNull()) {
         return;
     }
-    const auto addGuide = [this](const QLineF& line, const QColor& color) {
+    const auto addGuide = [this, &tile](const QLineF& line, const QColor& color) {
         QPen pen(color);
         pen.setCosmetic(true);
         pen.setWidth(2);
         auto* item = m_scene->addLine(line, pen);
-        item->setParentItem(m_item);
+        item->setParentItem(tile.item);
         item->setZValue(1.5);
         return item;
     };
-    if (m_crosshairVertical.has_value()) {
-        m_crosshairVerticalItem = addGuide(*m_crosshairVertical,
-            m_crosshairVerticalColor);
+    if (tile.crosshairVertical.has_value()) {
+        tile.crosshairVerticalItem = addGuide(*tile.crosshairVertical,
+            tile.crosshairVerticalColor);
     }
-    if (m_crosshairHorizontal.has_value()) {
-        m_crosshairHorizontalItem = addGuide(*m_crosshairHorizontal,
-            m_crosshairHorizontalColor);
+    if (tile.crosshairHorizontal.has_value()) {
+        tile.crosshairHorizontalItem = addGuide(*tile.crosshairHorizontal,
+            tile.crosshairHorizontalColor);
     }
 }
 
-void ImageView::setCellHighlight(const std::optional<QRectF>& sceneRect)
+void ImageView::setCellHighlight(const std::optional<QRectF>& sceneRect,
+    std::size_t index)
 {
-    if (m_cellHighlightItem != nullptr) {
-        m_scene->removeItem(m_cellHighlightItem);
-        delete m_cellHighlightItem;
-        m_cellHighlightItem = nullptr;
+    auto* tile = tileIfPresent(index);
+    if (tile == nullptr) {
+        return;
     }
-    if (!sceneRect.has_value() || !hasImage()) {
+    if (tile->cellHighlightItem != nullptr) {
+        m_scene->removeItem(tile->cellHighlightItem);
+        delete tile->cellHighlightItem;
+        tile->cellHighlightItem = nullptr;
+    }
+    if (!sceneRect.has_value() || tile->item == nullptr) {
         return;
     }
     QPen pen(Qt::red);
     pen.setCosmetic(true);
     pen.setWidth(2);
     auto* item = m_scene->addRect(*sceneRect, pen, Qt::NoBrush);
-    item->setParentItem(m_item);
+    item->setParentItem(tile->item);
     item->setZValue(4.0);
-    m_cellHighlightItem = item;
+    tile->cellHighlightItem = item;
 }
 
-void ImageView::setCellHighlightPath(const std::optional<QPainterPath>& scenePath)
+void ImageView::setCellHighlightPath(const std::optional<QPainterPath>& scenePath,
+    std::size_t index)
 {
-    if (m_cellHighlightItem != nullptr) {
-        m_scene->removeItem(m_cellHighlightItem);
-        delete m_cellHighlightItem;
-        m_cellHighlightItem = nullptr;
+    auto* tile = tileIfPresent(index);
+    if (tile == nullptr) {
+        return;
     }
-    if (!scenePath.has_value() || !hasImage()) {
+    if (tile->cellHighlightItem != nullptr) {
+        m_scene->removeItem(tile->cellHighlightItem);
+        delete tile->cellHighlightItem;
+        tile->cellHighlightItem = nullptr;
+    }
+    if (!scenePath.has_value() || tile->item == nullptr) {
         return;
     }
     QPen pen(Qt::red);
     pen.setCosmetic(true);
     pen.setWidth(2);
     auto* item = m_scene->addPath(*scenePath, pen, Qt::NoBrush);
-    item->setParentItem(m_item);
+    item->setParentItem(tile->item);
     item->setZValue(4.0);
-    m_cellHighlightItem = item;
+    tile->cellHighlightItem = item;
 }
 
 void ImageView::setAxisIndicator(const QString& horizontal,
@@ -516,9 +836,10 @@ void ImageView::setAxisIndicator(const QString& horizontal,
 void ImageView::setScaleBarWidth(double widthCodeUnits,
     std::optional<LengthUnit> lengthUnit)
 {
+    const auto& tile0 = m_tiles.front();
     m_scaleBarCodeUnitsPerImagePixel = hasImage() && widthCodeUnits > 0.0
-            && std::isfinite(widthCodeUnits) && m_image.width() > 0
-        ? widthCodeUnits / static_cast<double>(m_image.width())
+            && std::isfinite(widthCodeUnits) && tile0.image.width() > 0
+        ? widthCodeUnits / static_cast<double>(tile0.image.width())
         : 0.0;
     m_scaleBarLengthUnit = lengthUnit;
     if (viewport() != nullptr) {
@@ -595,9 +916,10 @@ void ImageView::drawForeground(QPainter* painter, const QRectF& /*rect*/)
         }
     }
 
-    if (m_scaleBarCodeUnitsPerImagePixel > 0.0 && m_item != nullptr) {
-        const auto itemToViewport = m_item->deviceTransform(viewportTransform());
-        const auto imageBounds = itemToViewport.mapRect(m_item->boundingRect())
+    const auto& tile0 = m_tiles.front();
+    if (m_scaleBarCodeUnitsPerImagePixel > 0.0 && tile0.item != nullptr) {
+        const auto itemToViewport = tile0.item->deviceTransform(viewportTransform());
+        const auto imageBounds = itemToViewport.mapRect(tile0.item->boundingRect())
                                      .intersected(QRectF(vp->rect()));
         const auto p0 = itemToViewport.map(QPointF(0.0, 0.0));
         const auto p1 = itemToViewport.map(QPointF(1.0, 0.0));
@@ -623,22 +945,11 @@ void ImageView::setLineToolEnabled(bool enabled) noexcept
 void ImageView::setPlaceholder(const QString& text)
 {
     m_scene->clear();
-    m_gridItems.clear();
-    m_overlayItems.clear();
-    m_pathItems.clear();
-    m_pointItems.clear();
-    m_pointOverlayPointCount = 0;
-    m_crosshairVertical.reset();
-    m_crosshairHorizontal.reset();
-    m_crosshairVerticalItem = nullptr;
-    m_crosshairHorizontalItem = nullptr;
-    m_cellHighlightItem = nullptr;
+    m_tiles.assign(1, Tile{});
     m_lineGuide = nullptr;
     m_lineDragButton = Qt::NoButton;
-    m_item = nullptr;
-    m_image = {};
-    m_logicalSize = {};
     m_placement.reset();
+    m_canvasRect.reset();
     m_scaleBarCodeUnitsPerImagePixel = 0.0;
     m_scaleBarLengthUnit.reset();
     m_placeholderText = text;
@@ -653,26 +964,40 @@ void ImageView::setPlaceholder(const QString& text)
 
 bool ImageView::hasImage() const noexcept
 {
-    return m_item != nullptr && !m_image.isNull();
+    return std::any_of(m_tiles.begin(), m_tiles.end(), [](const Tile& tile) {
+        return tile.item != nullptr && !tile.image.isNull();
+    });
 }
 
 const QImage& ImageView::image() const noexcept
 {
-    return m_image;
+    return m_tiles.front().image;
+}
+
+const QImage& ImageView::image(std::size_t index) const noexcept
+{
+    static const QImage none;
+    const auto* tile = tileIfPresent(index);
+    return tile != nullptr ? tile->image : none;
 }
 
 QSize ImageView::composedImageSize(qreal scaleFactor) const {
-    if (m_image.isNull()) {
+    if (!hasImage()) {
         return {};
     }
-    const auto baseWidth = m_image.width();
-    const auto baseHeight = m_image.height();
+    // The on-screen footprint, not the raster: a stretched display exports
+    // with the aspect it shows.
+    const auto base = displaySize();
+    const auto baseWidth = base.width();
+    const auto baseHeight = base.height();
     // Cap the longer output axis so a large zoom on big data can't allocate a
     // gigabyte image; reduce the factor (preserving aspect) when it would.
+    // The factor may drop below one: a stretched footprint can exceed the
+    // cap on its own, and the cap must still hold.
     constexpr int maxAxis = 8192;
     const auto cap = static_cast<qreal>(maxAxis)
-        / static_cast<qreal>(std::max(baseWidth, baseHeight));
-    const auto effective = std::clamp(scaleFactor, 1.0, std::max(1.0, cap));
+        / std::max(baseWidth, baseHeight);
+    const auto effective = std::min(std::max(scaleFactor, 1.0), cap);
     const auto outWidth = std::max(1,
         static_cast<int>(std::round(baseWidth * effective)));
     const auto outHeight = std::max(1,
@@ -686,7 +1011,7 @@ QImage ImageView::composedImage(qreal scaleFactor) const {
 
 QImage ImageView::composedImage(QSize outputSize, const QFont* exportFont,
                                 bool omitOuterGridEdges) const {
-    if (m_image.isNull() || outputSize.isEmpty()) {
+    if (!hasImage() || outputSize.isEmpty()) {
         return {};
     }
     const int outWidth = outputSize.width();
@@ -701,39 +1026,52 @@ QImage ImageView::composedImage(QSize outputSize, const QFont* exportFont,
     // contours, vector arrows) at the higher pixel count.
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
     painter.setRenderHint(QPainter::Antialiasing, true);
-    // Render the whole scene (pixmap + grid boxes + overlays) from the image's
-    // own pixel rect, so the export matches the on-screen composition, scaled.
+    // Render the whole scene (tiles + grid boxes + overlays) from the tiles'
+    // own footprint, so the export matches the on-screen composition, scaled.
     // Navigation and interaction guides belong only in the display windows.
-    const std::array<QGraphicsItem*, 4> displayGuides{
-        m_lineGuide, m_cellHighlightItem, m_crosshairVerticalItem, m_crosshairHorizontalItem};
-    std::array<bool, 4> guideVisibility{};
-    for (std::size_t i = 0; i < displayGuides.size(); ++i) {
-        if (auto* item = displayGuides[i]) {
-            guideVisibility[i] = item->isVisible();
+    std::vector<std::pair<QGraphicsItem*, bool>> guides;
+    const auto hideGuide = [&guides](QGraphicsItem* item) {
+        if (item != nullptr) {
+            guides.emplace_back(item, item->isVisible());
             item->setVisible(false);
         }
-    }
-    // The raster's scene footprint, not the image rect: on a virtual canvas
-    // the item sits at its cell offset, and the export must follow it.
-    for (auto* item : m_gridItems) {
-        if (auto* rectangle = dynamic_cast<CrispRectItem*>(item)) {
-            rectangle->omitOuterEdges = omitOuterGridEdges;
+    };
+    hideGuide(m_lineGuide);
+    for (const auto& tile : m_tiles) {
+        hideGuide(tile.cellHighlightItem);
+        hideGuide(tile.crosshairVerticalItem);
+        hideGuide(tile.crosshairHorizontalItem);
+        for (auto* item : tile.gridItems) {
+            if (auto* rectangle = dynamic_cast<CrispRectItem*>(item)) {
+                rectangle->omitOuterEdges = omitOuterGridEdges;
+            }
         }
     }
-    m_scene->render(&painter, QRectF(0.0, 0.0, outWidth, outHeight), m_item->sceneBoundingRect(),
+    // The tiles' scene footprint, not the image rect: on a virtual canvas
+    // the item sits at its cell offset, and the export must follow it; over
+    // a zoomed pair only the framed window is exported.
+    const auto source = exportSceneRect();
+    m_scene->render(&painter, QRectF(0.0, 0.0, outWidth, outHeight), source,
                     Qt::IgnoreAspectRatio);
-    for (auto* item : m_gridItems) {
-        if (auto* rectangle = dynamic_cast<CrispRectItem*>(item)) {
-            rectangle->omitOuterEdges = false;
+    for (const auto& tile : m_tiles) {
+        for (auto* item : tile.gridItems) {
+            if (auto* rectangle = dynamic_cast<CrispRectItem*>(item)) {
+                rectangle->omitOuterEdges = false;
+            }
         }
     }
+    // Output pixels per raster pixel of tile 0: the scene-to-output scale
+    // times the tile's own placement scale. The classic scene and the
+    // virtual canvas both reduce this to outWidth over the raster width.
+    const auto& tile0 = m_tiles.front();
+    const double pixelsPerImagePixel = source.width() > 0.0 && tile0.image.width() > 0
+        ? static_cast<double>(outWidth) / source.width()
+            * tile0.sceneRect.width() / tile0.image.width()
+        : 0.0;
     paintScaleBar(&painter, QRectF(0.0, 0.0, outWidth, outHeight), m_scaleBarCodeUnitsPerImagePixel,
-                  static_cast<double>(outWidth) / static_cast<double>(m_image.width()),
-                  m_scaleBarLengthUnit, exportFont);
-    for (std::size_t i = 0; i < displayGuides.size(); ++i) {
-        if (auto* item = displayGuides[i]) {
-            item->setVisible(guideVisibility[i]);
-        }
+                  pixelsPerImagePixel, m_scaleBarLengthUnit, exportFont);
+    for (const auto& [item, visible] : guides) {
+        item->setVisible(visible);
     }
     return out;
 }
@@ -764,19 +1102,38 @@ void ImageView::zoomBy(qreal factor)
     scale(factor, factor);
     m_transformMode = TransformMode::Custom;
     emit zoomChanged();
+    noteViewChanged();
 }
 
 void ImageView::zoomToRect(const QRectF& imageRect, bool confineScene)
 {
-    if (!hasImage() || imageRect.isEmpty()) {
+    const auto& tile0 = m_tiles.front();
+    if (!hasImage() || tile0.item == nullptr || imageRect.isEmpty()) {
+        return;
+    }
+    zoomToSceneRect(tile0.item->mapRectToScene(imageRect), confineScene);
+}
+
+void ImageView::zoomToSceneRect(const QRectF& sceneTarget, bool confineScene)
+{
+    if (!hasImage() || sceneTarget.isEmpty()) {
         return;
     }
     m_transformMode = TransformMode::Custom;
-    const auto sceneTarget = m_item->mapRectToScene(imageRect);
     if (confineScene) {
         m_scene->setSceneRect(sceneTarget);
     }
-    fitInView(sceneTarget, Qt::KeepAspectRatio);
+    fitSceneRect(sceneTarget);
+}
+
+void ImageView::showSceneWindow(const QRectF& sceneRect)
+{
+    if (!hasImage() || sceneRect.isEmpty()) {
+        return;
+    }
+    m_scene->setSceneRect(sceneRect);
+    centerOn(sceneRect.center());
+    noteViewChanged();
 }
 
 void ImageView::panViewport(const QPoint& delta)
@@ -829,13 +1186,21 @@ void ImageView::mousePressEvent(QMouseEvent* event)
         m_panActive = false;
     }
     bool handled = false;
+    // The line tool takes a Shift+middle/right press or a right press; with
+    // it off (a warped view) a plain right press still starts a slice move.
+    const bool shiftPressed = event->modifiers() & Qt::ShiftModifier;
+    const bool linePress = m_lineToolEnabled
+        && (shiftPressed || event->button() == Qt::RightButton);
+    const bool movePress = !m_lineToolEnabled && m_sliceMoveEnabled
+        && event->button() == Qt::RightButton && !shiftPressed;
     if ((event->button() == Qt::MiddleButton || event->button() == Qt::RightButton)
-        && hasImage() && m_lineToolEnabled) {
-        if ((event->modifiers() & Qt::ShiftModifier)
-            || event->button() == Qt::RightButton) {
+        && hasImage() && (linePress || movePress)) {
+        if (shiftPressed || event->button() == Qt::RightButton) {
             m_lineDragButton = event->button();
             m_linePressPosition = event->position().toPoint();
             m_lineDragShiftHeld = event->modifiers() & Qt::ShiftModifier;
+            // The guide and the eventual request belong to the tile pressed.
+            m_lineGuideTile = tileAt(mapToScene(m_linePressPosition));
             // Show the guide immediately for Shift+clicks (explicit line-plot
             // request); for plain right-clicks in 3-D, defer until the drag
             // exceeds the threshold so the guide doesn't flash on a slice move.
@@ -865,6 +1230,14 @@ void ImageView::mouseReleaseEvent(QMouseEvent* event)
     if (!wasLineDrag) {
         QGraphicsView::mouseReleaseEvent(event);
     }
+    // Clamp a raster position to the tile's image.
+    const auto clampedPixel = [](const Tile& tile, const QPointF& position) {
+        return QPoint(
+            std::clamp(static_cast<int>(std::floor(position.x())),
+                0, std::max(0, tile.image.width() - 1)),
+            std::clamp(static_cast<int>(std::floor(position.y())),
+                0, std::max(0, tile.image.height() - 1)));
+    };
     if (wasLineDrag) {
         const auto button = m_lineDragButton;
         const auto shiftHeld = m_lineDragShiftHeld;
@@ -875,30 +1248,38 @@ void ImageView::mouseReleaseEvent(QMouseEvent* event)
             return;
         }
         const auto releasePosition = event->position().toPoint();
-        const auto imagePosition = m_item->mapFromScene(mapToScene(releasePosition));
-        const auto x = std::clamp(static_cast<int>(std::floor(imagePosition.x())),
-            0, m_image.width() - 1);
-        const auto y = std::clamp(static_cast<int>(std::floor(imagePosition.y())),
-            0, m_image.height() - 1);
+        const auto tileIndex = m_lineGuideTile < m_tiles.size()
+            && m_tiles[m_lineGuideTile].item != nullptr ? m_lineGuideTile : std::size_t{0};
+        const auto& tile = m_tiles[tileIndex];
+        const auto pixel = clampedPixel(tile,
+            imagePositionIn(tileIndex, mapToScene(releasePosition)));
         const auto drag = releasePosition - m_linePressPosition;
         constexpr int lineDragThreshold = 6;
         const bool wasDrag = std::abs(drag.x()) > lineDragThreshold
             || std::abs(drag.y()) > lineDragThreshold;
         if (m_sliceMoveEnabled && !shiftHeld && !wasDrag) {
             clearLineGuide();
-            emit sliceMoveRequested(x, y, button);
+            emit tileSliceMoveRequested(
+                static_cast<int>(tileIndex), pixel.x(), pixel.y(), button);
+            if (tileIndex == 0) {
+                emit sliceMoveRequested(pixel.x(), pixel.y(), button);
+            }
         } else if (button == Qt::MiddleButton && wasDrag) {
             // Middle drag does nothing — only shift+middle clicks produce
             // line plots. Right drags are unaffected.
             clearLineGuide();
-        } else if (shiftHeld || wasDrag) {
+        } else if (m_lineToolEnabled && (shiftHeld || wasDrag)) {
             // Leave the guide visible as a temporary preview while the line
             // plot is computed asynchronously.
             const auto effectiveButton = wasDrag
                 ? (std::abs(drag.x()) > std::abs(drag.y())
                     ? Qt::MiddleButton : Qt::RightButton)
                 : button;
-            emit linePlotRequested(x, y, effectiveButton);
+            emit tileLinePlotRequested(static_cast<int>(tileIndex),
+                pixel.x(), pixel.y(), effectiveButton);
+            if (tileIndex == 0) {
+                emit linePlotRequested(pixel.x(), pixel.y(), effectiveButton);
+            }
         } else {
             clearLineGuide();
         }
@@ -911,17 +1292,23 @@ void ImageView::mouseReleaseEvent(QMouseEvent* event)
     const auto drag = releasePosition - m_pressPosition;
     constexpr int minimumDrag = 4;
     if (std::abs(drag.x()) > minimumDrag && std::abs(drag.y()) > minimumDrag) {
+        const auto pressScene = mapToScene(m_pressPosition);
+        const auto releaseScene = mapToScene(releasePosition);
+        emit rubberBandSelectedScene(QRectF(pressScene, releaseScene).normalized());
+        // Tile 0's raster pixels, as the single-tile owner reads them.
         emit rubberBandSelected(QRectF(
-            m_item->mapFromScene(mapToScene(m_pressPosition)),
-            m_item->mapFromScene(mapToScene(releasePosition))).normalized());
+            imagePositionIn(0, pressScene),
+            imagePositionIn(0, releaseScene)).normalized());
         return;
     }
-    const auto imagePosition = m_item->mapFromScene(mapToScene(releasePosition));
-    const auto x = std::clamp(static_cast<int>(std::floor(imagePosition.x())),
-        0, m_image.width() - 1);
-    const auto y = std::clamp(static_cast<int>(std::floor(imagePosition.y())),
-        0, m_image.height() - 1);
-    emit probeClicked(x, y);
+    const auto releaseScene = mapToScene(releasePosition);
+    const auto tileIndex = tileAt(releaseScene);
+    const auto pixel = clampedPixel(m_tiles[tileIndex],
+        imagePositionIn(tileIndex, releaseScene));
+    emit tileProbeClicked(static_cast<int>(tileIndex), pixel.x(), pixel.y());
+    if (tileIndex == 0) {
+        emit probeClicked(pixel.x(), pixel.y());
+    }
 }
 
 void ImageView::mouseMoveEvent(QMouseEvent* event)
@@ -949,11 +1336,16 @@ void ImageView::mouseMoveEvent(QMouseEvent* event)
         }
     }
     const auto scenePosition = mapToScene(event->position().toPoint());
-    const auto imagePosition = m_item->mapFromScene(scenePosition);
+    const auto tileIndex = tileAt(scenePosition);
+    const auto& tile = m_tiles[tileIndex];
+    const auto imagePosition = imagePositionIn(tileIndex, scenePosition);
     const auto x = static_cast<int>(std::floor(imagePosition.x()));
     const auto y = static_cast<int>(std::floor(imagePosition.y()));
-    if (x >= 0 && y >= 0 && x < m_image.width() && y < m_image.height()) {
-        emit probeMoved(x, y);
+    if (x >= 0 && y >= 0 && x < tile.image.width() && y < tile.image.height()) {
+        emit tileProbeMoved(static_cast<int>(tileIndex), x, y);
+        if (tileIndex == 0) {
+            emit probeMoved(x, y);
+        }
     }
 }
 
@@ -967,6 +1359,7 @@ void ImageView::resizeEvent(QResizeEvent* event)
     // A resize changes how much of the raster is on screen even when nothing
     // moved, and in Fit mode fitImage above has just changed the transform.
     emit viewportMoved();
+    noteViewChanged();
 }
 
 void ImageView::changeEvent(QEvent* event)
@@ -991,6 +1384,7 @@ void ImageView::scrollContentsBy(int dx, int dy)
     // raster under the viewport with no placement set, which moves what is
     // visible just as much.
     emit viewportMoved();
+    noteViewChanged();
 }
 
 void ImageView::keyPressEvent(QKeyEvent* event)
@@ -1049,16 +1443,28 @@ void ImageView::wheelEvent(QWheelEvent* event)
 
 void ImageView::showLineGuide(const QPoint& viewPosition)
 {
-    // The guide is a child of the raster item, so it is built in image
-    // (raster-pixel) coordinates like every other overlay.
-    const auto imagePosition = m_item->mapFromScene(mapToScene(viewPosition));
-    const auto width = static_cast<double>(m_image.width());
-    const auto height = static_cast<double>(m_image.height());
+    // The guide is a child of the pressed tile's raster item, so it is built
+    // in that raster's pixel coordinates like every other overlay.
+    const auto tileIndex = m_lineGuideTile < m_tiles.size()
+        && m_tiles[m_lineGuideTile].item != nullptr ? m_lineGuideTile : std::size_t{0};
+    auto& tile = m_tiles[tileIndex];
+    if (tile.item == nullptr) {
+        return;
+    }
+    const auto imagePosition = imagePositionIn(tileIndex, mapToScene(viewPosition));
+    const auto width = static_cast<double>(tile.image.width());
+    const auto height = static_cast<double>(tile.image.height());
 
     const auto drag = viewPosition - m_linePressPosition;
     constexpr int orientThreshold = 8;
     const bool significantDrag = std::abs(drag.x()) > orientThreshold
         || std::abs(drag.y()) > orientThreshold;
+    if (!m_lineToolEnabled) {
+        // With the line tool off a right press is a slice move alone, and
+        // a drag plots nothing: no guide at any distance.
+        clearLineGuide();
+        return;
+    }
 
     // On press (no drag yet), show a slice-move guide (perpendicular).
     // Once the user drags significantly, the action switches to a line
@@ -1080,12 +1486,15 @@ void ImageView::showLineGuide(const QPoint& viewPosition)
         const auto x = std::clamp(imagePosition.x(), 0.0, width);
         line = QLineF(x, 0.0, x, height);
     }
+    if (m_lineGuide != nullptr && m_lineGuide->parentItem() != tile.item) {
+        clearLineGuide();
+    }
     if (m_lineGuide == nullptr) {
         QPen pen(Qt::white);
         pen.setStyle(Qt::DashLine);
         pen.setCosmetic(true);
         m_lineGuide = m_scene->addLine(line, pen);
-        m_lineGuide->setParentItem(m_item);
+        m_lineGuide->setParentItem(tile.item);
         m_lineGuide->setZValue(3.0);
     } else {
         m_lineGuide->setLine(line);
@@ -1104,12 +1513,11 @@ void ImageView::updateLineGuide(const QPoint& viewPosition)
 
 void ImageView::setActiveBorder(bool active)
 {
-    if (active) {
-        setStyleSheet(QStringLiteral(
-            "QGraphicsView { border: 2px solid #ff8800; }"));
-    } else {
-        setStyleSheet(QString());
-    }
+    // The same width either way: a border that grew would shrink the
+    // viewport, refit the view and redraw every warp on it.
+    setStyleSheet(active
+            ? QStringLiteral("QGraphicsView { border: 2px solid #ff8800; }")
+            : QStringLiteral("QGraphicsView { border: 2px solid transparent; }"));
 }
 
 void ImageView::clearLineGuide()
@@ -1123,36 +1531,138 @@ void ImageView::clearLineGuide()
 
 void ImageView::fitImage()
 {
-    if (m_item != nullptr) {
-        resetTransform();
-        fitInView(m_item, Qt::KeepAspectRatio);
+    if (!hasImage()) {
+        return;
     }
+    resetTransform();
+    // A pair layout's canvas is what Fit frames, so the panel showing one
+    // layer at a time keeps one zoom as the shown layer changes. A remote
+    // virtual canvas keeps framing the fetched window, as it always has.
+    if (m_canvasRect.has_value() && !m_placement.has_value()) {
+        fitSceneRect(*m_canvasRect);
+    } else {
+        fitSceneRect(tilesRect());
+    }
+}
+
+void ImageView::fitSceneRect(const QRectF& rect)
+{
+    if (viewport() == nullptr) {
+        return;
+    }
+    if (rect.isEmpty()) {
+        return;
+    }
+    // A pane collapsed below the margin still gets a transform, so the view
+    // always carries the stretch it was given (isotropicScale, export size);
+    // the next resize refits it properly.
+    constexpr int margin = 2;
+    const QRectF viewRect
+        = viewport()->rect().adjusted(margin, margin, -margin, -margin);
+    const auto viewWidth = std::max(1.0, viewRect.width());
+    const auto viewHeight = std::max(1.0, viewRect.height());
+    const auto scale = std::min(
+        viewWidth / (rect.width() * m_stretch.x()),
+        viewHeight / (rect.height() * m_stretch.y()));
+    setTransform(QTransform::fromScale(
+        scale * m_stretch.x(), scale * m_stretch.y()));
+    centerOn(rect.center());
+    noteViewChanged();
+}
+
+void ImageView::setDisplayStretch(qreal sx, qreal sy)
+{
+    const auto sane = [](qreal value) {
+        return std::isfinite(value) && value > 0.0 ? value : 1.0;
+    };
+    const QPointF stretch(sane(sx), sane(sy));
+    if (stretch == m_stretch) {
+        // Re-applying an equal transform would recenter a virtual canvas.
+        return;
+    }
+    const auto previous = m_stretch;
+    m_stretch = stretch;
+    if (!hasImage()) {
+        return;
+    }
+    switch (m_transformMode) {
+    case TransformMode::Fit:
+        fitImage();
+        break;
+    case TransformMode::FixedScale:
+        applyFixedScale();
+        break;
+    case TransformMode::Custom: {
+        // Keep the zoom and what is under the viewport centre; only the
+        // ratio of the axes changes.
+        const auto centre
+            = mapToScene(viewport()->rect()).boundingRect().center();
+        setTransform(QTransform::fromScale(
+            m_stretch.x() / previous.x(), m_stretch.y() / previous.y()), true);
+        centerOn(centre);
+        break;
+    }
+    }
+    emit viewportMoved();
+    noteViewChanged();
+}
+
+qreal ImageView::isotropicScale() const
+{
+    return transform().m11() / m_stretch.x();
+}
+
+QSizeF ImageView::displaySize() const
+{
+    if (!hasImage()) {
+        return {};
+    }
+    // Counted by rasters on show, not list length: a cleared overlay slot
+    // must not turn a single raster into a footprint measurement. A lone
+    // raster on a layout canvas (a warp drawn for the screen) is not its own
+    // footprint: its pixels cover the scene rect it was placed over. On a
+    // virtual canvas the pixels are the cells, so the raster is.
+    const auto placed = std::count_if(m_tiles.begin(), m_tiles.end(),
+        [](const Tile& tile) { return tile.item != nullptr && !tile.image.isNull(); });
+    if (placed == 1 && (!m_canvasRect.has_value() || m_placement.has_value())) {
+        const auto& tile0 = *std::find_if(m_tiles.begin(), m_tiles.end(),
+            [](const Tile& tile) { return tile.item != nullptr && !tile.image.isNull(); });
+        return {tile0.image.width() * m_stretch.x(),
+            tile0.image.height() * m_stretch.y()};
+    }
+    // Several tiles, or a layout canvas: the footprint is in display units.
+    const auto footprint = exportSceneRect();
+    return {footprint.width() * m_stretch.x(), footprint.height() * m_stretch.y()};
 }
 
 void ImageView::applyFixedScale()
 {
-    if (m_item == nullptr) {
+    if (!hasImage()) {
         return;
     }
     const auto factor = static_cast<qreal>(m_fixedScaleFactor);
     QTransform desired;
-    if (m_placement.has_value()) {
-        // Virtual canvas: scene units are finest cells and the item transform
-        // already maps raster pixels onto cells, so the view scales cells to
-        // screen pixels directly.
-        desired = QTransform::fromScale(factor, factor);
-    } else {
-        const auto logicalWidth = std::max(1, m_logicalSize.width());
-        const auto logicalHeight = std::max(1, m_logicalSize.height());
+    if (m_placement.has_value() || m_canvasRect.has_value()) {
+        // Placed tiles: scene units are display units (finest cells on the
+        // virtual canvas) and the item transforms already map raster pixels
+        // onto them, so the view scales scene units to screen pixels directly.
         desired = QTransform::fromScale(
-            factor * logicalWidth / std::max(1, m_image.width()),
-            factor * logicalHeight / std::max(1, m_image.height()));
+            factor * m_stretch.x(), factor * m_stretch.y());
+    } else {
+        const auto& tile0 = m_tiles.front();
+        const auto logicalWidth = std::max(1, tile0.logicalSize.width());
+        const auto logicalHeight = std::max(1, tile0.logicalSize.height());
+        desired = QTransform::fromScale(
+            factor * m_stretch.x() * logicalWidth / std::max(1, tile0.image.width()),
+            factor * m_stretch.y() * logicalHeight
+                / std::max(1, tile0.image.height()));
     }
     // Equal-transform replacements must not touch the view: re-setting the
     // same matrix would recenter the scroll position on a virtual canvas.
     if (transform() != desired) {
         setTransform(desired);
     }
+    noteViewChanged();
 }
 
 } // namespace amrvis::qt

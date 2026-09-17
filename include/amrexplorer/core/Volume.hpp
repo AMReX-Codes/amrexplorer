@@ -92,6 +92,21 @@ struct VolumeSampleRequest {
         const VolumeSampleRequest&) = default;
 };
 
+// One implicit surface drawn inside the volume march: the points where the
+// trilinearly interpolated field equals `value`. The field may differ from
+// the volume's; it is sampled onto a grid of the same geometry (region,
+// level, composition, budget) as the volume's, so the two line up voxel for
+// voxel. The opacity is applied once per crossing, not per ray sample.
+struct VolumeIsosurface {
+    FieldId field;
+    int component = 0;
+    double value = 0.0;               // in field units
+    std::uint32_t color = 0xFFFFFFU;  // 0x00RRGGBB
+    float opacity = 1.0F;             // [0, 1]
+    friend bool operator==(const VolumeIsosurface&, const VolumeIsosurface&)
+        = default;
+};
+
 struct VolumeRenderRequest {
     DatasetId dataset;
     FieldId field;
@@ -121,6 +136,11 @@ struct VolumeRenderRequest {
     // and from the grid cache key, and one cached grid serves both.
     SamplingPolicy sampling = SamplingPolicy::Linear;
     std::uint64_t maximumVoxels = defaultVolumeVoxelBudget;
+    // Whether the volume itself is drawn. Off, its grid is not even sampled
+    // and `range` / `transfer` only decide what usedRange reports; at least
+    // one of the volume and the isosurface must be on.
+    bool showVolume = true;
+    std::optional<VolumeIsosurface> isosurface;
     friend bool operator==(const VolumeRenderRequest&,
         const VolumeRenderRequest&) = default;
 };
@@ -195,6 +215,8 @@ struct VolumeFrame {
 // dataset: every field bounded and finite. Empty when valid.
 [[nodiscard]] std::vector<std::string> validateVolumeTransferFunction(
     const VolumeTransferFunction& transfer);
+[[nodiscard]] std::vector<std::string> validateVolumeIsosurface(
+    const VolumeIsosurface& isosurface);
 [[nodiscard]] std::vector<std::string> validateVolumeSampleRequest(
     const VolumeSampleRequest& request, int datasetDimension);
 [[nodiscard]] std::vector<std::string> validateVolumeRenderRequest(
@@ -203,6 +225,11 @@ struct VolumeFrame {
 // The sampling fields of a render request, so the one validator above and the
 // sampler itself see the same values.
 [[nodiscard]] VolumeSampleRequest volumeSampleRequestOf(
+    const VolumeRenderRequest& request);
+// The isosurface's grid: volumeSampleRequestOf with the field and component
+// swapped, so the two grids share every other parameter and hence their dims
+// and region. nullopt when the request has no isosurface.
+[[nodiscard]] std::optional<VolumeSampleRequest> isosurfaceSampleRequestOf(
     const VolumeRenderRequest& request);
 
 } // namespace amrvis

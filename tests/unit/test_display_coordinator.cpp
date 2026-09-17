@@ -89,9 +89,16 @@ int main()
         coordinator.storeFullDomainRange(key, {2.0, 4.0});
         require(nearlyEqual(coordinator.cachedFullDomainRange(key)->second, 4.0),
             "a second store did not overwrite the range");
+        // Another key is kept beside it: two layers in Visible mode store
+        // theirs in turn, and neither may evict the other's.
+        coordinator.storeFullDomainRange(other, {-1.0, 1.0});
+        require(nearlyEqual(coordinator.cachedFullDomainRange(key)->second, 4.0)
+                && nearlyEqual(coordinator.cachedFullDomainRange(other)->first, -1.0),
+            "a second key evicted the first");
         coordinator.invalidateRangeCache();
-        require(!coordinator.cachedFullDomainRange(key).has_value(),
-            "invalidation left the cached range behind");
+        require(!coordinator.cachedFullDomainRange(key).has_value()
+                && !coordinator.cachedFullDomainRange(other).has_value(),
+            "invalidation left a cached range behind");
     }
 
     // --- sharedVisibleRange -------------------------------------------------
@@ -375,6 +382,32 @@ int main()
                 geometry, incompatible)
                 == ImageTransformPolicy::Refit,
             "a displayed-orientation change should refit");
+
+        incompatible = geometry;
+        incompatible.warp = amrvis::DisplayWarp::MappedGrid;
+        require(DisplayCoordinator::rasterTransformPolicy(
+                geometry, incompatible)
+                == ImageTransformPolicy::Refit,
+            "a mapped-grid toggle should refit");
+        require(DisplayCoordinator::rasterTransformPolicy(
+                incompatible, incompatible)
+                == ImageTransformPolicy::Preserve,
+            "a mapped-grid refresh should preserve");
+
+        // The spherical R-Z warp: a refresh preserves; leaving it for the
+        // flat r-theta layout refits, as the layout switch alone did.
+        auto warped = geometry;
+        warped.sphericalDisplay = amrvis::SphericalDisplay::RZ;
+        warped.warp = amrvis::DisplayWarp::SphericalRZ;
+        require(DisplayCoordinator::rasterTransformPolicy(warped, warped)
+                == ImageTransformPolicy::Preserve,
+            "an R-Z warp refresh should preserve");
+        auto flat = warped;
+        flat.sphericalDisplay = amrvis::SphericalDisplay::RTheta;
+        flat.warp = amrvis::DisplayWarp::None;
+        require(DisplayCoordinator::rasterTransformPolicy(warped, flat)
+                == ImageTransformPolicy::Refit,
+            "R-Z to r-theta should refit");
     }
 
     // --- a shared range whose bounds share a logarithm ---------------------

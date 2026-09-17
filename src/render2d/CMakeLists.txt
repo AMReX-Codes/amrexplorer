@@ -2,6 +2,7 @@ add_library(amrexplorer_render2d
     BuiltinPalettes.cpp
     Contours.cpp
     ImageBuffer.cpp
+    MappedGridWarp.cpp
     Palette.cpp
     ScalarRenderer.cpp
     SphericalWarp.cpp

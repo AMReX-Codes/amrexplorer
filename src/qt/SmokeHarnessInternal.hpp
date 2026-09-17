@@ -47,5 +47,7 @@ Outcome dispatchSequence(Context& context);
 Outcome dispatchVolume(Context& context);
 // SmokeHarnessDerived.cpp
 Outcome dispatchDerived(Context& context);
+// Companion: two plotfiles in one window.
+Outcome dispatchCompanion(Context& context);
 
 } // namespace amrvis::qt::smoke

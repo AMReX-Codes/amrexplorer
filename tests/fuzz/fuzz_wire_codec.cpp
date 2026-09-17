@@ -228,7 +228,9 @@ void checkConverted(const fb::RenderedFrameRequestT& wire,
     // -- each call rebuilds the transfer vectors, and this runs every
     // iteration that reaches it.
     const auto roundTripped = codec::toWire(result);
-    if (!finite(result.camera.azimuth) || !finite(result.camera.elevation)
+    if (!finite(result.camera.rotation.w) || !finite(result.camera.rotation.x)
+        || !finite(result.camera.rotation.y) || !finite(result.camera.rotation.z)
+        || !amrvis::nearUnit(result.camera.rotation, amrvis::orthoRotationTolerance)
         || !finite(result.camera.zoom) || !finite(result.region)
         || result.range.has_value() != wire.has_range
         || (result.range
@@ -244,7 +246,16 @@ void checkConverted(const fb::RenderedFrameRequestT& wire,
         // only against a peer that disagrees, which is what the composition
         // check above exists to catch.
         || roundTripped.sampling != wire.sampling
-        || result.outputSize[0] != wire.width || result.outputSize[1] != wire.height) {
+        || result.outputSize[0] != wire.width || result.outputSize[1] != wire.height
+        // Protocol 1.6: the isosurface arrives exactly when the flag says so,
+        // with a finite value and opacity, and the volume flag is carried.
+        || result.showVolume != wire.show_volume
+        || result.isosurface.has_value() != wire.has_isosurface
+        || (result.isosurface
+            && (!finite(result.isosurface->value)
+                || !std::isfinite(result.isosurface->opacity)
+                || result.isosurface->field.value != wire.isosurface_field
+                || result.isosurface->color != wire.isosurface_color))) {
         fail("RenderedFrameRequest converter accepted a bad request");
     }
 }
@@ -424,6 +435,48 @@ void checkConverted(
     }
 }
 
+void checkConverted(const fb::MappedGridPlaneRequestT& wire,
+    const amrvis::MappedGridPlaneRequest& result)
+{
+    if (result.dataset.value != wire.dataset_id
+        || result.normalDirection != wire.normal_direction
+        || result.physicalPosition != wire.physical_position
+        || !finite(result.physicalPosition) || !finite(result.visibleRegion)
+        || result.maximumLevel != wire.maximum_level
+        || result.outputSize[0] != wire.width || result.outputSize[1] != wire.height) {
+        fail("MappedGridPlaneRequest did not convert faithfully");
+    }
+}
+
+void checkConverted(const fb::MappedGridPlaneResponseT& wire,
+    const amrvis::MappedGridPlane& result)
+{
+    const auto nodes = static_cast<std::size_t>(result.width)
+        * static_cast<std::size_t>(result.height);
+    const auto faces = result.faceLevels.size() * nodes;
+    if (result.width < 2 || result.height < 2 || result.a.size() != nodes
+        || result.b.size() != nodes || result.normalLower.size() != faces
+        || result.normalUpper.size() != faces || result.a != wire.a
+        || result.b != wire.b || result.faceLevels != wire.face_levels
+        || !finite(result.physicalRegion)) {
+        fail("MappedGridPlaneResponse did not convert faithfully");
+    }
+    for (std::size_t index = 0; index < result.faceLevels.size(); ++index) {
+        if (result.faceLevels[index] < 0
+            || (index > 0 && result.faceLevels[index] <= result.faceLevels[index - 1])) {
+            fail("MappedGridPlaneResponse levels are not ascending");
+        }
+    }
+    for (const auto* values : {&result.a, &result.b, &result.normalLower,
+             &result.normalUpper}) {
+        for (const auto value : *values) {
+            if (!finite(value)) {
+                fail("MappedGridPlaneResponse carries a non-finite value");
+            }
+        }
+    }
+}
+
 // fromWire on a payload pointer, mirroring the server: a null pointer (the
 // union tag disagreeing with the stored table on a crafted buffer) is the
 // server's "payload is missing" rejection, not a dereference. An accepted
@@ -498,6 +551,12 @@ void exerciseFromWire(const codec::NativeEnvelope& envelope)
         break;
     case fb::Payload::RenderedFrameResponse:
         convert(envelope.payload.AsRenderedFrameResponse());
+        break;
+    case fb::Payload::MappedGridPlaneRequest:
+        convert(envelope.payload.AsMappedGridPlaneRequest());
+        break;
+    case fb::Payload::MappedGridPlaneResponse:
+        convert(envelope.payload.AsMappedGridPlaneResponse());
         break;
     case fb::Payload::NONE:
     case fb::Payload::ListDirectoryRequest:
@@ -814,7 +873,9 @@ std::vector<std::vector<std::uint8_t>> wireSeeds()
         request.composition = amrvis::CompositionPolicy::ExactLevel;
         request.region.lower = {{0.0, 0.0, 0.0}};
         request.region.upper = {{1.0, 2.0, 3.0}};
-        request.camera = {0.5, -0.25, 1.5};
+        // Protocol 1.8: an orientation with every component non-zero, so all
+        // four are in the buffer to be mutated (a zero is left out).
+        request.camera = amrvis::orthoCameraFromAngles(0.5, -0.25, 1.5);
         request.outputSize = {64, 48};
         request.range = amrvis::VolumeRange{0.5, 2.0, true};
         // Not the *wire* default: Nearest is the schema's zero, which
@@ -826,6 +887,12 @@ std::vector<std::vector<std::uint8_t>> wireSeeds()
         request.transfer.opacities = {0.0F, 0.25F, 0.5F, 1.0F};
         request.samplesPerVoxel = 3;
         request.maximumVoxels = 4096;
+        // Protocol 1.6: an isosurface, so its fields are in the buffer to be
+        // mutated, and the volume hidden, since true is the schema default
+        // and would be left out.
+        request.showVolume = false;
+        request.isosurface = amrvis::VolumeIsosurface{
+            amrvis::FieldId{2}, 1, 0.75, 0x40C0FFU, 0.6F};
         add(codec::toWire(request));
         amrvis::VolumeFrame frame;
         frame.width = 2;

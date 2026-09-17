@@ -26,7 +26,7 @@ bool nearlyEqual(double a, double b)
 
 int main(int argc, char* argv[])
 {
-    require(argc == 4, "three test data path arguments are required");
+    require(argc == 5, "four test data path arguments are required");
     const std::filesystem::path plotfile(argv[1]);
     require(!std::filesystem::exists(plotfile / "Level_0" / "Cell"),
         "metadata-only fixture must not contain field data");
@@ -94,5 +94,42 @@ int main(int argc, char* argv[])
         "3-D domain mismatch");
     require(threeDimensional.metrics.payloadFilesRead == 0,
         "3-D metadata read a FAB payload file");
+    require(!threeDimensional.metadata->hasMappedGrid
+            && threeDimensional.mappedGrid == nullptr,
+        "a plotfile without a Nu_nd block reports a mapped grid");
+
+    // The mapped-grid fixture: the same 3-D plotfile with the ERF-style Nu_nd
+    // block. The grid hierarchy is nodal, spans the domain with the two boxes
+    // of its own _H, and shares the plotfile's geometry.
+    const auto mapped = amrvis::PlotfileMetadataReader{}.read(argv[4]);
+    require(mapped.metadata->hasMappedGrid && mapped.mappedGrid != nullptr,
+        "the mapped-grid fixture did not report its mapped grid");
+    require(mapped.metrics.filesRead == 3,
+        "the mapped-grid fixture's Nu_nd_H was not counted in the metrics");
+    const auto& grid = *mapped.mappedGrid;
+    require(grid.dimension == 3 && grid.levels.size() == 1 && grid.fields.size() == 3,
+        "mapped-grid fixture grid shape mismatch");
+    require(grid.fields[2].name == "amrexvec_nu_z"
+            && grid.fields[2].centering == amrvis::Centering::Node,
+        "mapped-grid fixture field mismatch");
+    const auto& gridLevel = grid.levels[0];
+    require(gridLevel.domain.upper.values[0] == 4
+            && gridLevel.domain.upper.values[2] == 4
+            && gridLevel.domain.centering.values[0] == 1
+            && gridLevel.domain.centering.values[2] == 1,
+        "mapped-grid fixture nodal domain mismatch");
+    require(gridLevel.boxes.size() == 2 && gridLevel.blocks.size() == 2
+            && gridLevel.boxes[1].lower.values[0] == 2
+            && gridLevel.blocks[1].filePath == "Level_0/Nu_nd_D_00001",
+        "mapped-grid fixture block index mismatch");
+    require(gridLevel.blocks[1].statistics.has_value()
+            && gridLevel.blocks[1].statistics->maximum.size() == 3
+            && gridLevel.blocks[1].statistics->maximum[2] == 0.125,
+        "mapped-grid fixture block statistics mismatch");
+    require(gridLevel.cellSize == mapped.metadata->levels[0].cellSize
+            && grid.physicalDomain == mapped.metadata->physicalDomain,
+        "mapped-grid fixture geometry differs from the plotfile's");
+    require(amrvis::validateMetadata(grid).empty(),
+        "mapped-grid fixture grid metadata is invalid");
     return 0;
 }

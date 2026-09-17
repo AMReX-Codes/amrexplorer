@@ -266,15 +266,29 @@ ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options,
     return layout;
 }
 
-bool exportAspectMatches(QSize rasterSize, const ExportLayout& layout) {
+bool exportAspectMatches(QSizeF rasterSize, const ExportLayout& layout) {
+    if (rasterSize.isEmpty() || layout.dataRect.isEmpty()) {
+        return false;
+    }
+    // A one-pixel axis is the export size floor, not a rounded value: the
+    // scale is then set by the other axis, and the raster matches when that
+    // scale would round this axis to one pixel or less.
+    const double width = layout.dataRect.width();
+    const double height = layout.dataRect.height();
+    if (width == 1.0 && height > 1.0) {
+        return rasterSize.width() * (height / rasterSize.height()) <= 1.5;
+    }
+    if (height == 1.0 && width > 1.0) {
+        return rasterSize.height() * (width / rasterSize.width()) <= 1.5;
+    }
     // Both output dimensions are rounded independently after applying one
     // scale. Allow half an output pixel on each axis: eliminating the scale
     // gives |h * W - w * H| <= (w + h) / 2. This also handles portrait rasters
     // without amplifying width rounding into a false aspect-ratio change.
-    return !rasterSize.isEmpty() && !layout.dataRect.isEmpty() &&
-           std::abs(static_cast<double>(rasterSize.height()) * layout.dataRect.width() -
-                    static_cast<double>(rasterSize.width()) * layout.dataRect.height()) <=
-               0.5 * (static_cast<double>(rasterSize.width()) + rasterSize.height());
+    return
+           std::abs(rasterSize.height() * layout.dataRect.width() -
+                    rasterSize.width() * layout.dataRect.height()) <=
+               0.5 * (rasterSize.width() + rasterSize.height());
 }
 
 QImage composeExportImage(const QImage& raster, const std::array<ExportAxis, 2>& axes,

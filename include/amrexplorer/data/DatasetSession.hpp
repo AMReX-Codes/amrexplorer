@@ -2,6 +2,7 @@
 
 #include <amrexplorer/cache/CacheMetrics.hpp>
 #include <amrexplorer/core/DerivedField.hpp>
+#include <amrexplorer/core/MappedGrid.hpp>
 #include <amrexplorer/core/Metadata.hpp>
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/core/Statistics.hpp>
@@ -89,6 +90,20 @@ public:
     {
         return false;
     }
+    // Whether a render may carry an isosurface or hide the volume: the same
+    // shape as supportsVolumeSampling, for the same reason -- a peer speaking
+    // an older protocol renders volumes and cannot be asked for either.
+    [[nodiscard]] virtual bool supportsVolumeIsosurface() const noexcept
+    {
+        return false;
+    }
+    // Whether a render may carry a camera with roll -- an orientation the two
+    // angles cannot hold: the same shape again. A peer speaking an older
+    // protocol reads the angles alone and would turn the picture the wrong way.
+    [[nodiscard]] virtual bool supportsVolumeOrientation() const noexcept
+    {
+        return false;
+    }
     [[nodiscard]] virtual VolumeFrame renderVolume(
         const VolumeRenderRequest& request, StopToken cancellation = {})
     {
@@ -96,6 +111,25 @@ public:
         static_cast<void>(cancellation);
         throw std::runtime_error(
             "volume rendering is not supported by this session");
+    }
+
+    // Whether slices can be drawn on the plotfile's mapped (stretched) grid
+    // (core/MappedGrid.hpp): the dataset carries the nodal displacement
+    // MultiFab and this session can read it. False by default, so a remote
+    // peer that cannot be asked, and every test fake, says no.
+    [[nodiscard]] virtual bool supportsMappedGrid() const noexcept
+    {
+        return false;
+    }
+    // The node positions of a slice raster's cells; only meaningful when
+    // supportsMappedGrid() is true.
+    [[nodiscard]] virtual MappedGridPlane requestMappedGridPlane(
+        const MappedGridPlaneRequest& request, StopToken cancellation = {})
+    {
+        static_cast<void>(request);
+        static_cast<void>(cancellation);
+        throw std::runtime_error(
+            "mapped grid is not supported by this session");
     }
 
     // How many of metadata().fields the dataset stores rather than computes;

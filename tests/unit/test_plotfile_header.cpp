@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 
 namespace {
@@ -88,6 +89,51 @@ std::string cellHeaderBody(const std::string& box)
           "FabOnDisk: Cell_D_00000 0\n"
           "\n"                      // AMReX separator before the descriptor
           "((8, (64 11 52 0 1 12 0 1023)),(8, (8 7 6 5 4 3 2 1)))\n";
+}
+
+// A VisMF v2 _H body for one box of `componentCount` components stored in
+// `fileName`: the shape of a mapped-grid Nu_nd_H (nodal box, two components
+// in 2-D), or of anything else a test wants to put beside the Cell_H.
+std::string visMfHeaderBody(
+    const std::string& box, int componentCount, const std::string& fileName)
+{
+    return
+        "2\n"
+        "1\n"
+        + std::to_string(componentCount) + "\n"
+        "0\n"
+        "(1 0\n"
+        + box + "\n"
+        + ")\n"
+          "1\n"
+          "FabOnDisk: " + fileName + " 0\n"
+          "\n"
+          "((8, (64 11 52 0 1 12 0 1023)),(8, (8 7 6 5 4 3 2 1)))\n";
+}
+
+// The trailing extra-MultiFab block ERF writes: one set, one nodal
+// displacement component per dimension, one path per level.
+std::string mappedGridBlock()
+{
+    return
+        "1\n"
+        "2\n"
+        "amrexvec_nu_x\n"
+        "amrexvec_nu_y\n"
+        "Level_0/Nu_nd\n"
+        "Level_1/Nu_nd\n";
+}
+
+// Writes both levels' Nu_nd_H beside an existing valid plotfile.
+void writeMappedGridIndex(const std::filesystem::path& dir, bool nodal = true)
+{
+    const std::string type = nodal ? "(1,1)" : "(0,0)";
+    const std::string upper0 = nodal ? "(8,8)" : "(7,7)";
+    const std::string upper1 = nodal ? "(16,16)" : "(15,15)";
+    writeFile(dir / "Level_0" / "Nu_nd_H",
+        visMfHeaderBody("((0,0) " + upper0 + " " + type + ")", 2, "Nu_nd_D_00000"));
+    writeFile(dir / "Level_1" / "Nu_nd_H",
+        visMfHeaderBody("((0,0) " + upper1 + " " + type + ")", 2, "Nu_nd_D_00000"));
 }
 
 // Materializes a complete, metadata-readable plotfile (Header + both levels'
@@ -196,6 +242,130 @@ int main()
             ++g_failures;
         }
     }
+
+    // Mapped grids: the extra-MultiFab block ERF and REMORA append after the
+    // level data paths. A well-formed block yields the nodal Nu_nd hierarchy
+    // as a second metadata; anything wrong with it leaves hasMappedGrid false
+    // and the open untouched, since this part of the Header is optional and
+    // was never the reader's to reject.
+    const auto readMapped = [](const std::filesystem::path& dir, const char* what)
+        -> std::optional<amrvis::PlotfileMetadataResult> {
+        try {
+            return amrvis::PlotfileMetadataReader{}.read(dir);
+        } catch (const std::exception& error) {
+            std::cerr << "FAILED: " << what << " did not open: " << error.what()
+                      << '\n';
+            ++g_failures;
+            return std::nullopt;
+        }
+    };
+    {
+        const auto dir = scratch / "mapped_erf";
+        writeValidPlotfile(dir);
+        writeMappedGridIndex(dir);
+        writeFile(dir / "Header", validHeaderBody() + mappedGridBlock());
+        if (const auto result = readMapped(dir, "an ERF-style mapped-grid Header")) {
+            require(result->metadata->hasMappedGrid,
+                "an ERF-style Nu_nd block did not set hasMappedGrid");
+            require(result->mappedGrid != nullptr,
+                "an ERF-style Nu_nd block produced no grid metadata");
+            require(result->metrics.filesRead == 5,
+                "the mapped grid's _H files were not counted in the metrics");
+            if (result->mappedGrid) {
+                const auto& grid = *result->mappedGrid;
+                require(!grid.hasMappedGrid,
+                    "the grid metadata must not itself claim a mapped grid");
+                require(grid.dimension == 2 && grid.levels.size() == 2,
+                    "the grid metadata lost the plotfile's shape");
+                require(grid.fields.size() == 2
+                        && grid.fields[0].name == "amrexvec_nu_x"
+                        && grid.fields[1].name == "amrexvec_nu_y"
+                        && grid.fields[0].centering == amrvis::Centering::Node
+                        && grid.fields[1].centering == amrvis::Centering::Node,
+                    "the grid fields are not the two nodal displacement components");
+                const amrvis::IntBox nodalDomain0{{{0, 0, 0}}, {{8, 8, 0}}, {{1, 1, 0}}};
+                const amrvis::IntBox nodalDomain1{{{0, 0, 0}}, {{16, 16, 0}}, {{1, 1, 0}}};
+                require(grid.levels[0].domain == nodalDomain0
+                        && grid.levels[1].domain == nodalDomain1,
+                    "the grid level domains are not the nodal domains");
+                require(grid.levels[0].dataPath == "Level_0/Nu_nd"
+                        && grid.levels[1].dataPath == "Level_1/Nu_nd",
+                    "the grid level data paths are not the Nu_nd paths");
+                require(grid.levels[0].boxes.size() == 1
+                        && grid.levels[0].blocks.size() == 1
+                        && grid.levels[0].boxes[0] == nodalDomain0
+                        && grid.levels[0].blocks[0].filePath == "Level_0/Nu_nd_D_00000",
+                    "the grid blocks were not indexed from Nu_nd_H");
+                require(grid.physicalDomain == result->metadata->physicalDomain
+                        && grid.levels[0].cellSize == result->metadata->levels[0].cellSize
+                        && grid.levels[0].indexOrigin
+                            == result->metadata->levels[0].indexOrigin,
+                    "the grid geometry differs from the plotfile's");
+                require(amrvis::validateMetadata(grid).empty(),
+                    "the grid metadata did not validate");
+            }
+        }
+    }
+    {
+        // REMORA writes a count of 1 and then appends further sets; the Nu_nd
+        // set need not come first, and the sets after it are never read.
+        const auto dir = scratch / "mapped_remora";
+        writeValidPlotfile(dir);
+        writeMappedGridIndex(dir);
+        writeFile(dir / "Header",
+            validHeaderBody()
+            + "1\n"
+              "6\nh\nstflux_temp\nlrflux\nlhflux\nsrflux\nshflux\n"
+              "Level_0/rho2d\nLevel_1/rho2d\n"
+              "2\namrexvec_nu_x\namrexvec_nu_y\n"
+              "Level_0/Nu_nd\nLevel_1/Nu_nd\n"
+              "1\nsustr\nLevel_0/u2d\nLevel_1/u2d\n"
+              "1\nsvstr\nLevel_0/v2d\nLevel_1/v2d\n");
+        if (const auto result = readMapped(dir, "a REMORA-style mapped-grid Header")) {
+            require(result->metadata->hasMappedGrid && result->mappedGrid != nullptr,
+                "a REMORA-style Header with several extra sets lost its mapped grid");
+        }
+    }
+    const auto expectNoMappedGrid = [&](const std::filesystem::path& dir,
+                                        const std::string& header, bool nodal,
+                                        bool writeIndex, const char* what) {
+        writeValidPlotfile(dir);
+        if (writeIndex) {
+            writeMappedGridIndex(dir, nodal);
+        }
+        writeFile(dir / "Header", header);
+        if (const auto result = readMapped(dir, what)) {
+            require(!result->metadata->hasMappedGrid && result->mappedGrid == nullptr,
+                what);
+            require(result->metadata->levels.size() == 2,
+                "a rejected mapped-grid block changed the plotfile's own shape");
+        }
+    };
+    expectNoMappedGrid(scratch / "mapped_truncated",
+        validHeaderBody() + "1\n2\namrexvec_nu_x\n", true, true,
+        "a truncated Nu_nd block must leave hasMappedGrid false");
+    expectNoMappedGrid(scratch / "mapped_missing_index",
+        validHeaderBody() + mappedGridBlock(), true, false,
+        "a Nu_nd block without its _H files must leave hasMappedGrid false");
+    expectNoMappedGrid(scratch / "mapped_wrong_count",
+        validHeaderBody()
+            + "1\n3\namrexvec_nu_x\namrexvec_nu_y\namrexvec_nu_z\n"
+              "Level_0/Nu_nd\nLevel_1/Nu_nd\n",
+        true, true,
+        "a Nu_nd block whose component count is not the dimension must be ignored");
+    expectNoMappedGrid(scratch / "mapped_cell_centered",
+        validHeaderBody() + mappedGridBlock(), false, true,
+        "a Nu_nd_H with cell-centered boxes must be rejected as a mapped grid");
+    expectNoMappedGrid(scratch / "mapped_escaping_path",
+        validHeaderBody()
+            + "1\n2\namrexvec_nu_x\namrexvec_nu_y\n"
+              "../Nu_nd\nLevel_1/Nu_nd\n",
+        true, true,
+        "a Nu_nd path outside the plotfile must be rejected");
+    expectNoMappedGrid(scratch / "mapped_other_names",
+        validHeaderBody() + "1\n2\nfoo\nbar\nLevel_0/Nu_nd\nLevel_1/Nu_nd\n",
+        true, true,
+        "an extra set that is not the displacement set must not become a mapped grid");
 
     // Truncation: the Header ends before a required field. Each case names the
     // first field the reader cannot read.

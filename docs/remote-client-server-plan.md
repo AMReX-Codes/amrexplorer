@@ -328,6 +328,23 @@ teardown. The server half is covered in-process by the raw-socket cases in
 `test_remote_server.cpp`, including that a 1.3 peer is told about the version
 rather than about the list.
 
+Protocol 1.7's mapped-grid gate wants the same check against a pre-1.7
+server binary serving an ERF or REMORA plotfile: View > Mapped Grid is
+greyed with the "predates mapped grids" reason, and the slice still shows
+on its logical grid. Against a current server, `--max-frame-mib` set low
+enough shows the raster coarsen and a zoom re-slice the cells on show. The
+server half -- a 1.6 peer refused by version, an oversized plane refused
+before any block is read -- is in `test_remote_server.cpp`.
+
+Protocol 1.8's camera gate wants the same check against a pre-1.8 server
+binary: the volume window's view carries the "predates free camera
+orientation" tooltip, a drag turns the view about the vertical axis only, and
+the frames match the wireframe drawn over them. Against a current server a
+drag turns the view freely, upside down included. The server half -- a 1.7
+peer sending an orientation refused by version, then answered in its own
+terms -- and a rolled camera rendering the same on both sides are in
+`test_remote_volume.cpp`.
+
 ### 5.3 Handshake and capabilities
 
 The first request must be `HelloRequest`. It will carry:
@@ -369,7 +386,7 @@ The production schema will cover:
 | `CancelRequest` | `CancelAcknowledged` | Request cancellation by request ID |
 | `PingRequest` | `PongResponse` | Explicit health check |
 | `ListDirectoryRequest` (1.1) | `DirectoryListing` | List a server directory's subdirectories, marking plotfiles |
-| `RenderedFrameRequest` (1.2; sampling policy 1.3) | `RenderedFrameResponse` | Render one volume frame on the server: camera, range, transfer lookup, voxel budget and sampling policy in; premultiplied pixels, the range used and sampling metrics out |
+| `RenderedFrameRequest` (1.2; sampling policy 1.3; camera orientation 1.8) | `RenderedFrameResponse` | Render one volume frame on the server: camera, range, transfer lookup, voxel budget and sampling policy in; premultiplied pixels, the range used and sampling metrics out |
 | any request | `ErrorResponse` | Typed terminal failure |
 
 Every ordinary request has exactly one terminal response with the same
@@ -449,8 +466,10 @@ query APIs.
 orthographic camera, the physical region, the output size, an optional
 explicit range (or the request that the server resolve the "Visible" range
 from the sampled grid), the transfer function as an explicit colour/opacity
-lookup, the samples per voxel, a voxel budget and -- from 1.3 -- the march's
-sampling policy (nearest or trilinear, field id 20); the response carries the
+lookup, the samples per voxel, a voxel budget, -- from 1.3 -- the march's
+sampling policy (nearest or trilinear, field id 20) and -- from 1.8 -- the
+camera's orientation as a unit quaternion (fields 28-32) beside the two
+angles an older server reads; the response carries the
 viewport-sized premultiplied image, the range used, and the sampling metrics.
 The server bounds every field before allocating -- output size against the
 negotiated frame, the voxel budget against its own `--max-volume-voxels`

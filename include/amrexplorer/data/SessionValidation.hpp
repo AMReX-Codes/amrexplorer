@@ -2,6 +2,7 @@
 
 #include <amrexplorer/core/DerivedField.hpp>
 #include <amrexplorer/data/DatasetPage.hpp>
+#include <amrexplorer/core/MappedGrid.hpp>
 #include <amrexplorer/data/DatasetSession.hpp>
 
 #include <cstddef>
@@ -40,6 +41,11 @@ void validateSessionParticleSampleResult(
 // and sampling metrics the dataset and the request's budget could produce.
 void validateSessionVolumeResult(const DatasetMetadata& metadata,
     const VolumeRenderRequest& request, const VolumeFrame& frame);
+// A mapped grid's node plane: one node more than the request's raster along
+// each axis, the request's region verbatim, levels up to the request's in
+// ascending order with one face block each, everything finite.
+void validateSessionMappedGridResult(const DatasetMetadata& metadata,
+    const MappedGridPlaneRequest& request, const MappedGridPlane& plane);
 // The derived-field half of an open reply, which the wire decoder cannot check
 // on its own: it does not know how many definitions the request carried. A
 // catalog cannot hold more derived fields than fields, cannot report more of

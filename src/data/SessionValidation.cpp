@@ -308,6 +308,12 @@ void validateSessionVolumeRequest(const DatasetMetadata& metadata,
     }
     requireFieldAndLevel(metadata, request.field, request.maximumLevel, "volume");
     requireComponent(metadata, request.field, request.component, "volume");
+    if (request.isosurface) {
+        requireFieldAndLevel(metadata, request.isosurface->field,
+            request.maximumLevel, "isosurface");
+        requireComponent(metadata, request.isosurface->field,
+            request.isosurface->component, "isosurface");
+    }
     const auto errors = validateVolumeRenderRequest(request, metadata.dimension);
     if (!errors.empty()) {
         throw std::invalid_argument(errors.front());
@@ -391,6 +397,55 @@ void validateSessionVolumeResult(const DatasetMetadata& metadata,
         throw std::invalid_argument(
             "volume frame reports an impossible cache fallback");
     }
+}
+
+void validateSessionMappedGridResult(const DatasetMetadata& metadata,
+    const MappedGridPlaneRequest& request, const MappedGridPlane& plane)
+{
+    if (plane.width != request.outputSize[0] + 1
+        || plane.height != request.outputSize[1] + 1) {
+        throw std::invalid_argument(
+            "mapped-grid plane is not one node larger than the requested raster");
+    }
+    const auto nodes = static_cast<std::size_t>(plane.width)
+        * static_cast<std::size_t>(plane.height);
+    if (plane.a.size() != nodes || plane.b.size() != nodes) {
+        throw std::invalid_argument(
+            "mapped-grid plane node storage does not match its size");
+    }
+    // The region the nodes were laid out for is the request's, verbatim: a
+    // plane for another region would warp the raster to the wrong place.
+    if (plane.physicalRegion != request.visibleRegion) {
+        throw std::invalid_argument(
+            "mapped-grid plane does not cover the requested region");
+    }
+    const auto maximumLevel = std::min(request.maximumLevel, metadata.finestLevel);
+    for (std::size_t index = 0; index < plane.faceLevels.size(); ++index) {
+        const auto level = plane.faceLevels[index];
+        if (level < 0 || level > maximumLevel
+            || (index > 0 && level <= plane.faceLevels[index - 1])) {
+            throw std::invalid_argument(
+                "mapped-grid plane names a level past the request in order");
+        }
+    }
+    if (metadata.dimension != 3 && !plane.faceLevels.empty()) {
+        throw std::invalid_argument("a 2-D mapped-grid plane carries faces");
+    }
+    const auto faces = plane.faceLevels.size() * nodes;
+    if (plane.normalLower.size() != faces || plane.normalUpper.size() != faces) {
+        throw std::invalid_argument(
+            "mapped-grid plane face storage does not match its levels");
+    }
+    for (const auto* values : {&plane.a, &plane.b, &plane.normalLower,
+             &plane.normalUpper}) {
+        for (const auto value : *values) {
+            if (!std::isfinite(value)) {
+                throw std::invalid_argument("mapped-grid plane holds a non-finite value");
+            }
+        }
+    }
+    // The two faces of a node are displaced independently and may cross;
+    // the warp takes their min and max (PlaneMapping's faceSpan).
 }
 
 void validateSessionViewResult(const DatasetMetadata& metadata,

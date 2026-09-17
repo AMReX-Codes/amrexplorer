@@ -72,6 +72,11 @@ struct DatasetMetadata {
     bool hasPhysicalGeometry = true;
     double time = 0.0;
     int coordinateSystem = 0;
+    // True when the plotfile carries a nodal "Nu_nd" MultiFab per level
+    // (ERF, REMORA): each cell corner's displacement from its uniform
+    // position, so slices can be drawn on the stretched mapped grid. The
+    // grid's own metadata is PlotfileMetadataResult::mappedGrid.
+    bool hasMappedGrid = false;
     RealBox physicalDomain;
     std::vector<LevelMetadata> levels;
     std::vector<FieldMetadata> fields;

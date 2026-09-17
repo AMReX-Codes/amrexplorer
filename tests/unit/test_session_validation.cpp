@@ -240,6 +240,95 @@ int main()
             "a line request without a region was rejected");
     }
 
+    // A mapped grid's node plane against its request and catalog.
+    {
+        const auto metadata = dataset(3);
+        MappedGridPlaneRequest request;
+        request.dataset = DatasetId{1};
+        request.normalDirection = 2;
+        request.visibleRegion = metadata.physicalDomain;
+        request.maximumLevel = 1;
+        request.outputSize = {2, 3};
+        MappedGridPlane plane;
+        plane.width = 3;
+        plane.height = 4;
+        plane.physicalRegion = metadata.physicalDomain;
+        plane.a.assign(12, 1.0);
+        plane.b.assign(12, 2.0);
+        plane.faceLevels = {0, 1};
+        plane.normalLower.assign(24, 0.0);
+        plane.normalUpper.assign(24, 1.0);
+        requireAccepted([&] {
+            validateSessionMappedGridResult(metadata, request, plane);
+        }, "a valid mapped-grid plane was rejected");
+
+        auto wrongSize = plane;
+        wrongSize.width = 4;
+        wrongSize.a.assign(16, 1.0);
+        wrongSize.b.assign(16, 2.0);
+        wrongSize.normalLower.assign(32, 0.0);
+        wrongSize.normalUpper.assign(32, 1.0);
+        requireRejected([&] {
+            validateSessionMappedGridResult(metadata, request, wrongSize);
+        }, "a mapped-grid plane of another size was accepted");
+
+        auto unknownLevel = plane;
+        unknownLevel.faceLevels = {0, 2};
+        requireRejected([&] {
+            validateSessionMappedGridResult(metadata, request, unknownLevel);
+        }, "a mapped-grid plane naming a level past the catalog was accepted");
+
+        auto unsorted = plane;
+        unsorted.faceLevels = {1, 0};
+        requireRejected([&] {
+            validateSessionMappedGridResult(metadata, request, unsorted);
+        }, "a mapped-grid plane with unsorted levels was accepted");
+
+        auto shortFaces = plane;
+        shortFaces.normalUpper.resize(12);
+        requireRejected([&] {
+            validateSessionMappedGridResult(metadata, request, shortFaces);
+        }, "a mapped-grid plane short of a face block was accepted");
+
+        // Faces may cross: each is displaced on its own and the warp
+        // orders them.
+        auto crossedFaces = plane;
+        crossedFaces.normalLower[5] = 2.0;
+        requireAccepted([&] {
+            validateSessionMappedGridResult(metadata, request, crossedFaces);
+        }, "a mapped-grid plane with crossed faces was refused");
+
+        auto elsewhere = plane;
+        elsewhere.physicalRegion.lower[0] += 1.0;
+        elsewhere.physicalRegion.upper[0] += 1.0;
+        requireRejected([&] {
+            validateSessionMappedGridResult(metadata, request, elsewhere);
+        }, "a mapped-grid plane for another region was accepted");
+
+        auto coarse = request;
+        coarse.maximumLevel = 0;
+        requireRejected([&] {
+            validateSessionMappedGridResult(metadata, coarse, plane);
+        }, "a mapped-grid plane with faces past the requested level was accepted");
+
+        auto infinite = plane;
+        infinite.b[3] = std::numeric_limits<double>::infinity();
+        requireRejected([&] {
+            validateSessionMappedGridResult(metadata, request, infinite);
+        }, "a mapped-grid plane with a non-finite node was accepted");
+
+        auto flatFaces = plane;
+        flatFaces.faceLevels.clear();
+        flatFaces.normalLower.clear();
+        flatFaces.normalUpper.clear();
+        requireAccepted([&] {
+            validateSessionMappedGridResult(dataset(2), request, flatFaces);
+        }, "a 2-D mapped-grid plane without faces was rejected");
+        requireRejected([&] {
+            validateSessionMappedGridResult(dataset(2), request, plane);
+        }, "a 2-D mapped-grid plane with faces was accepted");
+    }
+
     // The page region, at the trust boundary rather than inside the builder.
     for (const int dimension : {2, 3}) {
         const auto metadata = dataset(dimension);
@@ -1205,6 +1294,31 @@ int main()
             requireRejected([&] {
                 validateSessionVolumeRequest(metadata, id, bad);
             }, "a structurally invalid volume request was accepted");
+            // The isosurface's field is checked against the catalog too, and
+            // named as its own so the message says which of the two failed.
+            bad = request;
+            bad.isosurface = VolumeIsosurface{FieldId{0}, 0, 0.5, 0xFFFFFFU, 1.0F};
+            requireAccepted([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "a well-formed isosurface was rejected");
+            bad.showVolume = false;
+            requireAccepted([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "an isosurface-only request was rejected");
+            bad.isosurface->field = FieldId{3};
+            requireRejectedWith([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "isosurface field", "an unknown isosurface field was accepted");
+            bad.isosurface->field = FieldId{0};
+            bad.isosurface->component = 1;
+            requireRejectedWith([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "isosurface component", "a missing isosurface component was accepted");
+            bad = request;
+            bad.showVolume = false;
+            requireRejected([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "a request rendering nothing was accepted");
         }
 
         VolumeFrame frame;

@@ -127,6 +127,178 @@ bool clipToBox(const Ray& ray, const SlabAxes& axes, const RealBox& box,
     return tExit > tEnter && std::isfinite(tEnter) && std::isfinite(tExit);
 }
 
+// Trilinear sampling, shared by the volume and the isosurface grids. The
+// bracket is the geometry of a sample -- per axis, the two voxel indices
+// around it and how far it sits between them -- and depends only on the
+// position and the dims, so one bracket serves both grids at a sample.
+//
+// Voxel i is centred at i + 0.5 in this coordinate (Volume.hpp says so),
+// which is why the nearest rule can just take the floor -- the half voxel
+// cancels. Interpolating has to put it back, or the picture moves half a
+// voxel and still looks entirely plausible. Outside the outermost centres the
+// bracket collapses onto the edge voxel and the weight goes to zero, so the
+// outer half-voxel shell reads flat -- the same value the nearest rule gives
+// there, which is what keeps a uniform slab compositing to its analytic
+// opacity rather than fading at the boundary.
+struct Bracket {
+    std::array<std::array<std::size_t, 2>, 3> index{};
+    std::array<double, 3> weight{};
+};
+
+Bracket bracketFor(const std::array<double, 3>& at,
+    const std::array<int, 3>& dims) noexcept
+{
+    Bracket bracket;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const auto centred = at[axis] - 0.5;
+        const auto limit = static_cast<double>(dims[axis] - 1);
+        double low = 0.0;
+        double fraction = 0.0;
+        // Ordered so NaN takes the first branch's false arm, the way the
+        // march's clamp does: it reads voxel zero rather than casting
+        // something undefined. A single-voxel axis has limit 0 and lands here
+        // too, with both ends on voxel zero.
+        if (centred > 0.0) {
+            if (centred < limit) {
+                low = std::floor(centred);
+                fraction = centred - low;
+            } else {
+                low = limit;
+            }
+        }
+        bracket.index[axis][0] = static_cast<std::size_t>(low);
+        bracket.index[axis][1]
+            = static_cast<std::size_t>(low < limit ? low + 1.0 : limit);
+        bracket.weight[axis] = fraction;
+    }
+    return bracket;
+}
+
+// The eight corner values a sample interpolates, kept from one sample to the
+// next. At two or more samples per voxel a ray takes several steps inside
+// one cell -- four of them at the High preset -- and the corners do not
+// change while it does, so the fetches and the coverage tests are the same
+// work repeated. One of these lives per ray and per grid, not per frame, so
+// the march stays a pure function of the sample's index.
+//
+// Corners are kept as the grid holds them, uncovered ones included, with a
+// bit per corner saying which those were: what a caller substitutes for an
+// uncovered corner (if anything) can change within a cell, so a cell stored
+// already-substituted could not be reused across the sample that changed it.
+struct CellCache {
+    std::array<std::size_t, 3> low{};
+    std::array<double, 8> corner{};
+    unsigned uncovered = 0;
+    bool largeValues = false;
+    bool loaded = false;
+};
+
+// Loads the cell the bracket names unless the cache already holds it.
+// `covered` says which corner values count: the volume's rule is the range's
+// (a non-positive value under a logarithmic range is not showable), the
+// isosurface's is finiteness.
+template <class Covered>
+void loadCell(const VolumeGrid& grid, std::size_t rowStride,
+    std::size_t slabStride, const Bracket& bracket, CellCache& cache,
+    Covered covered)
+{
+    const std::array<std::size_t, 3> low{
+        bracket.index[0][0], bracket.index[1][0], bracket.index[2][0]};
+    if (cache.loaded && cache.low == low) {
+        return;
+    }
+    cache.uncovered = 0;
+    for (std::size_t k = 0; k < 2; ++k) {
+        for (std::size_t j = 0; j < 2; ++j) {
+            for (std::size_t i = 0; i < 2; ++i) {
+                const auto corner = i + 2 * j + 4 * k;
+                const auto offset = bracket.index[0][i]
+                    + rowStride * bracket.index[1][j]
+                    + slabStride * bracket.index[2][k];
+                const auto value = static_cast<double>(grid.values[offset]);
+                if (!covered(value)) {
+                    cache.uncovered |= 1U << corner;
+                }
+                cache.corner[corner] = value;
+            }
+        }
+    }
+    cache.largeValues = std::any_of(
+        cache.corner.begin(), cache.corner.end(), [](double value) {
+            return std::abs(value) > std::numeric_limits<double>::max() / 2.0;
+        });
+    cache.loaded = true;
+    cache.low = low;
+}
+
+// Seven interpolations along the axes in turn rather than eight corners each
+// weighted by a product: the same value, and the weight products are what
+// this spends its time on. Only extreme cells need the more expensive
+// interpolation: their finite corners can have an overflowing difference.
+// Decided once per cell, dispatched once per sample.
+double interpolate(const CellCache& cache, const std::array<double, 8>& corner,
+    const Bracket& bracket) noexcept
+{
+    const auto& weight = bracket.weight;
+    const auto blend = [&](const auto& between) {
+        const auto lowY = between(between(corner[0], corner[1], weight[0]),
+            between(corner[2], corner[3], weight[0]), weight[1]);
+        const auto highY = between(between(corner[4], corner[5], weight[0]),
+            between(corner[6], corner[7], weight[0]), weight[1]);
+        return between(lowY, highY, weight[2]);
+    };
+    if (cache.largeValues) {
+        return blend([](double from, double to, double where) {
+            return std::lerp(from, to, where);
+        });
+    }
+    return blend([](double from, double to, double where) {
+        return from + where * (to - from);
+    });
+}
+
+// x^n by repeated multiplication: exact in its rounding wherever the libm's
+// pow may not be, which is what keeps the shading out of the header's caveat.
+double integerPower(double x, int n) noexcept
+{
+    double result = 1.0;
+    double base = x;
+    for (int remaining = n; remaining > 0; remaining >>= 1) {
+        if ((remaining & 1) != 0) {
+            result *= base;
+        }
+        base *= base;
+    }
+    return result;
+}
+
+// The isosurface resolved for the march: linear colour components and the
+// per-hit opacity. Inactive when no surface was asked for or its opacity is
+// zero, which cannot change a pixel.
+struct IsoStyle {
+    bool active = false;
+    double value = 0.0;
+    double red = 0.0;
+    double green = 0.0;
+    double blue = 0.0;
+    double opacity = 0.0;
+};
+
+IsoStyle resolveIsoStyle(const std::optional<VolumeIsosurface>& isosurface)
+{
+    IsoStyle style;
+    if (!isosurface || !(isosurface->opacity > 0.0F)) {
+        return style;
+    }
+    style.active = true;
+    style.value = isosurface->value;
+    style.red = static_cast<double>((isosurface->color >> 16U) & 0xFFU) / 255.0;
+    style.green = static_cast<double>((isosurface->color >> 8U) & 0xFFU) / 255.0;
+    style.blue = static_cast<double>(isosurface->color & 0xFFU) / 255.0;
+    style.opacity = static_cast<double>(isosurface->opacity);
+    return style;
+}
+
 } // namespace
 
 std::optional<int> transferEntryFor(double value, const VolumeRange& range,
@@ -191,31 +363,73 @@ std::optional<std::pair<double, double>> volumeGridRange(
     return std::pair{minimum, maximum};
 }
 
-VolumeFrame raycastVolume(const VolumeGrid& grid,
+VolumeFrame raycastVolume(const RaycastGrids& grids,
     const RaycastSettings& settings, StopToken cancellation)
 {
-    for (const auto extent : grid.dims) {
-        if (extent < 1) {
-            throw std::invalid_argument("volume grid dimensions must be positive");
+    // What was handed in has to match what was asked for, in both
+    // directions: a grid without its settings would be read by nothing, and
+    // settings without their grid would read nothing -- either way a frame
+    // that answers a different question from the one asked.
+    if ((grids.volume != nullptr) != settings.showVolume) {
+        throw std::invalid_argument(
+            "the volume grid must be given exactly when the volume is shown");
+    }
+    if ((grids.isosurface != nullptr) != settings.isosurface.has_value()) {
+        throw std::invalid_argument(
+            "isosurface settings and grid must be given together");
+    }
+    if (grids.volume == nullptr && grids.isosurface == nullptr) {
+        throw std::invalid_argument(
+            "a render needs a volume grid or an isosurface grid");
+    }
+    const auto checkGrid = [](const VolumeGrid& grid) {
+        for (const auto extent : grid.dims) {
+            if (extent < 1) {
+                throw std::invalid_argument("volume grid dimensions must be positive");
+            }
+        }
+        // The budget first, because it is the cheaper refusal: a caller whose
+        // dims are out of range should not have to have allocated the
+        // matching storage to be told so. Note it bounds the grid's *total*
+        // voxels, not the samples on any one ray: an elongated grid within
+        // the budget, say {1, 1, 16777216}, still puts tens of millions of
+        // samples on a single ray. What keeps that answerable is the poll
+        // inside the sample loop, not this check.
+        const auto voxelCount = volumeVoxelCount(grid.dims);
+        if (voxelCount > maxVolumeVoxelBudget) {
+            throw std::invalid_argument("volume grid exceeds the voxel budget");
+        }
+        if (grid.values.size() != voxelCount) {
+            throw std::invalid_argument("volume grid storage does not match its dimensions");
+        }
+        if (!grid.region.valid(3)) {
+            throw std::invalid_argument("volume grid region must have finite positive extent");
+        }
+    };
+    if (grids.volume != nullptr) {
+        checkGrid(*grids.volume);
+    }
+    if (grids.isosurface != nullptr) {
+        checkGrid(*grids.isosurface);
+    }
+    if (grids.volume != nullptr && grids.isosurface != nullptr
+        && (grids.volume->dims != grids.isosurface->dims
+            || !(grids.volume->region == grids.isosurface->region))) {
+        throw std::invalid_argument(
+            "volume and isosurface grids must share dimensions and region");
+    }
+    if (settings.isosurface) {
+        if (const auto errors = validateVolumeIsosurface(*settings.isosurface);
+            !errors.empty()) {
+            throw std::invalid_argument(errors.front());
         }
     }
-    // The budget first, because it is the cheaper refusal: a caller whose
-    // dims are out of range should not have to have allocated the matching
-    // storage to be told so. Note it bounds the grid's *total* voxels, not
-    // the samples on any one ray: an elongated grid within the budget, say
-    // {1, 1, 16777216}, still puts tens of millions of samples on a single
-    // ray. What keeps that answerable is the poll inside the sample loop,
-    // not this check.
-    const auto voxelCount = volumeVoxelCount(grid.dims);
-    if (voxelCount > maxVolumeVoxelBudget) {
-        throw std::invalid_argument("volume grid exceeds the voxel budget");
-    }
-    if (grid.values.size() != voxelCount) {
-        throw std::invalid_argument("volume grid storage does not match its dimensions");
-    }
-    if (!grid.region.valid(3)) {
-        throw std::invalid_argument("volume grid region must have finite positive extent");
-    }
+    // The reference grid: the volume's when it is shown, else the
+    // isosurface's. Everything geometric -- region, pitch, strides, the slab
+    // clip -- and the metrics read from it; with equal dims and region the
+    // strides serve both grids.
+    const VolumeGrid& grid
+        = grids.volume != nullptr ? *grids.volume : *grids.isosurface;
     if (!settings.domain.valid(3)) {
         throw std::invalid_argument("camera domain must have finite positive extent");
     }
@@ -244,10 +458,11 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
         || settings.samplesPerVoxel > maxVolumeSamplesPerVoxel) {
         throw std::invalid_argument("samples per voxel must be within [1, 8]");
     }
-    if (!std::isfinite(settings.camera.azimuth) || !std::isfinite(settings.camera.elevation)
+    if (!nearUnit(settings.camera.rotation, orthoRotationTolerance)
         || !(settings.camera.zoom >= minVolumeZoom)
         || !(settings.camera.zoom <= maxVolumeZoom)) {
-        throw std::invalid_argument("camera is not finite or its zoom is out of range");
+        throw std::invalid_argument(
+            "camera orientation is not a unit quaternion or its zoom is out of range");
     }
 
     const auto width = settings.outputSize[0];
@@ -422,146 +637,54 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     // per sample -- specialising the row renderer on it would remove that, and
     // has not been measured.
     const auto linear = settings.sampling == SamplingPolicy::Linear;
-    // Trilinear over the eight voxel centres bracketing the sample.
-    //
-    // Voxel i is centred at i + 0.5 in this coordinate (Volume.hpp says so),
-    // which is why the nearest rule above can just take the floor -- the half
-    // voxel cancels. Interpolating has to put it back, or the picture moves
-    // half a voxel and still looks entirely plausible.
-    //
-    // Outside the outermost centres the bracket collapses onto the edge voxel
-    // and the weight goes to zero, so the outer half-voxel shell reads flat --
-    // the same value the nearest rule gives there, which is what keeps a
-    // uniform slab compositing to its analytic opacity rather than fading at
-    // the boundary. A corner the range cannot map -- uncovered, or
-    // non-positive under a logarithmic range -- takes the landed voxel's value
-    // instead, the 3-D form of what the slice's bilinear sampler does at a
-    // domain edge (SliceQuery.cpp): clamp the field to its coverage rather
-    // than invent data, and never let one NaN erode a voxel-wide rind. Every
-    // corner is then mappable, so the result is a convex combination of
-    // mappable values and is mappable itself.
-    // The eight corner values a sample interpolates, kept from one sample to
-    // the next. At two or more samples per voxel a ray takes several steps
-    // inside one cell -- four of them at the High preset -- and the corners do
-    // not change while it does, so the fetches and the coverage tests are the
-    // same work repeated. One of these lives per ray, not per frame, so the
-    // march stays a pure function of the sample's index.
-    //
-    // Corners are kept as the grid holds them, uncovered ones included, with a
-    // bit per corner saying which those were. Substitution happens on the way
-    // out instead: what stands in for an uncovered corner is the value of the
-    // voxel the sample landed in, and that changes within a cell, so a cell
-    // stored already-substituted could not be reused across the sample that
-    // changed it. This way every cell is reusable, boundaries included.
-    struct CellCache {
-        std::array<std::size_t, 3> low{};
-        std::array<double, 8> corner{};
-        unsigned uncovered = 0;
-        bool largeValues = false;
-        bool loaded = false;
+    const auto iso = resolveIsoStyle(settings.isosurface);
+    const VolumeGrid* const volume = grids.volume;
+    const VolumeGrid* const isoGrid = iso.active ? grids.isosurface : nullptr;
+    // The volume's trilinear read. A corner the range cannot map --
+    // uncovered, or non-positive under a logarithmic range -- takes the landed
+    // voxel's value instead, the 3-D form of what the slice's bilinear sampler
+    // does at a domain edge (SliceQuery.cpp): clamp the field to its coverage
+    // rather than invent data, and never let one NaN erode a voxel-wide rind.
+    // Every corner is then mappable, so the result is a convex combination of
+    // mappable values and is mappable itself. Substitution happens on the way
+    // out, so every cached cell is reusable, boundaries included.
+    const auto volumeValue = [volume, &mappedRange, gridRowStride, slabStride](
+                                 const Bracket& bracket, double landed,
+                                 CellCache& cache) {
+        loadCell(*volume, gridRowStride, slabStride, bracket, cache,
+            [&mappedRange](double value) {
+                return mappableValue(value, mappedRange);
+            });
+        if (cache.uncovered == 0) {
+            return interpolate(cache, cache.corner, bracket);
+        }
+        auto covered = cache.corner;
+        for (std::size_t corner = 0; corner < 8; ++corner) {
+            if ((cache.uncovered & (1U << corner)) != 0) {
+                covered[corner] = landed;
+            }
+        }
+        return interpolate(cache, covered, bracket);
     };
-    const auto linearValue
-        = [&grid, &mappedRange, gridRowStride, slabStride](
-              const std::array<double, 3>& at, double landed, CellCache& cache) {
-              // Per axis: the two bracketing voxel indices and how far the
-              // sample sits between them.
-              std::array<std::array<std::size_t, 2>, 3> bracket{};
-              std::array<double, 3> weight{};
-              for (std::size_t axis = 0; axis < 3; ++axis) {
-                  const auto centred = at[axis] - 0.5;
-                  const auto limit = static_cast<double>(grid.dims[axis] - 1);
-                  double low = 0.0;
-                  double fraction = 0.0;
-                  // Ordered so NaN takes the first branch's false arm, the way
-                  // the clamp above does: it reads voxel zero rather than
-                  // casting something undefined. A single-voxel axis has
-                  // limit 0 and lands here too, with both ends on voxel zero.
-                  if (centred > 0.0) {
-                      if (centred < limit) {
-                          low = std::floor(centred);
-                          fraction = centred - low;
-                      } else {
-                          low = limit;
-                      }
-                  }
-                  bracket[axis][0] = static_cast<std::size_t>(low);
-                  bracket[axis][1]
-                      = static_cast<std::size_t>(low < limit ? low + 1.0 : limit);
-                  weight[axis] = fraction;
-              }
-              // The same cell as the last sample on this ray: its corners
-              // still hold, uncovered ones included, because they are stored
-              // as the grid has them and substituted on the way out.
-              // Read straight into the cache and interpolate out of it, so a
-              // reused cell costs three comparisons and a fresh one costs no
-              // copy on top of its fetches.
-              if (!cache.loaded || cache.low[0] != bracket[0][0]
-                  || cache.low[1] != bracket[1][0]
-                  || cache.low[2] != bracket[2][0]) {
-                  cache.uncovered = 0;
-                  for (std::size_t k = 0; k < 2; ++k) {
-                      for (std::size_t j = 0; j < 2; ++j) {
-                          for (std::size_t i = 0; i < 2; ++i) {
-                              const auto corner = i + 2 * j + 4 * k;
-                              const auto offset = bracket[0][i]
-                                  + gridRowStride * bracket[1][j]
-                                  + slabStride * bracket[2][k];
-                              const auto value
-                                  = static_cast<double>(grid.values[offset]);
-                              if (!mappableValue(value, mappedRange)) {
-                                  cache.uncovered |= 1U << corner;
-                              }
-                              cache.corner[corner] = value;
-                          }
-                      }
-                  }
-                  cache.largeValues = std::any_of(
-                      cache.corner.begin(), cache.corner.end(), [](double value) {
-                          return std::abs(value) > std::numeric_limits<double>::max() / 2.0;
-                      });
-                  cache.loaded = true;
-                  cache.low = {bracket[0][0], bracket[1][0], bracket[2][0]};
-              }
-              // Seven interpolations along the axes in turn rather than
-              // eight corners each weighted by a product: the same value, and
-              // the weight products are what this loop spends its time on.
-              const auto blend = [&](const std::array<double, 8>& corner,
-                                     const auto& between) {
-                  const auto lowY
-                      = between(between(corner[0], corner[1], weight[0]),
-                          between(corner[2], corner[3], weight[0]), weight[1]);
-                  const auto highY
-                      = between(between(corner[4], corner[5], weight[0]),
-                          between(corner[6], corner[7], weight[0]), weight[1]);
-                  return between(lowY, highY, weight[2]);
-              };
-              // Only extreme cells need the more expensive interpolation:
-              // their finite corners can have an overflowing difference.
-              // Decide once per cell and dispatch once per sample, retaining
-              // the ordinary arithmetic in the seven inner interpolations.
-              const auto interpolate = [&](const std::array<double, 8>& corner) {
-                  if (cache.largeValues) {
-                      return blend(corner, [](double from, double to, double where) {
-                          return std::lerp(from, to, where);
-                      });
-                  }
-                  return blend(corner, [](double from, double to, double where) {
-                      return from + where * (to - from);
-                  });
-              };
-              if (cache.uncovered == 0) {
-                  return interpolate(cache.corner);
-              }
-              // The uncommon path: a cell at the edge of what the levels
-              // cover. The landed voxel stands in for the corners they do not.
-              auto covered = cache.corner;
-              for (std::size_t corner = 0; corner < 8; ++corner) {
-                  if ((cache.uncovered & (1U << corner)) != 0) {
-                      covered[corner] = landed;
-                  }
-              }
-              return interpolate(covered);
-          };
+    // The isosurface's read: always trilinear, whatever the volume's policy,
+    // because under Nearest the field is piecewise constant and its level set
+    // is a staircase of voxel faces with no gradient anywhere. And no
+    // substitution: a plateau stood in for an uncovered corner can cross the
+    // iso-value, which would paint a surface along the coverage boundary. A
+    // cell with any uncovered corner reads as NaN, "no sample here".
+    const auto isoValue = [isoGrid, gridRowStride, slabStride](
+                              const Bracket& bracket, CellCache& cache) {
+        loadCell(*isoGrid, gridRowStride, slabStride, bracket, cache,
+            [](double value) { return std::isfinite(value); });
+        if (cache.uncovered != 0) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        return interpolate(cache, cache.corner, bracket);
+    };
+    const auto isoAt = [&isoValue, &grid](
+                           const std::array<double, 3>& at, CellCache& cache) {
+        return isoValue(bracketFor(at, grid.dims), cache);
+    };
 
     const auto renderRow = [&](int row) {
         auto* pixels = frame.pixels.data() + rowStride * static_cast<std::size_t>(row);
@@ -612,8 +735,17 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                 voxelStart[axis] = (ray.origin[axis] + tEnter * ray.direction[axis]
                     - lower[axis]) * inversePitch[axis];
             }
-            // Per ray: what the previous sample on this ray read.
-            CellCache cell;
+            // Per ray: what the previous sample on this ray read, per grid,
+            // and a scratch cell for the isosurface's refinement and gradient
+            // fetches, which land off the sample path.
+            CellCache volumeCell;
+            CellCache isoCell;
+            CellCache scratch;
+            // The isosurface field at the previous sample; NaN before the
+            // first and after any uncovered one, so the first finite sample
+            // after the region's front face or a coverage gap never counts
+            // as a crossing -- nothing is invented at a boundary.
+            auto previousIso = std::numeric_limits<double>::quiet_NaN();
             double alpha = 0.0;
             double red = 0.0;
             double green = 0.0;
@@ -642,17 +774,157 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                 }
                 const auto offset = index[0] + gridRowStride * index[1]
                     + slabStride * index[2];
+                // One bracket serves both grids: it is the sample's geometry.
+                const auto bracket = linear || isoGrid != nullptr
+                    ? bracketFor(at, grid.dims) : Bracket{};
+                // The isosurface first, so the volume's early continues below
+                // cannot skip its bookkeeping. A crossing lies between the
+                // previous sample and this one, so it composites ahead of this
+                // sample's volume contribution.
+                if (isoGrid != nullptr) {
+                    const auto current = isoValue(bracket, isoCell);
+                    // Two states, "at or above" and "below": a plateau exactly
+                    // at the iso-value is one hit on entry and none per sample,
+                    // and a closed surface is one hit in and one out.
+                    if (std::isfinite(previousIso) && std::isfinite(current)
+                        && (previousIso >= iso.value) != (current >= iso.value)) {
+                        // Bracket the crossing between the two sample
+                        // positions, bisect it a little on the trilinear field,
+                        // then place the hit by one secant step inside what is
+                        // left. A refinement sample that reads NaN stops the
+                        // refinement where it is.
+                        std::array<double, 3> from{};
+                        std::array<double, 3> to = at;
+                        for (std::size_t axis = 0; axis < 3; ++axis) {
+                            from[axis] = at[axis] - voxelStep[axis];
+                        }
+                        double fromValue = previousIso;
+                        double toValue = current;
+                        const bool fromInside = fromValue >= iso.value;
+                        for (int refinement = 0; refinement < isosurfaceRefinementSteps; ++refinement) {
+                            std::array<double, 3> middle{};
+                            for (std::size_t axis = 0; axis < 3; ++axis) {
+                                middle[axis] = 0.5 * (from[axis] + to[axis]);
+                            }
+                            const auto middleValue = isoAt(middle, scratch);
+                            if (!std::isfinite(middleValue)) {
+                                break;
+                            }
+                            if ((middleValue >= iso.value) == fromInside) {
+                                from = middle;
+                                fromValue = middleValue;
+                            } else {
+                                to = middle;
+                                toValue = middleValue;
+                            }
+                        }
+                        // In halves, like the gradient below: values that
+                        // straddle the double range overflow both differences
+                        // to infinity, and infinity over infinity is NaN,
+                        // which would put the hit at voxel zero. The bisections
+                        // above make that unreachable at two steps -- the
+                        // bracket's ends are then a quarter of a sample apart
+                        // -- so this is a guard on the refinement count, and
+                        // the middle stands in if it is ever not finite.
+                        auto where = (0.5 * fromValue - 0.5 * iso.value)
+                            / (0.5 * fromValue - 0.5 * toValue);
+                        if (!std::isfinite(where)) {
+                            where = 0.5;
+                        }
+                        std::array<double, 3> hit{};
+                        for (std::size_t axis = 0; axis < 3; ++axis) {
+                            hit[axis] = from[axis] + where * (to[axis] - from[axis]);
+                        }
+                        // The gradient by central differences half a voxel
+                        // either side, scaled by the reciprocal pitch so an
+                        // anisotropic grid gives the world-space normal. A side
+                        // that reads NaN (a coverage boundary) falls back to
+                        // the one-sided difference against the iso-value
+                        // itself, which is what the field is at the hit.
+                        //
+                        // Differenced in halves and normalised by the largest
+                        // component before the pitch is applied: only the
+                        // direction is wanted, and a field near the top of the
+                        // double range would otherwise overflow the difference
+                        // and lose a perfectly good surface to infinity.
+                        std::array<double, 3> halfDifference{};
+                        std::array<bool, 3> oneSided{};
+                        double largest = 0.0;
+                        for (std::size_t axis = 0; axis < 3; ++axis) {
+                            auto ahead = hit;
+                            auto behind = hit;
+                            ahead[axis] += 0.5;
+                            behind[axis] -= 0.5;
+                            const auto plus = isoAt(ahead, scratch);
+                            const auto minus = isoAt(behind, scratch);
+                            if (std::isfinite(plus) && std::isfinite(minus)) {
+                                halfDifference[axis] = 0.5 * plus - 0.5 * minus;
+                            } else if (std::isfinite(plus)) {
+                                halfDifference[axis] = 0.5 * plus - 0.5 * iso.value;
+                                oneSided[axis] = true;
+                            } else if (std::isfinite(minus)) {
+                                halfDifference[axis] = 0.5 * iso.value - 0.5 * minus;
+                                oneSided[axis] = true;
+                            }
+                            largest = std::max(largest, std::abs(halfDifference[axis]));
+                        }
+                        std::array<double, 3> gradient{};
+                        if (largest > 0.0) {
+                            for (std::size_t axis = 0; axis < 3; ++axis) {
+                                // A one-sided difference spans half the
+                                // distance of a central one.
+                                gradient[axis] = halfDifference[axis] / largest
+                                    * (oneSided[axis] ? 2.0 : 1.0) * inversePitch[axis];
+                            }
+                        }
+                        const auto length
+                            = std::hypot(gradient[0], gradient[1], gradient[2]);
+                        // A flat cell has no orientable surface to shade; the
+                        // crossing is dropped rather than lit arbitrarily.
+                        if (std::isfinite(length) && length > 0.0) {
+                            // Headlight: light, viewer and half vector are all
+                            // -direction, and the normal faces the viewer, so
+                            // every term is a power of |n . direction|.
+                            const auto cosTheta = std::abs(gradient[0] * rays.direction[0]
+                                                      + gradient[1] * rays.direction[1]
+                                                      + gradient[2] * rays.direction[2])
+                                / length;
+                            const auto lit = isosurfaceAmbient + isosurfaceDiffuse * cosTheta;
+                            const auto highlight = isosurfaceSpecular
+                                * integerPower(cosTheta, isosurfaceShininess);
+                            // Each channel clamped before the weight: lit +
+                            // highlight peaks at 1.1, and a channel above the
+                            // weight added to alpha is not a premultiplied
+                            // pixel -- Qt's unpremultiply wraps it dark.
+                            const auto shade = [lit, highlight](double channel) {
+                                return std::min(1.0, channel * lit + highlight);
+                            };
+                            const auto weight = (1.0 - alpha) * iso.opacity;
+                            red += weight * shade(iso.red);
+                            green += weight * shade(iso.green);
+                            blue += weight * shade(iso.blue);
+                            alpha += weight;
+                            if (alpha >= opaqueEnough) {
+                                break;
+                            }
+                        }
+                    }
+                    previousIso = current;
+                }
+                if (volume == nullptr) {
+                    continue;
+                }
                 // The voxel the sample lands in decides whether there is a
                 // sample at all. An uncovered one is not the field's to give
                 // whatever its neighbours hold, so interpolation never fills
                 // a hole in -- which is also what keeps an all-NaN grid
                 // completely transparent.
-                const auto nearest = static_cast<double>(grid.values[offset]);
+                const auto nearest = static_cast<double>(volume->values[offset]);
                 if (!mappableValue(nearest, mappedRange)) {
                     continue;
                 }
                 const auto value
-                    = linear ? linearValue(at, nearest, cell) : nearest;
+                    = linear ? volumeValue(bracket, nearest, volumeCell) : nearest;
                 const auto& entry = entries[static_cast<std::size_t>(
                     valueSlot(value, mappedRange, entryCount))];
                 if (!(entry.stepOpacity > 0.0)) {

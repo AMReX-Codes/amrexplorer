@@ -119,7 +119,7 @@ void MainWindow::requestActiveViewSliceForTest()
 
 bool MainWindow::activeViewSliceMatchesSessionForTest() const
 {
-    if (!m_dataset || m_activeView == nullptr
+    if (!primary().session || m_activeView == nullptr
         || !m_activeView->hasCachedRequest) {
         return false;
     }
@@ -128,7 +128,7 @@ bool MainWindow::activeViewSliceMatchesSessionForTest() const
     // generation, remotely the server's per-connection counter -- so these
     // disagree exactly when a view is still showing the outgoing session.
     return m_activeView->cachedRequest.dataset.value
-        == m_dataset->id().value;
+        == primary().session->id().value;
 }
 
 std::optional<int> MainWindow::prefetchedSequenceFrameForTest() const
@@ -168,6 +168,16 @@ void MainWindow::failNextVisibleSyncForTest()
     visible_sync_test::failNext.store(true);
 }
 
+void MainWindow::armSliceGateForTest()
+{
+    slice_worker_test::gateArmed.store(true);
+}
+
+void MainWindow::releaseSliceGateForTest()
+{
+    slice_worker_test::gateArmed.store(false);
+}
+
 bool MainWindow::visibleSyncWorkerWaitingForTest() const
 {
     return visible_sync_test::waiting.load() > 0;
@@ -191,15 +201,25 @@ std::uint64_t MainWindow::visibleSyncStaleSkipsForTest() const noexcept
 void MainWindow::configureContourSyncForTest(
     int count, bool logarithmic, std::array<double, 3> slicePositions)
 {
-    if (!m_dataset) {
+    if (!primary().session) {
         return;
     }
     m_slicePosition3d = slicePositions;
     // Set range/log through the controller (requestSlice reads it) without
     // signals, so only the single scheduleSliceRequest below re-slices.
-    m_range->setSelection({RangeMode::Visible, std::nullopt, logarithmic});
+    primary().range->setSelection({RangeMode::Visible, std::nullopt, logarithmic});
     m_displayMode = DisplayMode::RasterContours;
     m_contourCount = count;
+    scheduleSliceRequest(false);
+}
+
+void MainWindow::setDisplayModeForTest(DisplayMode mode, int contourCount)
+{
+    if (!primary().session) {
+        return;
+    }
+    m_displayMode = mode;
+    m_contourCount = contourCount;
     scheduleSliceRequest(false);
 }
 
@@ -226,21 +246,21 @@ MainWindow::contourViewProbesForTest()
 
 void MainWindow::enableVisibleRasterForTest()
 {
-    if (!m_dataset) {
+    if (!primary().session) {
         return;
     }
-    m_range->setSelection(
-        {RangeMode::Visible, std::nullopt, m_range->logarithmic()});
+    primary().range->setSelection(
+        {RangeMode::Visible, std::nullopt, primary().range->logarithmic()});
     m_displayMode = DisplayMode::Raster;
     scheduleSliceRequest(false);
 }
 
 void MainWindow::zoomActiveViewForTest()
 {
-    if (!m_dataset || m_activeView == nullptr) {
+    if (!primary().session || m_activeView == nullptr) {
         return;
     }
-    const auto bounds = datasetSampleBounds(m_dataset->metadata());
+    const auto bounds = datasetSampleBounds(primary().session->metadata());
     auto subregion = bounds;
     const auto centre = bounds.center();
     const auto axes = displayAxes(m_activeView->normal);
@@ -308,7 +328,7 @@ bool MainWindow::activeViewRasterMatchesDisplayRangeForTest()
 
 bool MainWindow::activeViewUsesViewportBoundedOutputForTest() const
 {
-    if (!std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset)
+    if (!std::dynamic_pointer_cast<remote::RemoteDatasetSession>(primary().session)
         || m_activeView == nullptr || m_activeView->plane->width <= 0
         || m_activeView->plane->height <= 0) {
         return false;
@@ -331,11 +351,11 @@ bool MainWindow::activeViewUsesNativeOutputForTest() const
 
 bool MainWindow::allViewsUseViewportBoundedOutputForTest() const
 {
-    if (!std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset)) {
+    if (!std::dynamic_pointer_cast<remote::RemoteDatasetSession>(primary().session)) {
         return false;
     }
     const std::array<const PlaneViewState*, 3> threeDimensional{
-        &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
+        &primary().planeViews[0], &primary().planeViews[1], &primary().planeViews[2]};
     const auto check = [&](const PlaneViewState& state) {
         if (state.plane->width <= 1 || state.plane->height <= 1) {
             return false;
@@ -359,11 +379,7 @@ int MainWindow::slicesInFlightForTest() const
 
 bool MainWindow::sliceRequestPendingForTest() const
 {
-    // The debounce timer is normally active while a request is queued, but some
-    // paths stop it without clearing the queue (see openDataset), so check the
-    // pending views too -- the header promises "queued behind the debounce".
-    return (m_sliceDebounce != nullptr && m_sliceDebounce->isActive())
-        || m_pendingAllViews || !m_pendingViews.empty();
+    return sliceRequestQueued();
 }
 
 bool MainWindow::allViewsFixedScaleRasterCoversViewportForTest() const
@@ -389,7 +405,7 @@ bool MainWindow::allViewsFixedScaleRasterCoversViewportForTest() const
         return check(m_view2d);
     }
     const std::array<const PlaneViewState*, 3> threeDimensional{
-        &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
+        &primary().planeViews[0], &primary().planeViews[1], &primary().planeViews[2]};
     return m_viewDimension == 3
         && std::all_of(threeDimensional.begin(), threeDimensional.end(),
             [&](const auto* state) { return check(*state); });
@@ -398,7 +414,7 @@ bool MainWindow::allViewsFixedScaleRasterCoversViewportForTest() const
 bool MainWindow::activeViewHasPhysicalAspectForTest(
     double expectedAspect) const
 {
-    if (!m_dataset || m_activeView == nullptr
+    if (!primary().session || m_activeView == nullptr
         || m_activeView->plane->width <= 0
         || m_activeView->plane->height <= 0 || !(expectedAspect > 0.0)) {
         return false;
@@ -411,7 +427,7 @@ bool MainWindow::activeViewHasPhysicalAspectForTest(
 
 bool MainWindow::activeViewRasterHasCellAspectForTest() const
 {
-    if (!m_openMetadata || m_openMetadata->levels.empty()
+    if (!primary().openMetadata || primary().openMetadata->levels.empty()
         || m_activeView == nullptr || m_activeView->plane->width <= 0
         || m_activeView->plane->height <= 0) {
         return false;
@@ -420,7 +436,7 @@ bool MainWindow::activeViewRasterHasCellAspectForTest() const
     // sample it more coarsely or finely, but at the same aspect. A raster
     // fitted to the physical aspect misses this by the cells' own aspect
     // ratio, far outside the rounding the tolerance allows for.
-    const auto cells = finestNativeOutputSize(*m_openMetadata,
+    const auto cells = finestNativeOutputSize(*primary().openMetadata,
         m_activeView->plane->physicalRegion, m_activeView->normal);
     const auto expected = static_cast<double>(cells[0]) / cells[1];
     const auto actual = static_cast<double>(m_activeView->plane->width)
@@ -436,6 +452,11 @@ void MainWindow::showVolumeWindowForTest()
 bool MainWindow::volumeWindowOpenForTest() const
 {
     return m_volumeController->windowOpen();
+}
+
+VolumeWindow* MainWindow::volumeWindowForTest() const
+{
+    return m_volumeController->window();
 }
 
 double MainWindow::volumeFrameAlphaCoverageForTest() const
@@ -472,10 +493,337 @@ bool MainWindow::scaleBarActionEnabledForTest() const
     return m_scaleBarAction->isEnabled();
 }
 
+bool MainWindow::aspectMenuEnabledForTest() const
+{
+    return m_aspectMenu != nullptr && m_aspectMenu->isEnabled();
+}
+
+AspectMode MainWindow::aspectMenuCheckedModeForTest() const
+{
+    if (m_aspectGroup != nullptr) {
+        if (const auto* checked = m_aspectGroup->checkedAction()) {
+            return static_cast<AspectMode>(checked->data().toInt());
+        }
+    }
+    return m_aspectMode;
+}
+
+bool MainWindow::aspectRadiosEnabledForTest() const
+{
+    return m_aspectCellCountsAction != nullptr && m_aspectPhysicalAction != nullptr
+        && m_aspectCellCountsAction->isEnabled()
+        && m_aspectPhysicalAction->isEnabled();
+}
+
+void MainWindow::setMappedGridForTest(bool enabled)
+{
+    if (m_mappedGridAction != nullptr) {
+        m_mappedGridAction->setChecked(enabled);
+    }
+}
+
+bool MainWindow::mappedGridMenuEnabledForTest() const
+{
+    return m_mappedGridMenu != nullptr && m_mappedGridMenu->isEnabled();
+}
+
+bool MainWindow::displayIsMappedForTest() const
+{
+    return displayIsMapped();
+}
+
+bool MainWindow::activeViewIsMappedForTest() const
+{
+    return m_activeView != nullptr && m_activeView->warp == DisplayWarp::MappedGrid;
+}
+
+QRectF MainWindow::activeViewMappedWindowForTest() const
+{
+    if (m_activeView == nullptr || !m_activeView->hasCachedRequest
+        || !layerFor(*m_activeView).session) {
+        return {};
+    }
+    const auto& window = m_activeView->cachedRequest.displayWindow;
+    const auto axes = displayAxes(m_activeView->normal);
+    const auto h = static_cast<std::size_t>(axes[0]);
+    const auto v = static_cast<std::size_t>(axes[1]);
+    if (!(window.upper[h] > window.lower[h]) || !(window.upper[v] > window.lower[v])) {
+        return {};
+    }
+    return QRectF(QPointF(window.lower[h], window.lower[v]),
+        QPointF(window.upper[h], window.upper[v]));
+}
+
+MainWindow::MappedPanelForTest MainWindow::mappedPanelForTest(int normal, int layer) const
+{
+    MappedPanelForTest panel;
+    // A negative normal reads the 2-D view.
+    const PlaneViewState* found = nullptr;
+    if (normal < 0) {
+        found = m_viewDimension == 2 ? &m_view2d : nullptr;
+    } else if (m_viewDimension == 3 && normal <= 2 && layer >= 0 && layer <= 1
+        && (layer == 0 || m_layers[1].active)) {
+        found = &m_layers[static_cast<std::size_t>(layer)]
+                     .planeViews[static_cast<std::size_t>(normal)];
+    }
+    if (found == nullptr) {
+        return panel;
+    }
+    const auto& state = *found;
+    const auto* view = state.view;
+    if (view == nullptr || view->viewport() == nullptr || !view->hasImage()) {
+        return panel;
+    }
+    panel.warped = isWarped(state.warp);
+    panel.fit = view->isFitToWindow();
+    panel.resliced = state.visibleRegion.has_value();
+    if (state.hasCachedRequest) {
+        const auto& drawn = state.cachedRequest.displayWindow;
+        const auto axes = displayAxes(state.normal);
+        const auto h = static_cast<std::size_t>(axes[0]);
+        const auto v = static_cast<std::size_t>(axes[1]);
+        if (drawn.upper[h] > drawn.lower[h] && drawn.upper[v] > drawn.lower[v]) {
+            panel.window = QRectF(QPointF(drawn.lower[h], drawn.lower[v]),
+                QPointF(drawn.upper[h], drawn.upper[v]));
+        }
+        const auto& pixmap = state.pixmapRegion;
+        if (pixmap.upper[h] > pixmap.lower[h] && pixmap.upper[v] > pixmap.lower[v]) {
+            panel.drawn = QRectF(QPointF(pixmap.lower[h], pixmap.lower[v]),
+                QPointF(pixmap.upper[h], pixmap.upper[v]));
+        }
+    }
+    panel.image = view->image(state.tile).size();
+    panel.tile = view->tileSceneRect(state.tile);
+    const auto ratio = view->devicePixelRatioF();
+    const auto onScreen = view->viewportTransform().mapRect(panel.tile);
+    panel.tileDevice = QRectF(onScreen.x() * ratio, onScreen.y() * ratio,
+        onScreen.width() * ratio, onScreen.height() * ratio);
+    panel.canvas = view->sceneRect();
+    panel.visible = view->mapToScene(view->viewport()->rect()).boundingRect();
+    panel.scale = view->transform().m11();
+    return panel;
+}
+
+void MainWindow::setActiveViewForTest(int normal)
+{
+    if (m_viewDimension != 3 || normal < 0 || normal > 2) {
+        return;
+    }
+    setActiveView(primary().planeViews[static_cast<std::size_t>(normal)]);
+}
+
+QString MainWindow::probeReadoutPanelForTest(int normal, int layer, int x, int y) const
+{
+    if (m_viewDimension != 3 || normal < 0 || normal > 2 || layer < 0 || layer > 1
+        || (layer == 1 && !m_layers[1].active)) {
+        return {};
+    }
+    const auto& state = m_layers[static_cast<std::size_t>(layer)]
+                            .planeViews[static_cast<std::size_t>(normal)];
+    if (!state.plane) {
+        return {};
+    }
+    return probeReadout(state, x, y);
+}
+
+QString MainWindow::probeReadoutActiveViewForTest(int x, int y) const
+{
+    if (m_activeView == nullptr || !m_activeView->plane) {
+        return {};
+    }
+    return probeReadout(*m_activeView, x, y);
+}
+
+int MainWindow::panelTileCountForTest(int normal) const
+{
+    if (normal < 0 || normal > 2) {
+        return 0;
+    }
+    const auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+    int count = 0;
+    for (std::size_t tile = 0; view != nullptr && tile < view->tileCount(); ++tile) {
+        count += view->hasTileImage(tile) ? 1 : 0;
+    }
+    return count;
+}
+
+QRectF MainWindow::panelTileRectForTest(int normal, int tile) const
+{
+    if (normal < 0 || normal > 2 || tile < 0) {
+        return {};
+    }
+    const auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+    return view == nullptr ? QRectF()
+                           : view->tileSceneRect(static_cast<std::size_t>(tile));
+}
+
+bool MainWindow::panelTileVisibleForTest(int normal, int tile) const
+{
+    if (normal < 0 || normal > 2 || tile < 0) {
+        return false;
+    }
+    const auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+    return view != nullptr && view->isTileVisible(static_cast<std::size_t>(tile));
+}
+
+QString MainWindow::layerFieldNameForTest(int layer, int normal) const
+{
+    if (layer < 0 || layer > 1 || normal < 0 || normal > 2) {
+        return {};
+    }
+    return m_layers[static_cast<std::size_t>(layer)]
+        .planeViews[static_cast<std::size_t>(normal)].fieldName;
+}
+
+bool MainWindow::layerLogarithmicSelectedForTest(int layer) const
+{
+    if (layer < 0 || layer > 1) {
+        return false;
+    }
+    const auto* range = m_layers[static_cast<std::size_t>(layer)].range;
+    return range != nullptr && range->logarithmic();
+}
+
+std::pair<double, double> MainWindow::layerDisplayRangeForTest(
+    int layer, int normal) const
+{
+    if (layer < 0 || layer > 1 || normal < 0 || normal > 2) {
+        return {0.0, 0.0};
+    }
+    const auto& state = m_layers[static_cast<std::size_t>(layer)]
+        .planeViews[static_cast<std::size_t>(normal)];
+    return {state.displayMinimum, state.displayMaximum};
+}
+
+bool MainWindow::companionColorBarVisibleForTest() const
+{
+    return m_layers[1].colorBar != nullptr && m_layers[1].colorBar->isVisibleTo(this);
+}
+
+void MainWindow::selectLayerFieldItemForTest(int layer, int index)
+{
+    if (layer < 0 || layer > 1) {
+        return;
+    }
+    selectFieldItem(m_layers[static_cast<std::size_t>(layer)], index);
+}
+
+QString MainWindow::layerSelectedFieldForTest(int layer) const
+{
+    if (layer < 0 || layer > 1) {
+        return {};
+    }
+    const auto* selector = m_layers[static_cast<std::size_t>(layer)].fieldSelector;
+    return selector == nullptr ? QString() : selector->currentText();
+}
+
+void MainWindow::rubberBandZoomPanelSceneForTest(int normal, const QRectF& sceneRect)
+{
+    if (normal < 0 || normal > 2) {
+        return;
+    }
+    setActiveView(primary().planeViews[static_cast<std::size_t>(normal)]);
+    pairRubberBandZoom(normal, sceneRect);
+}
+
+QSize MainWindow::panelTileImageSizeForTest(int normal, int tile) const
+{
+    if (normal < 0 || normal > 2 || tile < 0) {
+        return {};
+    }
+    const auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+    return view == nullptr ? QSize() : view->image(static_cast<std::size_t>(tile)).size();
+}
+
+QSize MainWindow::panelExportSizeForTest(int normal) const
+{
+    if (normal < 0 || normal > 2) {
+        return {};
+    }
+    const auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+    return view == nullptr ? QSize() : view->composedImageSize(1.0);
+}
+
+std::pair<qreal, qreal> MainWindow::panelTransformScaleForTest(int normal) const
+{
+    if (normal < 0 || normal > 2) {
+        return {0.0, 0.0};
+    }
+    const auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+    if (view == nullptr) {
+        return {0.0, 0.0};
+    }
+    return {view->transform().m11(), view->transform().m22()};
+}
+
+bool MainWindow::panelVirtualCanvasActiveForTest(int normal) const
+{
+    if (normal < 0 || normal > 2) {
+        return false;
+    }
+    const auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+    return view != nullptr && view->virtualCanvasActive();
+}
+
+void MainWindow::panStepActiveViewForTest(const QPointF& direction)
+{
+    if (m_activeView != nullptr) {
+        applyPanStep(*m_activeView, direction);
+    }
+}
+
+QRectF MainWindow::panelCanvasRectForTest(int normal) const
+{
+    if (normal < 0 || normal > 2) {
+        return {};
+    }
+    const auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+    return view == nullptr ? QRectF() : view->sceneRect();
+}
+
+bool MainWindow::layerSessionIsRemoteForTest(int layer) const
+{
+    if (layer < 0 || layer > 1) {
+        return false;
+    }
+    return layerIsRemote(m_layers[static_cast<std::size_t>(layer)].planeViews[0]);
+}
+
+void MainWindow::setCompanionPerpendicularScaleForTest(double factor)
+{
+    m_layers[1].perpendicularScale = factor;
+    applyDisplayStretches();
+}
+
+double MainWindow::activeViewStretchRatioForTest() const
+{
+    if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
+        return 0.0;
+    }
+    const auto transform = m_activeView->view->transform();
+    return transform.m11() > 0.0 ? transform.m22() / transform.m11() : 0.0;
+}
+
 std::size_t MainWindow::activeViewGridBoxCountForTest() const
 {
     return m_activeView == nullptr
         ? 0 : m_activeView->view->gridBoxCount();
+}
+
+void MainWindow::setSlicePlanesVisibleForTest(bool visible)
+{
+    m_slicePlanesAction->setChecked(visible);
+}
+
+bool MainWindow::slicePlanesVisibleForTest() const
+{
+    return m_slicePlanesAction->isChecked();
+}
+
+std::size_t MainWindow::activeViewCrosshairCountForTest() const
+{
+    return m_activeView == nullptr || m_activeView->view == nullptr
+        ? 0 : m_activeView->view->crosshairCount();
 }
 
 void MainWindow::rubberBandZoomActiveViewForTest()
@@ -484,10 +832,52 @@ void MainWindow::rubberBandZoomActiveViewForTest()
         || m_activeView->plane->height <= 0) {
         return;
     }
+    // The central half of what the view reports: the plane's pixels for a
+    // classic raster, the tile's scene rect (the physical canvas) on a warp
+    // -- the two forms the rubber-band signals carry.
+    if (isWarped(m_activeView->warp) && m_activeView->view->hasImage()) {
+        const auto tile = m_activeView->view->tileSceneRect(m_activeView->tile);
+        mappedRubberBandZoom(*m_activeView,
+            QRectF(tile.left() + 0.25 * tile.width(), tile.top() + 0.25 * tile.height(),
+                0.5 * tile.width(), 0.5 * tile.height()));
+        return;
+    }
     const auto width = static_cast<double>(m_activeView->plane->width);
     const auto height = static_cast<double>(m_activeView->plane->height);
     rubberBandZoom(*m_activeView,
         QRectF(0.25 * width, 0.25 * height, 0.5 * width, 0.5 * height));
+}
+
+QRectF MainWindow::activeViewPlaneRegionForTest() const
+{
+    if (m_activeView == nullptr || !m_activeView->plane) {
+        return {};
+    }
+    const auto& region = m_activeView->plane->physicalRegion;
+    const auto axes = displayAxes(m_activeView->normal);
+    const auto h = static_cast<std::size_t>(axes[0]);
+    const auto v = static_cast<std::size_t>(axes[1]);
+    return QRectF(QPointF(region.lower[h], region.lower[v]),
+        QPointF(region.upper[h], region.upper[v]));
+}
+
+std::array<double, 4> MainWindow::activeViewTransformAndScrollForTest() const
+{
+    if (m_activeView == nullptr || m_activeView->view == nullptr) {
+        return {0.0, 0.0, 0.0, 0.0};
+    }
+    const auto* view = m_activeView->view;
+    const auto transform = view->transform();
+    return {transform.m11(), transform.m22(),
+        static_cast<double>(view->horizontalScrollBar()->value()),
+        static_cast<double>(view->verticalScrollBar()->value())};
+}
+
+void MainWindow::scrollActiveViewForTest(int dx, int dy)
+{
+    if (m_activeView != nullptr && m_activeView->view != nullptr) {
+        m_activeView->view->panViewport(QPoint(dx, dy));
+    }
 }
 
 void MainWindow::rubberBandZoomRectangularActiveViewForTest()
@@ -584,11 +974,12 @@ int MainWindow::activeViewSlicesInFlightForTest() const
 std::vector<std::array<double, 4>> MainWindow::rubberBandZoomFractionsForTest()
 {
     std::vector<std::array<double, 4>> fractions;
-    if (!m_dataset) {
-        return fractions;
-    }
-    const auto domain = datasetSampleBounds(m_dataset->metadata());
     for (const auto* state : currentViews()) {
+        if (!layerFor(*state).session) {
+            continue;
+        }
+        const auto domain
+            = datasetSampleBounds(layerFor(*state).session->metadata());
         const auto region = requestedRegion(*state);
         const auto axes = displayAxes(state->normal);
         std::array<double, 4> entry{};
@@ -605,10 +996,10 @@ std::vector<std::array<double, 4>> MainWindow::rubberBandZoomFractionsForTest()
 
 double MainWindow::finestCellFractionForTest() const
 {
-    if (!m_dataset || m_dataset->metadata().levels.empty()) {
+    if (!primary().session || primary().session->metadata().levels.empty()) {
         return 0.0;
     }
-    const auto& metadata = m_dataset->metadata();
+    const auto& metadata = primary().session->metadata();
     const auto domain = datasetSampleBounds(metadata);
     const auto& finest = metadata.levels[static_cast<std::size_t>(
         std::max(0, metadata.finestLevel))];
@@ -630,8 +1021,8 @@ bool MainWindow::activeViewHasFocusForTest() const
 
 void MainWindow::focusLevelSelectorForTest()
 {
-    if (m_levelSelector != nullptr) {
-        m_levelSelector->setFocus(::Qt::OtherFocusReason);
+    if (primary().levelSelector != nullptr) {
+        primary().levelSelector->setFocus(::Qt::OtherFocusReason);
     }
 }
 
@@ -718,11 +1109,11 @@ QString MainWindow::scaleMenuCheckedLabelForTest() const
 
 QRectF MainWindow::datasetPhysicalDomainForTest() const
 {
-    if (!m_openMetadata || m_openMetadata->levels.empty()
+    if (!primary().openMetadata || primary().openMetadata->levels.empty()
         || m_activeView == nullptr) {
         return {};
     }
-    const auto domain = datasetSampleBounds(*m_openMetadata);
+    const auto domain = datasetSampleBounds(*primary().openMetadata);
     const auto axes = displayAxes(m_activeView->normal);
     const auto x = static_cast<std::size_t>(axes[0]);
     const auto y = static_cast<std::size_t>(axes[1]);
@@ -732,12 +1123,12 @@ QRectF MainWindow::datasetPhysicalDomainForTest() const
 
 double MainWindow::activeViewFinestCellSizeForTest() const
 {
-    if (!m_openMetadata || m_openMetadata->levels.empty()
+    if (!primary().openMetadata || primary().openMetadata->levels.empty()
         || m_activeView == nullptr) {
         return 0.0;
     }
-    const auto& finest = m_openMetadata->levels[static_cast<std::size_t>(
-        std::max(0, m_openMetadata->finestLevel))];
+    const auto& finest = primary().openMetadata->levels[static_cast<std::size_t>(
+        std::max(0, primary().openMetadata->finestLevel))];
     return finest.cellSize[static_cast<std::size_t>(
         displayAxes(m_activeView->normal)[0])];
 }
@@ -779,7 +1170,7 @@ bool MainWindow::fixedScaleStateMatchesForTest(int factor) const
     const auto* view = m_activeView->view;
     return view->transformMode() == ImageView::TransformMode::FixedScale
         && view->fixedScaleFactor() == factor
-        && std::fabs(view->transform().m11() - factor) <= 1.0e-12
+        && std::fabs(view->isotropicScale() - factor) <= 1.0e-12
         && m_scaleButton->text() == expectedButton && checkedText == wanted;
 }
 
@@ -790,6 +1181,25 @@ void MainWindow::wheelZoomAndPanActiveViewForTest()
     }
     m_activeView->view->zoomBy(1.5);
     m_activeView->view->panViewport(QPoint(11, -7));
+}
+
+void MainWindow::rightClickActiveViewForTest(const QPoint& viewportPosition)
+{
+    if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
+        return;
+    }
+    auto* const viewport = m_activeView->view->viewport();
+    if (viewport == nullptr) {
+        return;
+    }
+    QMouseEvent press(QEvent::MouseButtonPress, QPointF(viewportPosition),
+        viewport->mapToGlobal(viewportPosition), Qt::RightButton, Qt::RightButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(viewport, &press);
+    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(viewportPosition),
+        viewport->mapToGlobal(viewportPosition), Qt::RightButton, Qt::NoButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(viewport, &release);
 }
 
 void MainWindow::shiftDragActiveViewForTest(int dx, int dy)
@@ -925,18 +1335,33 @@ void MainWindow::viewFabForTest(std::size_t index)
     m_fabNavigator->viewEntry(index);
 }
 
+QRectF MainWindow::activeViewVisibleImageRectForTest() const
+{
+    if (m_activeView == nullptr || m_activeView->view == nullptr
+        || !m_activeView->view->hasImage()) {
+        return {};
+    }
+    return m_activeView->view->visibleImageRect();
+}
+
 bool MainWindow::activeViewIsZoomedForTest() const
 {
     return m_activeView != nullptr && m_activeView->visibleRegion.has_value();
 }
 
-void MainWindow::setSphericalSupersampleForTest(int factor)
+bool MainWindow::layerSliceOnItsWayForTest(int normal, int layer) const
 {
-    // Mirror the menu handler: record the factor and re-warp the cached planes.
-    m_sphericalSupersample = factor;
-    if (displayIsSpherical()) {
-        scheduleSliceRequest(true);
+    if (m_viewDimension != 3 || normal < 0 || normal > 2 || layer < 0 || layer > 1) {
+        return false;
     }
+    return sliceOnItsWay(m_layers[static_cast<std::size_t>(layer)]
+                             .planeViews[static_cast<std::size_t>(normal)]);
+}
+
+bool MainWindow::activeViewLineToolEnabledForTest() const
+{
+    return m_activeView != nullptr && m_activeView->view != nullptr
+        && m_activeView->view->lineToolEnabled();
 }
 
 int MainWindow::activeViewImageWidthForTest() const
@@ -986,16 +1411,16 @@ bool MainWindow::activeViewFitsWindowForTest() const
 
 void MainWindow::setCacheBudgetForTest(std::uint64_t bytes)
 {
-    if (m_dataset) {
+    if (primary().session) {
         // The return (whether resident already fits) is irrelevant here; the
         // next non-cache slice re-pins and triggers the fallback.
-        static_cast<void>(m_dataset->setCacheBudget(bytes));
+        static_cast<void>(primary().session->setCacheBudget(bytes));
     }
 }
 
 std::uint64_t MainWindow::cacheResidentBytesForTest() const
 {
-    return m_dataset ? m_dataset->cacheMetrics().residentBytes : 0;
+    return primary().session ? primary().session->cacheMetrics().residentBytes : 0;
 }
 
 void MainWindow::setParticleSelectionForTest(
@@ -1127,6 +1552,11 @@ void MainWindow::startAnimationExportForTest(const QString& path, bool includeCo
         return;
     }
     beginAnimationExport(path, exportOptions(includeColorBar, includeAxes, transparentBackground));
+}
+
+RealBox MainWindow::isoDomainDisplayBoxForTest() const
+{
+    return m_isoWidget->displayDomain();
 }
 
 int MainWindow::backgroundErrorCountForTest() const

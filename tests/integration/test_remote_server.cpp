@@ -654,6 +654,76 @@ int main(int argc, char* argv[])
             "the refusal closed a session that should have survived it");
     }
 
+    // Protocol 1.7: a mapped grid's node plane. A 1.6 peer that sends the
+    // request anyway is told about the version, not about its dataset; a
+    // current peer asking for a plane past the frame budget is refused
+    // before any block is read; on a plotfile without node positions the
+    // answer is a failure the session survives.
+    {
+        auto olderSocket = connectTo("127.0.0.1", server.port());
+        auto olderHello = helloRequest(server.token());
+        olderHello.maximumMinorVersion = 6;
+        auto olderEnvelope = exchange(olderSocket, 1,
+            codec::toWire(olderHello), defaultMaximumFrameBytes, 6);
+        require(codec::inspect(*olderEnvelope).payload
+                == PayloadKind::HelloResponse,
+            "server rejected a 1.6 handshake");
+        const auto olderInfo = codec::fromWire(
+            *olderEnvelope->payload.AsHelloResponse());
+        require(olderInfo.selectedMinorVersion == 6,
+            "server did not negotiate down to a 1.6 peer");
+        MappedGridPlaneRequest planeRequest;
+        planeRequest.dataset = DatasetId{1};
+        planeRequest.normalDirection = 2;
+        planeRequest.visibleRegion.lower = {{0.0, 0.0, 0.0}};
+        planeRequest.visibleRegion.upper = {{1.0, 1.0, 1.0}};
+        planeRequest.outputSize = {4, 4};
+        olderEnvelope = exchange(olderSocket, 2, codec::toWire(planeRequest),
+            olderInfo.maximumFrameBytes, 6);
+        require(codec::inspect(*olderEnvelope).payload == PayloadKind::ErrorResponse
+                && codec::fromWire(*olderEnvelope->payload.AsErrorResponse()).code
+                    == ErrorCode::UnsupportedProtocol,
+            "a 1.6 peer's mapped-grid request was not refused by version");
+
+        auto currentSocket = connectTo("127.0.0.1", server.port());
+        auto currentEnvelope = exchange(currentSocket, 1,
+            codec::toWire(helloRequest(server.token())), defaultMaximumFrameBytes);
+        const auto currentInfo = codec::fromWire(
+            *currentEnvelope->payload.AsHelloResponse());
+        require(currentInfo.selectedMinorVersion >= mappedGridMinorVersion,
+            "the server does not offer protocol 1.7");
+        currentEnvelope = exchange(currentSocket, 2,
+            codec::toWire(OpenDatasetData{
+                std::filesystem::path(argv[1]).string(),
+                16ULL * 1024ULL * 1024ULL, {}}),
+            currentInfo.maximumFrameBytes);
+        require(codec::inspect(*currentEnvelope).payload == PayloadKind::DatasetOpened,
+            "the mapped-grid probe could not open its dataset");
+        const auto plain = codec::fromWire(*currentEnvelope->payload.AsDatasetOpened());
+        require(!plain.catalog.hasMappedGrid && plain.mappedGridComponentNames.empty(),
+            "a plotfile without node positions claimed a mapped grid");
+        planeRequest.dataset = plain.id;
+        planeRequest.outputSize = {maxViewOutputDimension, maxViewOutputDimension};
+        currentEnvelope = exchange(currentSocket, 3, codec::toWire(planeRequest),
+            currentInfo.maximumFrameBytes);
+        require(codec::inspect(*currentEnvelope).payload == PayloadKind::ErrorResponse
+                && codec::fromWire(*currentEnvelope->payload.AsErrorResponse()).code
+                    == ErrorCode::ResourceLimitExceeded,
+            "an oversized mapped-grid plane was not refused before the work");
+        planeRequest.outputSize = {4, 4};
+        currentEnvelope = exchange(currentSocket, 4, codec::toWire(planeRequest),
+            currentInfo.maximumFrameBytes);
+        require(codec::inspect(*currentEnvelope).payload == PayloadKind::ErrorResponse
+                && codec::fromWire(*currentEnvelope->payload.AsErrorResponse()).code
+                    == ErrorCode::OperationFailure,
+            "a plotfile without node positions did not fail the plane request");
+        codec::fb::PingRequestT ping;
+        currentEnvelope = exchange(currentSocket, 5, std::move(ping),
+            currentInfo.maximumFrameBytes);
+        require(codec::inspect(*currentEnvelope).payload == PayloadKind::PongResponse,
+            "the refusals closed a session that should have survived them");
+    }
+
     // Pin the actual fields sent by a negotiated server, including narrowing
     // and overflow for a 1.4 peer. A matching encoder/decoder bug must not be
     // able to hide behind a successful round trip.

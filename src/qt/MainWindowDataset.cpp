@@ -138,11 +138,11 @@ void MainWindow::cancelInFlight()
     m_metadataStopSource.request_stop();
     m_sequenceController->cancelActiveWork();
     m_linePlotStopSource.request_stop();
+    m_companionStopSource.request_stop();
     m_particleController->cancel();
     m_volumeController->cancel();
-    m_view2d.stopSource.request_stop();
-    for (auto& state : m_planeViews) {
-        state.stopSource.request_stop();
+    for (auto* state : allViewStates()) {
+        state->stopSource.request_stop();
     }
 }
 
@@ -158,11 +158,11 @@ void MainWindow::restoreSettings()
             .arg(settings.value(QStringLiteral("palette/filePath")).toString(),
                 *error));
     }
-    m_colorBar->setPalette(&m_paletteController->palette());
+    primary().colorBar->setPalette(&m_paletteController->palette());
 
     m_themeController->restore(settings);
 
-    m_range->showLogarithmic(
+    primary().range->showLogarithmic(
         settings.value(QStringLiteral("range/logarithmic"), false).toBool());
     {
         // A stored format that no longer validates falls back to the default.
@@ -170,8 +170,8 @@ void MainWindow::restoreSettings()
             defaultNumberFormat()).toString();
         m_numberFormat = isValidNumberFormat(format) ? format
             : defaultNumberFormat();
-        m_range->setNumberFormat(m_numberFormat);
-        m_colorBar->setNumberFormat(m_numberFormat);
+        primary().range->setNumberFormat(m_numberFormat);
+        primary().colorBar->setNumberFormat(m_numberFormat);
     }
     m_animationPanel->setSpeedValue(
         settings.value(QStringLiteral("animation/speed"), 300).toInt());
@@ -192,18 +192,14 @@ void MainWindow::restoreSettings()
             QStringLiteral("overlay/scaleBar"), false).toBool();
         m_scaleBarAction->setChecked(m_scaleBarVisible);
     }
-    if (m_sphericalSupersampleGroup != nullptr) {
-        const auto stored = settings.value(
-            QStringLiteral("spherical/supersample"), m_sphericalSupersample).toInt();
-        // Accept only a factor the menu offers; otherwise keep the default.
-        // setChecked emits toggled, not triggered, so the re-warp slot is not
-        // fired here.
-        for (auto* action : m_sphericalSupersampleGroup->actions()) {
-            if (action->data().toInt() == stored) {
-                m_sphericalSupersample = stored;
-                action->setChecked(true);
-                break;
-            }
+    if (m_slicePlanesAction != nullptr) {
+        // Blocked like the boxes; the isometric view is told directly.
+        const QSignalBlocker planesBlocker(m_slicePlanesAction);
+        const bool visible
+            = settings.value(QStringLiteral("overlay/slicePlanes"), true).toBool();
+        m_slicePlanesAction->setChecked(visible);
+        if (m_isoWidget != nullptr) {
+            m_isoWidget->setSlicePlanesVisible(visible);
         }
     }
     if (m_sphericalDisplayGroup != nullptr) {
@@ -212,6 +208,24 @@ void MainWindow::restoreSettings()
         for (auto* action : m_sphericalDisplayGroup->actions()) {
             if (action->data().toInt() == stored) {
                 m_sphericalDisplay = static_cast<SphericalDisplay>(stored);
+                action->setChecked(true);
+                break;
+            }
+        }
+    }
+    if (m_mappedGridAction != nullptr) {
+        // Blocked: the toggle handler re-slices, and nothing is loaded yet.
+        const QSignalBlocker mappedBlocker(m_mappedGridAction);
+        m_mappedGrid = settings.value(
+            QStringLiteral("mappedGrid/enabled"), false).toBool();
+        m_mappedGridAction->setChecked(m_mappedGrid);
+    }
+    if (m_aspectGroup != nullptr) {
+        const auto stored = settings.value(QStringLiteral("aspect/mode"),
+            static_cast<int>(m_aspectMode)).toInt();
+        for (auto* action : m_aspectGroup->actions()) {
+            if (action->data().toInt() == stored) {
+                m_aspectMode = static_cast<AspectMode>(stored);
                 action->setChecked(true);
                 break;
             }
@@ -231,7 +245,7 @@ void MainWindow::saveSettings()
     // Range mode is deliberately not persisted: the correct default (File)
     // depends on the dataset and restoring a different mode from a previous
     // session would produce unexpected color bars.
-    settings.setValue(QStringLiteral("range/logarithmic"), m_range->logarithmic());
+    settings.setValue(QStringLiteral("range/logarithmic"), primary().range->logarithmic());
     m_paletteController->save(settings);
     m_themeController->save(settings);
     settings.setValue(QStringLiteral("numberFormat"), m_numberFormat);
@@ -246,30 +260,35 @@ void MainWindow::saveSettings()
         m_boxesAction->isChecked());
     settings.setValue(QStringLiteral("overlay/scaleBar"),
         m_scaleBarVisible);
+    settings.setValue(QStringLiteral("overlay/slicePlanes"),
+        m_slicePlanesAction->isChecked());
     settings.remove(QStringLiteral("scaleBar/lengthUnit"));
-    settings.setValue(QStringLiteral("spherical/supersample"),
-        m_sphericalSupersample);
+    settings.remove(QStringLiteral("spherical/supersample"));
     settings.setValue(QStringLiteral("spherical/display"),
         static_cast<int>(m_sphericalDisplay));
+    settings.setValue(QStringLiteral("aspect/mode"),
+        static_cast<int>(m_aspectMode));
+    settings.setValue(QStringLiteral("mappedGrid/enabled"), m_mappedGrid);
 }
 
 void MainWindow::updateWindowTitle()
 {
-    if (!m_openMetadata) {
+    if (!primary().openMetadata) {
         setWindowTitle(tr("AMReXplorer"));
         return;
     }
-    const auto& metadata = *m_openMetadata;
-    auto name = QString::fromStdString(m_datasetPath.filename().string());
-    if (name.isEmpty()) {
-        name = QString::fromStdString(m_datasetPath.string());
-    }
+    const auto& metadata = *primary().openMetadata;
+    const auto name = datasetDisplayName(m_datasetPath);
     // Standalone FABs and MultiFabs carry neither a simulation time nor an
     // AMR hierarchy, so their titles show just the format name.
     if (m_fabNavigator->fabMode()) {
         setWindowTitle(tr("AMReXplorer — %1 — FAB").arg(name));
     } else if (!metadata.hasPhysicalGeometry) {
         setWindowTitle(tr("AMReXplorer — %1 — MultiFab").arg(name));
+    } else if (companionOpen()) {
+        setWindowTitle(tr("AMReXplorer — %1 + %2  T = %3")
+                .arg(name, m_layers[1].name)
+                .arg(metadata.time, 0, 'g', 12));
     } else {
         setWindowTitle(
             tr("AMReXplorer — %1  T = %2  Levels: 0..%3  Finest Level: %3")
@@ -409,12 +428,22 @@ void MainWindow::exportImage()
             // against an arrival that installs a fresh pointer mid-prompt.
             std::vector<std::pair<std::shared_ptr<const ScalarPlane>, QString>>
                 outputs;
-            for (std::size_t normal = 0; normal < m_planeViews.size(); ++normal) {
-                const auto& state = m_planeViews[normal];
-                if (state.plane->width <= 0 || state.plane->height <= 0) {
-                    continue;
+            for (std::size_t normal = 0; normal < primary().planeViews.size(); ++normal) {
+                // With a companion, the panel normal to the shared plane
+                // shows one layer and that one is written; a stacked panel
+                // writes both, the companion under its own name.
+                for (const auto* state : statesForPanel(static_cast<int>(normal))) {
+                    if (state->plane->width <= 0 || state->plane->height <= 0
+                        || !stateShown(*state)) {
+                        continue;
+                    }
+                    auto outPath = panelPath(normal);
+                    if (state->layer == 1) {
+                        outPath.insert(outPath.size() - extension.size(),
+                            QStringLiteral("_") + m_layers[1].name);
+                    }
+                    outputs.emplace_back(state->plane, outPath);
                 }
-                outputs.emplace_back(state.plane, panelPath(normal));
             }
             QStringList targets;
             for (const auto& [plane, outPath] : outputs) {
@@ -451,8 +480,8 @@ void MainWindow::exportImage()
         // has always run an event loop here, so this is no wider a window
         // than it was. The views themselves live as long as the window.
         std::vector<std::pair<ImageView*, QString>> outputs;
-        for (std::size_t normal = 0; normal < m_planeViews.size(); ++normal) {
-            auto* panelView = m_planeViews[normal].view;
+        for (std::size_t normal = 0; normal < primary().planeViews.size(); ++normal) {
+            auto* panelView = primary().planeViews[normal].view;
             if (panelView == nullptr || !panelView->hasImage()) {
                 continue;
             }
@@ -466,8 +495,7 @@ void MainWindow::exportImage()
             return;
         }
         for (const auto& [panelView, outPath] : outputs) {
-            const qreal scale = std::max(1.0,
-                panelView->transform().m11());
+            const qreal scale = std::max(1.0, panelView->isotropicScale());
             const QImage composite = composeExportFrame(panelView, options, scale);
             if (composite.isNull() || !composite.save(outPath, "PNG")) {
                 QMessageBox::critical(this, tr("Cannot export image"),
@@ -478,7 +506,7 @@ void MainWindow::exportImage()
         if (!confirmExportTargets(this, chosen, {filename}, formatName)) {
             return;
         }
-        const qreal exportScale = std::max(1.0, view->transform().m11());
+        const qreal exportScale = std::max(1.0, view->isotropicScale());
         const QImage composite = composeExportFrame(view, options, exportScale);
         if (composite.isNull()) {
             QMessageBox::critical(this, tr("Cannot export image"),
@@ -514,16 +542,32 @@ QImage MainWindow::composeExportFrame(const ImageView* view, const ExportOptions
         return {};
     }
     const PlaneViewState* state = &m_view2d;
-    for (const auto& candidate : m_planeViews) {
+    for (const auto& candidate : primary().planeViews) {
         if (candidate.view == view) {
             state = &candidate;
             break;
         }
     }
+    // On the panel normal to the shared plane only one layer is on show, and
+    // its field, range and region are the ones to annotate.
+    if (m_pair && state != &m_view2d && state->normal == m_pair->perpendicularAxis) {
+        for (const auto& candidate : m_layers[1].planeViews) {
+            if (candidate.view == view && stateShown(candidate)) {
+                state = &candidate;
+                break;
+            }
+        }
+    }
+    // A panel stacking two datasets has no single vertical axis to label
+    // (each tile has its own scale), so axes are left off it.
+    auto panelOptions = options;
+    if (m_pair && m_viewDimension == 3 && state->normal != m_pair->perpendicularAxis) {
+        panelOptions.includeAxes = false;
+    }
     const auto axes =
         exportAxes(state->displayRegion, m_viewDimension, state->normal, state->coordinateSystem,
-                   state->sphericalDisplay, m_dataset && m_dataset->metadata().hasPhysicalGeometry,
-                   options.lengthUnit);
+                   state->sphericalDisplay, primary().session && primary().session->metadata().hasPhysicalGeometry,
+                   panelOptions.lengthUnit);
     ColorBarWidget colorBar;
     colorBar.setPalette(&m_paletteController->palette());
     colorBar.setNumberFormat(options.colorBarNumberFormat.isEmpty()
@@ -535,9 +579,9 @@ QImage MainWindow::composeExportFrame(const ImageView* view, const ExportOptions
     ExportLayout localLayout;
     auto& layout = frozenLayout != nullptr ? *frozenLayout : localLayout;
     if (layout.dataRect.isEmpty()) {
-        layout = makeExportLayout(view->composedImageSize(scaleFactor), options, axes, &colorBar,
-                                  frozenLayout != nullptr);
-    } else if (!exportAspectMatches(view->image().size(), layout)) {
+        layout = makeExportLayout(view->composedImageSize(scaleFactor), panelOptions, axes,
+                                  &colorBar, frozenLayout != nullptr);
+    } else if (!exportAspectMatches(view->displaySize(), layout)) {
         throw std::runtime_error(
             tr("The aspect ratio of panel %1 changed. "
                "Export stopped to preserve the fixed image rectangle without stretching.")
@@ -546,8 +590,8 @@ QImage MainWindow::composeExportFrame(const ImageView* view, const ExportOptions
     }
     colorBar.setFont(layout.font);
     return composeExportImage(
-        view->composedImage(layout.dataRect.size(), &layout.font, options.includeAxes), axes,
-        options, layout, &colorBar);
+        view->composedImage(layout.dataRect.size(), &layout.font, panelOptions.includeAxes),
+        axes, panelOptions, layout, &colorBar);
 }
 
 void MainWindow::exportAnimation()
@@ -595,7 +639,7 @@ void MainWindow::beginAnimationExport(const QString& path, const ExportOptions& 
     }
     // Freeze zoom and styling now; each panel's pixel layout is established
     // by frame 0 and retained for the complete animation.
-    const auto scale = std::max(1.0, view->transform().m11());
+    const auto scale = std::max(1.0, view->isotropicScale());
     std::vector<QString> suffixes;
     if (m_viewDimension == 3) {
         suffixes = {QStringLiteral("_yz"), QStringLiteral("_xz"),
@@ -621,15 +665,15 @@ void MainWindow::beginAnimationExport(const QString& path, const ExportOptions& 
 
 std::optional<DatasetRequest> MainWindow::buildDatasetRequest() const
 {
-    if (!m_dataset || m_activeView == nullptr
+    if (!primary().session || m_activeView == nullptr
         || m_activeView->plane->width <= 0 || m_activeView->plane->height <= 0
-        || m_fieldSelector->currentIndex() < 0) {
+        || primary().fieldSelector->currentIndex() < 0) {
         return std::nullopt;
     }
-    const auto& metadata = m_dataset->metadata();
+    const auto& metadata = primary().session->metadata();
     DatasetRequest request;
-    request.dataset = m_dataset;
-    request.field.value = m_fieldSelector->currentData().toUInt();
+    request.dataset = primary().session;
+    request.field.value = primary().fieldSelector->currentData().toUInt();
     request.fieldName = tr("%1 — %2").arg(m_activeView->label)
         .arg(QString::fromStdString(
             metadata.fields[request.field.value].name));
@@ -693,7 +737,7 @@ void MainWindow::clearDatasetCellHighlights()
 {
     for (auto* state : allViewStates()) {
         state->datasetCell.reset();
-        state->view->setCellHighlight(std::nullopt);
+        state->view->setCellHighlight(std::nullopt, state->tile);
     }
 }
 
@@ -748,12 +792,12 @@ void MainWindow::applyDatasetCellHighlight(PlaneViewState& state)
     // unchanged after the plane moved off the cell it marks. Measured against
     // the displayed raster's own position, not m_slicePosition3d, which has
     // already moved ahead whenever a slice is in flight (see updateOverlay).
-    if (m_dataset && m_dataset->metadata().dimension == 3
+    if (layerFor(state).session && layerFor(state).session->metadata().dimension == 3
         && state.hasCachedRequest
         && !datasetCellOnDisplayedSlice(physicalCell,
             state.cachedRequest.normalDirection,
             state.cachedRequest.physicalPosition)) {
-        state.view->setCellHighlight(std::nullopt);
+        state.view->setCellHighlight(std::nullopt, state.tile);
         return;
     }
     const auto axes = displayAxes(state.normal);
@@ -774,7 +818,7 @@ void MainWindow::applyDatasetCellHighlight(PlaneViewState& state)
             if (valid) {
                 highlight = sphericalSectorPath(mapping, r0, r1, t0, t1);
             }
-            state.view->setCellHighlightPath(highlight);
+            state.view->setCellHighlightPath(highlight, state.tile);
         } else {
             std::optional<QRectF> highlight;
             if (valid) {
@@ -785,13 +829,37 @@ void MainWindow::applyDatasetCellHighlight(PlaneViewState& state)
                     highlight = rect;
                 }
             }
-            state.view->setCellHighlight(highlight);
+            state.view->setCellHighlight(highlight, state.tile);
         }
         return;
     }
     const auto& region = plane.physicalRegion;
     const auto xExtent = region.upper[xAxis] - region.lower[xAxis];
     const auto yExtent = region.upper[yAxis] - region.lower[yAxis];
+    if (state.warp == DisplayWarp::MappedGrid) {
+        // The cell's logical rectangle in plane pixels, outlined along the
+        // stretched edges it maps to (as updateGridBoxes does).
+        const auto clampCol = [&](double value) {
+            return std::clamp(value, 0.0, static_cast<double>(plane.width));
+        };
+        const auto clampRow = [&](double value) {
+            return std::clamp(value, 0.0, static_cast<double>(plane.height));
+        };
+        const auto col0 = clampCol(
+            (physicalCell.lower[xAxis] - region.lower[xAxis]) / xExtent * plane.width);
+        const auto col1 = clampCol(
+            (physicalCell.upper[xAxis] - region.lower[xAxis]) / xExtent * plane.width);
+        const auto row0 = clampRow(
+            (physicalCell.lower[yAxis] - region.lower[yAxis]) / yExtent * plane.height);
+        const auto row1 = clampRow(
+            (physicalCell.upper[yAxis] - region.lower[yAxis]) / yExtent * plane.height);
+        std::optional<QPainterPath> highlight;
+        if (col1 > col0 && row1 > row0) {
+            highlight = mappedCellPath(planeMapping(state), col0, col1, row0, row1);
+        }
+        state.view->setCellHighlightPath(highlight, state.tile);
+        return;
+    }
     // Same physical-to-scene mapping updateGridBoxes applies; plane row 0 is
     // the image bottom, so scene y runs opposite to physical y.
     const auto pixelX0 = (physicalCell.lower[xAxis] - region.lower[xAxis])
@@ -811,7 +879,7 @@ void MainWindow::applyDatasetCellHighlight(PlaneViewState& state)
     if (!rectangle.isEmpty()) {
         highlight = rectangle;
     }
-    state.view->setCellHighlight(highlight);
+    state.view->setCellHighlight(highlight, state.tile);
 }
 
 void MainWindow::openDataset(
@@ -828,10 +896,20 @@ void MainWindow::useRemoteConnection(
 }
 
 void MainWindow::startSshRemoteSession(std::string destination,
-    std::string serverExecutable, std::vector<std::string> remotePaths)
+    std::string serverExecutable, std::vector<std::string> remotePaths,
+    std::string companion)
 {
+    // The ready handler runs after the paths were asked for, so the
+    // generation it records is the remote open's; a session that never
+    // becomes ready records nothing.
+    std::function<void()> onReady;
+    if (!companion.empty()) {
+        onReady = [this, companion = std::move(companion)] {
+            m_pendingRemoteCompanion = PendingRemoteCompanion{companion, m_generation};
+        };
+    }
     m_remoteSession->start(std::move(destination), std::move(serverExecutable),
-        std::move(remotePaths));
+        std::move(remotePaths), std::move(onReady));
 }
 
 void MainWindow::openRemoteDataset(std::string remotePath)
@@ -857,12 +935,16 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     if (!preserveFabSelector) {
         m_fabNavigator->reset();
     }
+    // A companion waiting on an earlier remote open belongs to that open.
+    m_pendingRemoteCompanion.reset();
     // Opening a single dataset ends any plotfile sequence and stops playback
     // of either animation mode.
     setPlaybackMode(PlaybackMode::None);
     closeSequence();
     resetRangeState();
     resetLengthUnit();
+    resetAxisScale();
+    closeCompanion();
     // The new dataset arrives fitted -- setPlaceholder below puts every view
     // back to Fit -- so the scale report has to come back with it. Without
     // this the toolbar kept claiming the previous dataset's "4x" over a fitted
@@ -885,6 +967,14 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         state->visibleRegion.reset();
         state->vectorSegments.clear();
         state->gridBoxes.clear();
+        state->warp = DisplayWarp::None;
+        state->gridNodes.reset();
+        state->displaySourceIndex.reset();
+        state->pixmapRegion = RealBox{};
+        state->mappedCanvasBounds.reset();
+        state->mappedWindow = {};
+        state->mappedWindowPixels = {0, 0};
+        state->mappedNodeBounds = {};
         state->cachedRequest = {};
         state->hasCachedRequest = false;
         state->cachedMode = DisplayMode::Raster;
@@ -894,7 +984,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         // Cleared, not stale: there is no raster to converge, and the open
         // about to run will stamp whatever it displays. Set after the bump
         // below would be too late -- resliceReplacedViews could run first.
-        state->planeSessionEpoch = m_sessionEpoch + 1;
+        state->planeSessionEpoch = layerFor(*state).sessionEpoch + 1;
     }
     m_initialStopSource.request_stop();
     m_linePlotStopSource.request_stop();
@@ -909,10 +999,10 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         m_activeView->view->setActiveBorder(false);
     }
     m_activeView = nullptr;
-    m_dataset.reset();
+    primary().session.reset();
     // Nothing is installed now, which is a change of session like any other:
     // a slice still on a worker for the outgoing one must not be displayed.
-    ++m_sessionEpoch;
+    ++primary().sessionEpoch;
     // The dock's edge trigger is per dataset, not per session: an open is a new
     // context, so the next update re-asserts it. Without this the flags could
     // hold (false, true) straight across a 3-D -> 3-D open -- closeSequence
@@ -944,12 +1034,18 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     // open without discarding a selection the user had not yet applied.
     m_datasetPath = path;
     m_diagnosticsModel->resetDatasetMetrics();
-    m_fieldSelector->setEnabled(false);
-    m_levelSelector->setEnabled(false);
-    m_range->setControlsReady(false);
+    primary().fieldSelector->setEnabled(false);
+    primary().levelSelector->setEnabled(false);
+    primary().range->setControlsReady(false);
     m_boxesAction->setEnabled(false);
     m_scaleBarAction->setEnabled(false);
     m_slicePlanesAction->setEnabled(false);
+    if (m_openCompanionAction != nullptr) {
+        m_openCompanionAction->setEnabled(false);
+    }
+    if (m_openRemoteCompanionAction != nullptr) {
+        m_openRemoteCompanionAction->setEnabled(false);
+    }
     setSlicePositionControlsVisible(false);
     m_animationPanel->setSweepVisible(false);
     m_levelMenu->setEnabled(false);
@@ -963,8 +1059,8 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_derivedFields->refreshAvailability();
     m_datasetAction->setEnabled(false);
     m_exportAnimationAction->setEnabled(false);
-    m_openMetadata.reset();
-    m_fileVersion.clear();
+    primary().openMetadata.reset();
+    primary().fileVersion.clear();
     m_vectorUField = -1;
     m_vectorVField = -1;
     m_vectorWField = -1;
@@ -982,7 +1078,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
             QString::fromStdString(path.parent_path().string()));
     }
     m_probeLabel->clear();
-    m_colorBar->clearRange();
+    primary().colorBar->clearRange();
     const auto generation = ++m_generation;
     m_metadataStopSource.request_stop();
     m_metadataStopSource = StopSource{};
@@ -1125,7 +1221,7 @@ void MainWindow::requestInitialSlice(
     SliceLoad load)
 {
     validateVectorMode();
-    const auto& metadata = *m_openMetadata;
+    const auto& metadata = *primary().openMetadata;
     m_viewDimension = metadata.dimension;
     // Make the correct page visible and synchronously activate its layout
     // before deriving remote viewport budgets. The 3-D grid is otherwise still
@@ -1135,10 +1231,10 @@ void MainWindow::requestInitialSlice(
         && page->layout() != nullptr) {
         page->layout()->activate();
     }
-    const auto views = currentViews();
+    const auto views = primaryViews();
     // The XY view starts out as the active one in 3-D.
     setActiveView(m_viewDimension == 3
-        ? m_planeViews[2] : m_view2d);
+        ? primary().planeViews[2] : m_view2d);
     // ...and takes keyboard focus, so the arrow-key pan works on a freshly
     // opened dataset rather than only after the view has been clicked. The
     // other setActiveView callers run mid-session, where focus belongs to
@@ -1186,8 +1282,8 @@ void MainWindow::requestInitialSlice(
         spec.vectorWField =
             static_cast<std::uint32_t>(std::max(m_vectorWField, 0));
         spec.contourCount = m_contourCount;
-        spec.sphericalSupersample = m_sphericalSupersample;
         spec.sphericalDisplay = m_sphericalDisplay;
+        spec.mappedGrid = m_mappedGrid;
     }
     const auto isRemote = load.isRemote();
     if (spec.outputSizes.size() != views.size()) {
@@ -1202,6 +1298,9 @@ void MainWindow::requestInitialSlice(
             spec.outputSizes.push_back(outputSize);
         }
     }
+    // What each view shows now, whatever a restored spec carried: after an
+    // open the views start over, while a reload keeps its windows.
+    fillMappedDisplays(spec, views);
     const auto restoredSpec = initialSpec;
     // Per-view generations captured now: a view that gets a newer request
     // before the initial slices land keeps its newer data.
@@ -1236,8 +1335,8 @@ void MainWindow::requestInitialSlice(
 #endif
                 if (generation == m_generation) {
                     const auto previousVectorFields = vectorFieldNames();
-                    m_dataset = result.dataset;
-                    ++m_sessionEpoch;
+                    primary().session = result.dataset;
+                    ++primary().sessionEpoch;
                     // Which views a newer request has already claimed. Worked
                     // out before anything below restores control state,
                     // because that restoration replays the field, level and
@@ -1273,7 +1372,7 @@ void MainWindow::requestInitialSlice(
                     // when the derived tail changes, so the name is the only
                     // stable handle.
                     const auto supersededField = superseded
-                        ? m_fieldSelector->currentText()
+                        ? primary().fieldSelector->currentText()
                         : QString{};
                     // The level and the range are read here for the same
                     // reason: configureSliceControls puts the level combo back
@@ -1284,11 +1383,11 @@ void MainWindow::requestInitialSlice(
                     std::optional<int> supersededLevel;
                     std::optional<RangeController::Selection> supersededRange;
                     if (superseded) {
-                        if (m_levelSelector->currentIndex() >= 0) {
+                        if (primary().levelSelector->currentIndex() >= 0) {
                             supersededLevel
-                                = m_levelSelector->currentData().toInt();
+                                = primary().levelSelector->currentData().toInt();
                         }
-                        supersededRange = m_range->selection();
+                        supersededRange = primary().range->selection();
                     }
                     restoreVectorFields(previousVectorFields);
                     m_particleController->setSamples(
@@ -1316,10 +1415,10 @@ void MainWindow::requestInitialSlice(
                     // copy of every level's box list and a tree item per box.
                     // What it can miss is the derived fields the session
                     // installed, and, after a reload, the ones that have gone.
-                    const auto& sessionFields = m_dataset->metadata().fields;
-                    const auto listed = m_openMetadata
-                        && std::equal(m_openMetadata->fields.begin(),
-                            m_openMetadata->fields.end(),
+                    const auto& sessionFields = primary().session->metadata().fields;
+                    const auto listed = primary().openMetadata
+                        && std::equal(primary().openMetadata->fields.begin(),
+                            primary().openMetadata->fields.end(),
                             sessionFields.begin(), sessionFields.end(),
                             [](const FieldMetadata& shown,
                                 const FieldMetadata& session) {
@@ -1330,8 +1429,8 @@ void MainWindow::requestInitialSlice(
                     }
                     configureSliceControls();
                     if (restoredSpec) {
-                        const QSignalBlocker fieldBlocker(m_fieldSelector);
-                        const QSignalBlocker levelBlocker(m_levelSelector);
+                        const QSignalBlocker fieldBlocker(primary().fieldSelector);
+                        const QSignalBlocker levelBlocker(primary().levelSelector);
                         // The field the load was actually rendered with,
                         // which the pipeline resolves by name and so need not
                         // be the id the spec carried (resolveSpecField).
@@ -1341,20 +1440,20 @@ void MainWindow::requestInitialSlice(
                             ? restoredSpec->field
                             : result.displays.front().request.field.value;
                         const auto fieldIndex =
-                            m_fieldSelector->findData(rendered);
+                            primary().fieldSelector->findData(rendered);
                         if (fieldIndex >= 0) {
-                            m_fieldSelector->setCurrentIndex(fieldIndex);
+                            primary().fieldSelector->setCurrentIndex(fieldIndex);
                         }
-                        const auto levelIndex = m_levelSelector->findData(
+                        const auto levelIndex = primary().levelSelector->findData(
                             restoredSpec->levelSelection);
                         if (levelIndex >= 0) {
-                            m_levelSelector->setCurrentIndex(levelIndex);
+                            primary().levelSelector->setCurrentIndex(levelIndex);
                         }
-                        m_range->setSelection({restoredSpec->rangeMode,
+                        primary().range->setSelection({restoredSpec->rangeMode,
                             restoredSpec->userRange, restoredSpec->logarithmic});
-                        m_range->setTrackedField(
-                            m_fieldSelector->currentText());
-                        m_range->commitFieldRange(m_range->trackedField());
+                        primary().range->setTrackedField(
+                            primary().fieldSelector->currentText());
+                        primary().range->commitFieldRange(primary().range->trackedField());
                         // The menu was rebuilt by configureSliceControls
                         // above, while the combo still sat on field 0; it is
                         // the same selection shown twice, so it has to follow
@@ -1377,7 +1476,7 @@ void MainWindow::requestInitialSlice(
                     bool fieldRestored = false;
                     if (!supersededField.isEmpty()) {
                         const auto index
-                            = m_fieldSelector->findText(supersededField);
+                            = primary().fieldSelector->findText(supersededField);
                         // Only a row that is a field. A definition this
                         // session skipped is listed under the same name,
                         // greyed and carrying no id, and setCurrentIndex takes
@@ -1388,11 +1487,11 @@ void MainWindow::requestInitialSlice(
                         // nothing of theirs to restore, and the field the load
                         // rendered stands.
                         if (index >= 0
-                            && m_fieldSelector->itemData(index).isValid()) {
-                            const QSignalBlocker blocker(m_fieldSelector);
-                            m_fieldSelector->setCurrentIndex(index);
-                            m_range->setTrackedField(
-                                m_fieldSelector->currentText());
+                            && primary().fieldSelector->itemData(index).isValid()) {
+                            const QSignalBlocker blocker(primary().fieldSelector);
+                            primary().fieldSelector->setCurrentIndex(index);
+                            primary().range->setTrackedField(
+                                primary().fieldSelector->currentText());
                             syncVariableMenu();
                             fieldRestored = true;
                         }
@@ -1414,17 +1513,17 @@ void MainWindow::requestInitialSlice(
                     // queue a second one for every view.
                     if (supersededLevel) {
                         const auto index
-                            = m_levelSelector->findData(*supersededLevel);
+                            = primary().levelSelector->findData(*supersededLevel);
                         if (index >= 0) {
-                            const QSignalBlocker blocker(m_levelSelector);
-                            m_levelSelector->setCurrentIndex(index);
+                            const QSignalBlocker blocker(primary().levelSelector);
+                            primary().levelSelector->setCurrentIndex(index);
                             configureSlicePositionControls();
                             syncMenuChecks();
                         }
                     }
                     if (supersededRange) {
-                        m_range->setSelection(*supersededRange);
-                        m_range->commitFieldRange(m_range->trackedField());
+                        primary().range->setSelection(*supersededRange);
+                        primary().range->commitFieldRange(primary().range->trackedField());
                     }
                     if (supersededLevel || supersededRange) {
                         // A mode the restored field and level cannot offer
@@ -1434,7 +1533,7 @@ void MainWindow::requestInitialSlice(
                         updateRangeModeAvailability();
                     }
                     if (selectCacheFallbackLevel(
-                            m_levelSelector, result.cacheFallbackToLevel)) {
+                            primary().levelSelector, result.cacheFallbackToLevel)) {
                         configureSlicePositionControls();
                         updateRangeModeAvailability();
                         syncMenuChecks();
@@ -1458,7 +1557,7 @@ void MainWindow::requestInitialSlice(
                     // request for them was submitted while it ran. Collected
                     // rather than merely skipped: each is still showing a
                     // raster produced by the session installed *before* this
-                    // one, while m_dataset, the field selector, the range
+                    // one, while primary().session, the field selector, the range
                     // widgets and the colour bar have all just become the new
                     // session's. Leaving them is the catalog-vs-pixels
                     // mismatch -- after an edit that renumbers the derived
@@ -1491,7 +1590,7 @@ void MainWindow::requestInitialSlice(
                                 : std::optional<RealBox>{};
                         }
                         showSlice(*views[index],
-                            std::move(result.displays[index]), m_sessionEpoch);
+                            std::move(result.displays[index]), primary().sessionEpoch);
                     }
                     // Re-sliced against the session just installed. Driven
                     // off each view's stamp rather than the list above, so a
@@ -1501,7 +1600,7 @@ void MainWindow::requestInitialSlice(
                     resliceReplacedViews();
                     if (isRemote) {
                         // A resize during the initial worker cannot submit a
-                        // slice yet because m_dataset is not published. Once
+                        // slice yet because primary().session is not published. Once
                         // that result settles, coalesce each changed viewport
                         // into exactly one request using its newest size.
                         for (std::size_t index = 0; index < views.size(); ++index) {
@@ -1511,7 +1610,7 @@ void MainWindow::requestInitialSlice(
                             }
                         }
                     }
-                    const auto cache = m_dataset->cacheMetrics();
+                    const auto cache = primary().session->cacheMetrics();
                     m_diagnosticsModel->setCacheMetrics(cache);
                     if (result.cacheFallbackToLevel >= 0) {
                         // Non-modal: an informational cache-fallback notice must
@@ -1521,6 +1620,12 @@ void MainWindow::requestInitialSlice(
                             result.cacheFallbackToLevel));
                     }
                     emit initialSliceFinished(true);
+                    if (m_pendingRemoteCompanion
+                        && m_pendingRemoteCompanion->generation == m_generation) {
+                        auto companion = std::move(m_pendingRemoteCompanion->remotePath);
+                        m_pendingRemoteCompanion.reset();
+                        openRemoteCompanion(std::move(companion));
+                    }
                     // Emitted first: this load did finish, and what follows
                     // is a fresh one. A window counts as unable to take
                     // derived fields for the whole of an open, so a list
@@ -1541,13 +1646,13 @@ void MainWindow::requestInitialSlice(
                     // here, so say which one has no displayable slice.
                     //
                     // Only when nothing is installed, which is what tells an
-                    // open from a reload: a reload never resets m_dataset, so
+                    // open from a reload: a reload never resets primary().session, so
                     // the session on screen is still live and its rasters are
                     // still what it produced. Wiping them because a reopen
                     // failed -- a definition the server would not take, a
                     // connection that went away -- would throw away a working
                     // display over a change that simply did not happen.
-                    if (!m_dataset) {
+                    if (!primary().session) {
                         setAllViewPlaceholders(
                             tr("Could not display %1")
                                 .arg(QString::fromStdString(
@@ -1569,6 +1674,7 @@ void MainWindow::requestInitialSlice(
                     // the installed session's. A reload dropped between the
                     // debounce and this failure would otherwise be lost.
                     resliceReplacedViews();
+                    m_pendingRemoteCompanion.reset();
                     emit initialSliceFinished(false);
                 } else {
                     m_diagnosticsModel->noteStaleResult();

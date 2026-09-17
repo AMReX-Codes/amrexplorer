@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 class QLineEdit;
@@ -23,13 +24,25 @@ namespace amrvis::qt {
 // dialog just reports the fields, trimmed.
 class RemoteOpenDialog final : public QDialog {
 public:
+    // What the dialog opens: one plotfile, a sequence of them (paths one per
+    // line), or a companion plotfile to show beside the open one.
+    enum class Kind { Plotfile, Sequence, Companion };
+
     // `sessionDestination` prefills the destination while a session is live
     // (opening another path reuses it); otherwise `lastDestination`, the one
     // last used anywhere.
-    RemoteOpenDialog(bool sequence, const QString& sessionDestination,
+    RemoteOpenDialog(Kind kind, const QString& sessionDestination,
         const QString& lastDestination,
         std::function<QString(const QString&)> executableFor,
         QWidget* parent = nullptr);
+    RemoteOpenDialog(bool sequence, const QString& sessionDestination,
+        const QString& lastDestination,
+        std::function<QString(const QString&)> executableFor,
+        QWidget* parent = nullptr)
+        : RemoteOpenDialog(sequence ? Kind::Sequence : Kind::Plotfile,
+              sessionDestination, lastDestination, std::move(executableFor), parent)
+    {
+    }
 
     [[nodiscard]] QString destination() const;
     [[nodiscard]] QString executable() const;

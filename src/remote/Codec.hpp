@@ -2,6 +2,7 @@
 
 #include "amrexplorer_wire_generated.h"
 
+#include <amrexplorer/core/MappedGrid.hpp>
 #include <amrexplorer/remote/Protocol.hpp>
 
 #include <flatbuffers/flatbuffers.h>
@@ -167,10 +168,27 @@ struct ParticleSampleRequestData {
 // vary -- finite camera and range, equal and bounded transfer vectors, a
 // pixel vector that matches the frame's size, three grid dimensions -- and
 // the session validators do the rest.
-[[nodiscard]] fb::RenderedFrameRequestT toWire(const VolumeRenderRequest& value);
+// The camera goes as its orientation to a 1.8 peer, as its two angles to an
+// older one (the nearest angles for a rolled camera such a peer cannot take,
+// which the connection refuses before it gets here).
+[[nodiscard]] fb::RenderedFrameRequestT toWire(const VolumeRenderRequest& value,
+    std::uint16_t minorVersion = protocolMinorVersion);
 [[nodiscard]] VolumeRenderRequest fromWire(const fb::RenderedFrameRequestT& value);
 [[nodiscard]] fb::RenderedFrameResponseT toWire(
     VolumeFrame value, const CacheMetrics& cache);
 [[nodiscard]] VolumeFrame fromWire(const fb::RenderedFrameResponseT& value);
+
+// Protocol 1.7: a mapped grid's node plane. fromWire of the response checks
+// what a peer can vary -- node counts against the vectors, one face block
+// per level, ascending levels, finite values -- and the session validator
+// checks it against the request and the catalog.
+[[nodiscard]] fb::MappedGridPlaneRequestT toWire(
+    const MappedGridPlaneRequest& value);
+[[nodiscard]] MappedGridPlaneRequest fromWire(
+    const fb::MappedGridPlaneRequestT& value);
+[[nodiscard]] fb::MappedGridPlaneResponseT toWire(
+    const MappedGridPlane& value, const CacheMetrics& cache);
+[[nodiscard]] MappedGridPlane fromWire(
+    const fb::MappedGridPlaneResponseT& value);
 
 } // namespace amrvis::remote::codec

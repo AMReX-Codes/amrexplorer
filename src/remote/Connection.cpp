@@ -295,11 +295,58 @@ public:
         return m_selectedMinorVersion >= 3;
     }
 
+    // And a 1.5 server renders volumes but cannot be given an isosurface or
+    // told to hide the volume.
+    [[nodiscard]] bool supportsVolumeIsosurface() const noexcept
+    {
+        return m_selectedMinorVersion >= isosurfaceMinorVersion;
+    }
+    // And a 1.7 server reads the camera as two angles.
+    [[nodiscard]] bool supportsVolumeOrientation() const noexcept
+    {
+        return m_selectedMinorVersion >= cameraOrientationMinorVersion;
+    }
+
     // Likewise: a 1.3 server opens datasets perfectly well, it just cannot be
     // asked to compute a field from an expression.
     [[nodiscard]] bool supportsDerivedFields() const noexcept
     {
         return m_selectedMinorVersion >= 4;
+    }
+
+    // And this one gates nothing: a 1.4 server answers every request, just in
+    // floats. Asked so the session can say so, not so a caller can refuse.
+    [[nodiscard]] bool supportsDoublePrecisionValues() const noexcept
+    {
+        return m_selectedMinorVersion >= doubleValueVectorsMinorVersion;
+    }
+
+    // A 1.6 server has no answer for a node plane at all.
+    [[nodiscard]] bool supportsMappedGrid() const noexcept
+    {
+        return m_selectedMinorVersion >= mappedGridMinorVersion;
+    }
+
+    MappedGridPlane requestMappedGridPlane(
+        const MappedGridPlaneRequest& request, StopToken cancellation)
+    {
+        // Refused here as well as in RemoteDatasetSession, as renderVolume
+        // is: the version lives here.
+        if (!supportsMappedGrid()) {
+            throw std::runtime_error(mappedGridUnsupportedMessage);
+        }
+        // Indefinite, as a slice: the node blocks may have to be read.
+        const auto response = transact(codec::toWire(request),
+            PayloadKind::MappedGridPlaneResponse, cancellation,
+            ResponseWait::Indefinite);
+        const auto* payload = response->payload.AsMappedGridPlaneResponse();
+        if (payload == nullptr) {
+            throw std::runtime_error("server omitted mapped-grid plane payload");
+        }
+        // Decoded before the cache snapshot is committed (see renderVolume).
+        auto plane = codec::fromWire(*payload);
+        updateCache(request.dataset, codec::fromWire(payload->cache.get()));
+        return plane;
     }
 
     VolumeFrame renderVolume(
@@ -328,9 +375,21 @@ public:
             && !supportsVolumeSampling()) {
             throw std::runtime_error(volumeSamplingUnsupportedMessage);
         }
+        // And an isosurface, or a hidden volume, a 1.5 peer would silently
+        // leave out while drawing the volume anyway.
+        if ((request.isosurface || !request.showVolume)
+            && !supportsVolumeIsosurface()) {
+            throw std::runtime_error(volumeIsosurfaceUnsupportedMessage);
+        }
+        // And a camera with roll, which the angles a 1.7 peer reads cannot
+        // hold: toWire would send zeros, and the frame would come back
+        // turned the wrong way.
+        if (!orthoAnglesOf(request.camera) && !supportsVolumeOrientation()) {
+            throw std::runtime_error(volumeOrientationUnsupportedMessage);
+        }
         // Indefinite: the first render of a field samples the plotfile,
         // which can outlast the request timeout; the token still cancels it.
-        const auto response = transact(codec::toWire(request),
+        const auto response = transact(codec::toWire(request, m_selectedMinorVersion),
             PayloadKind::RenderedFrameResponse, cancellation,
             ResponseWait::Indefinite);
         const auto* payload = response->payload.AsRenderedFrameResponse();
@@ -818,15 +877,41 @@ bool Connection::supportsVolumeSampling() const noexcept
     return m_impl->supportsVolumeSampling();
 }
 
+bool Connection::supportsVolumeIsosurface() const noexcept
+{
+    return m_impl->supportsVolumeIsosurface();
+}
+
+bool Connection::supportsVolumeOrientation() const noexcept
+{
+    return m_impl->supportsVolumeOrientation();
+}
+
 bool Connection::supportsDerivedFields() const noexcept
 {
     return m_impl->supportsDerivedFields();
+}
+
+bool Connection::supportsDoublePrecisionValues() const noexcept
+{
+    return m_impl->supportsDoublePrecisionValues();
 }
 
 VolumeFrame Connection::renderVolume(
     const VolumeRenderRequest& request, StopToken cancellation)
 {
     return m_impl->renderVolume(request, cancellation);
+}
+
+bool Connection::supportsMappedGrid() const noexcept
+{
+    return m_impl->supportsMappedGrid();
+}
+
+MappedGridPlane Connection::requestMappedGridPlane(
+    const MappedGridPlaneRequest& request, StopToken cancellation)
+{
+    return m_impl->requestMappedGridPlane(request, cancellation);
 }
 
 void Connection::closeDataset(DatasetId dataset, StopToken cancellation)

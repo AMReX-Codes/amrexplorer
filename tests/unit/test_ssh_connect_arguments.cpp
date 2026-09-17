@@ -85,5 +85,45 @@ int main()
         "--server after a path was accepted as a path");
     require(!amrvis::qt::parseSshConnectArguments({}).request,
         "empty argument list was accepted");
+
+    // --companion names a remote plotfile to show beside the one path; it
+    // may come before or after that path, needs an argument, may be given
+    // once, and pairs with exactly one path. After -- it is a path.
+    constexpr std::array<std::string_view, 4> companionAfter{
+        "frontier", "/remote/atmos", "--companion", "/remote/ocean"};
+    const auto after = amrvis::qt::parseSshConnectArguments(companionAfter);
+    require(after.request && after.request->paths.size() == 1
+            && after.request->paths.front() == "/remote/atmos"
+            && after.request->companion == "/remote/ocean",
+        "--companion after the path was not accepted");
+    constexpr std::array<std::string_view, 6> companionBefore{"frontier",
+        "--server", "~/bin/amrexplorer-server", "--companion", "/remote/ocean",
+        "/remote/atmos"};
+    const auto before = amrvis::qt::parseSshConnectArguments(companionBefore);
+    require(before.request && before.request->paths.size() == 1
+            && before.request->companion == "/remote/ocean",
+        "--companion before the path was not accepted");
+    constexpr std::array<std::string_view, 3> companionMissing{
+        "frontier", "/remote/atmos", "--companion"};
+    require(!amrvis::qt::parseSshConnectArguments(companionMissing).request,
+        "--companion without a path was accepted");
+    constexpr std::array<std::string_view, 6> companionTwice{"frontier",
+        "/remote/atmos", "--companion", "/remote/ocean", "--companion", "/remote/ice"};
+    require(!amrvis::qt::parseSshConnectArguments(companionTwice).request,
+        "a second --companion was accepted");
+    constexpr std::array<std::string_view, 4> companionAlone{
+        "frontier", "--companion", "/remote/ocean", "--"};
+    require(!amrvis::qt::parseSshConnectArguments(companionAlone).request,
+        "--companion without a plotfile to pair with was accepted");
+    constexpr std::array<std::string_view, 5> companionSequence{"frontier",
+        "/remote/plt00010", "/remote/plt00020", "--companion", "/remote/ocean"};
+    require(!amrvis::qt::parseSshConnectArguments(companionSequence).request,
+        "--companion beside a sequence was accepted");
+    constexpr std::array<std::string_view, 4> companionAsPath{
+        "frontier", "--", "--companion", "/remote/ocean"};
+    const auto asPath = amrvis::qt::parseSshConnectArguments(companionAsPath);
+    require(asPath.request && asPath.request->paths.size() == 2
+            && asPath.request->companion.empty(),
+        "--companion after -- was not taken as a path");
     return 0;
 }

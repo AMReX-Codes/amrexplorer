@@ -4,13 +4,19 @@
 #include <QApplication>
 #include <QImage>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QPoint>
 #include <QPointF>
+#include <QRectF>
 #include <QScrollBar>
+#include <QSizeF>
 #include <QTransform>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <vector>
 
 namespace {
@@ -450,11 +456,284 @@ void tearingDownTheSceneForgetsThePointTally()
         "replacing the overlays left the point tally behind");
 }
 
+// Move the pointer over a scene point and report which tile and raster pixel
+// the view named, or -1 when it stayed silent.
+struct TileProbe {
+    int tile = -1;
+    int x = -1;
+    int y = -1;
+};
+
+TileProbe probeAt(amrvis::qt::ImageView& view, const QPointF& scenePoint)
+{
+    TileProbe probe;
+    const auto connection = QObject::connect(&view,
+        &amrvis::qt::ImageView::tileProbeMoved, &view,
+        [&probe](int tile, int x, int y) { probe = {tile, x, y}; });
+    const auto position = QPointF(view.mapFromScene(scenePoint));
+    QMouseEvent event(QEvent::MouseMove, position,
+        view.viewport()->mapToGlobal(position), Qt::NoButton, Qt::NoButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(view.viewport(), &event);
+    QObject::disconnect(connection);
+    return probe;
+}
+
+void tilesShareOnePlacedScene()
+{
+    amrvis::qt::ImageView view;
+    view.resize(400, 400);
+    view.show();
+    QApplication::processEvents();
+    // An upper 100x50 raster over the top of a 100x90 canvas and a lower
+    // 60x40 raster under it, offset 20 units in x: the shape of two datasets
+    // stacked along z and aligned along x.
+    view.setTileImage(0, solidImage(100, 50), QRectF(0.0, 0.0, 100.0, 50.0),
+        QRectF(0.0, 0.0, 100.0, 90.0), amrvis::qt::ImageTransformPolicy::GeometryAware);
+    view.setTileImage(1, solidImage(60, 40), QRectF(20.0, 50.0, 60.0, 40.0));
+    require(view.tileCount() == 2 && view.hasTileImage(0) && view.hasTileImage(1),
+        "two tiles were not installed");
+    require(view.tileSceneRect(1) == QRectF(20.0, 50.0, 60.0, 40.0),
+        "the second tile did not take its scene rect");
+    require(view.displaySize() == QSizeF(100.0, 90.0),
+        "displaySize is not the tiles' footprint");
+    require(view.sceneRect() == QRectF(0.0, 0.0, 100.0, 90.0),
+        "the canvas rect did not become the scene rect");
+    QApplication::processEvents();
+    // Fit frames the footprint: both tiles are inside the viewport.
+    const auto footprint = view.mapFromScene(QRectF(0.0, 0.0, 100.0, 90.0)).boundingRect();
+    require(view.viewport()->rect().contains(footprint),
+        "Fit did not frame both tiles");
+
+    // The pointer names the tile it is over, in that tile's raster pixels.
+    auto probe = probeAt(view, QPointF(50.5, 70.5));
+    require(probe.tile == 1 && probe.x == 30 && probe.y == 20,
+        "a point over the lower tile was not reported in its pixels");
+    probe = probeAt(view, QPointF(50.5, 25.5));
+    require(probe.tile == 0 && probe.x == 50 && probe.y == 25,
+        "a point over the upper tile was not reported in its pixels");
+    // A hidden tile is not hit; the point falls outside the other tile.
+    view.setTileVisible(1, false);
+    probe = probeAt(view, QPointF(50.5, 70.5));
+    require(probe.tile == -1, "a hidden tile still took the pointer");
+    view.setTileVisible(1, true);
+
+    // Overlays belong to their tile: replacing one raster keeps the other's.
+    view.setGridBoxes({{QRectF(0.0, 0.0, 10.0, 10.0), Qt::yellow, {}}}, 1);
+    view.setGridBoxes({{QRectF(0.0, 0.0, 10.0, 10.0), Qt::yellow, {}}}, 0);
+    require(view.gridBoxCount() == 2, "grid boxes were not installed per tile");
+    view.setTileImage(0, solidImage(100, 50), QRectF(0.0, 0.0, 100.0, 50.0));
+    require(view.gridBoxCount() == 1 && view.hasTileImage(1),
+        "replacing the upper tile disturbed the lower one");
+
+    // Removing the extra tile shrinks the list; the placeholder clears all.
+    view.removeTile(1);
+    require(view.tileCount() == 1 && view.hasTileImage(0),
+        "removing the second tile did not leave the first alone");
+    view.setTileImage(1, solidImage(60, 40), QRectF(20.0, 50.0, 60.0, 40.0));
+    view.setPlaceholder(QStringLiteral("Loading dataset..."));
+    require(view.tileCount() == 1 && !view.hasImage(),
+        "the placeholder left a tile behind");
+    // And setImage is the single-tile form again.
+    view.setTileImage(1, solidImage(60, 40), QRectF(20.0, 50.0, 60.0, 40.0));
+    view.setImage(solidImage(8, 8));
+    require(view.tileCount() == 1 && view.image().size() == QSize(8, 8),
+        "setImage did not reduce the view to one tile");
+}
+
+void clearingAnAbsentTileLeavesTheViewAlone()
+{
+    amrvis::qt::ImageView view;
+    view.resize(400, 400);
+    view.show();
+    QApplication::processEvents();
+    // A remote raster over a 40x20 cell window of a 100x100 domain: the tile
+    // rect is in cells, the raster in pixels, so a footprint measurement
+    // would differ from the raster size.
+    view.setImage(solidImage(80, 40), amrvis::qt::ImageTransformPolicy::GeometryAware,
+        {}, amrvis::qt::ImageView::VirtualPlacement{
+            QRectF(10.0, 10.0, 40.0, 20.0), QSizeF(100.0, 100.0)});
+    require(view.displaySize() == QSizeF(80.0, 40.0),
+        "a placed single raster does not report its pixel size");
+    // Clearing overlays on a tile that was never placed is a no-op.
+    view.setCellHighlight(std::nullopt, 1);
+    view.setCellHighlightPath(std::nullopt, 1);
+    view.setGridBoxes({}, 1);
+    view.setOverlaySegments({}, 1);
+    view.setOverlayPaths({}, 1);
+    view.setPointOverlays({}, 1);
+    require(view.tileCount() == 1, "clearing an absent tile grew the tile list");
+    require(view.displaySize() == QSizeF(80.0, 40.0),
+        "clearing an absent tile changed displaySize");
+}
+
+void fitFramesTheCanvasNotTheTilesOnShow()
+{
+    amrvis::qt::ImageView view;
+    view.resize(400, 400);
+    view.show();
+    QApplication::processEvents();
+    // Two layers on a panel that shows one at a time: the canvas is their
+    // union and Fit must frame it whichever tile is visible.
+    view.setTileImage(0, solidImage(100, 50), QRectF(0.0, 0.0, 100.0, 50.0),
+        QRectF(0.0, 0.0, 100.0, 50.0), amrvis::qt::ImageTransformPolicy::GeometryAware);
+    view.setTileImage(1, solidImage(40, 50), QRectF(30.0, 0.0, 40.0, 50.0));
+    QApplication::processEvents();
+    const auto both = view.transform();
+    view.setTileVisible(0, false);
+    view.fitToWindow();
+    require(view.transform() == both, "Fit re-framed the one tile on show");
+    view.setTileVisible(0, true);
+    view.setTileVisible(1, false);
+    view.fitToWindow();
+    require(view.transform() == both, "Fit re-framed the other tile on show");
+}
+
 } // namespace
+
+bool nearly(double actual, double expected, double relative = 1e-9)
+{
+    return std::abs(actual - expected) <= relative * std::max(1.0, std::abs(expected));
+}
+
+void displayStretchLivesInTheViewTransform()
+{
+    amrvis::qt::ImageView view;
+    view.resize(400, 400);
+    view.show();
+    QApplication::processEvents();
+    view.setImage(solidImage(100, 50));
+    QApplication::processEvents();
+    const auto unstretched = view.transform();
+    require(nearly(unstretched.m22() / unstretched.m11(), 1.0),
+        "an unstretched Fit is not isotropic");
+
+    // Fit: the 100x50 raster shown 1:4 is 100x200 in display units, so the
+    // horizontal axis binds and the vertical is four times as tall.
+    view.setDisplayStretch(1.0, 4.0);
+    const auto fitted = view.transform();
+    require(nearly(fitted.m22() / fitted.m11(), 4.0),
+        "Fit did not apply the vertical stretch");
+    require(fitted.m11() < unstretched.m11(),
+        "the stretched Fit did not shrink to keep the raster inside the view");
+    require(nearly(view.isotropicScale(), fitted.m11()),
+        "the isotropic scale is not m11 when the horizontal stretch is one");
+    require(view.displaySize() == QSizeF(100.0, 200.0),
+        "displaySize does not multiply the raster by the stretch");
+    require(view.composedImageSize(1.0) == QSize(100, 200),
+        "the export size ignores the stretch");
+    // A footprint past the cap on its own is still capped, aspect kept.
+    {
+        amrvis::qt::ImageView tall;
+        tall.setImage(solidImage(1024, 1024));
+        tall.setDisplayStretch(1.0, 1000.0);
+        const auto capped = tall.composedImageSize(1.0);
+        require(capped.height() == 8192 && capped.width() == 8,
+            "a stretched export footprint escaped the size cap");
+    }
+    // The raster still fits: both device-space extents are within the view.
+    const auto footprint
+        = view.mapFromScene(view.imageSceneRect()).boundingRect();
+    require(footprint.width() <= 400 && footprint.height() <= 400,
+        "the stretched raster overflows the viewport");
+
+    // Fixed scale: N is pixels per raster pixel along the less stretched axis.
+    view.setFixedScale(2);
+    require(nearly(view.transform().m11(), 2.0)
+            && nearly(view.transform().m22(), 8.0),
+        "a fixed scale did not multiply each axis by its stretch");
+    require(nearly(view.isotropicScale(), 2.0),
+        "isotropicScale is not the fixed factor");
+
+    // Custom: rubber-band zoom keeps the ratio too.
+    view.zoomToRect(QRectF(10.0, 10.0, 20.0, 20.0));
+    require(view.transformMode() == amrvis::qt::ImageView::TransformMode::Custom,
+        "zoomToRect left the view out of Custom mode");
+    require(nearly(view.transform().m22() / view.transform().m11(), 4.0),
+        "zoomToRect flattened the stretch");
+    // Changing the stretch in Custom mode keeps the zoom and the centre (the
+    // raster must still overflow the viewport on both axes for the centre to
+    // be the view's to keep; a smaller raster is centred by alignment).
+    const auto zoom = view.isotropicScale();
+    const auto centre
+        = view.mapToScene(view.viewport()->rect()).boundingRect().center();
+    view.setDisplayStretch(1.0, 2.0);
+    require(nearly(view.transform().m22() / view.transform().m11(), 2.0),
+        "a Custom-mode stretch change did not update the ratio");
+    require(nearly(view.isotropicScale(), zoom),
+        "a Custom-mode stretch change altered the zoom");
+    const auto after
+        = view.mapToScene(view.viewport()->rect()).boundingRect().center();
+    require(std::abs(after.x() - centre.x()) < 1.0
+            && std::abs(after.y() - centre.y()) < 1.0,
+        "a Custom-mode stretch change moved the viewport centre");
+
+    // An equal stretch is a no-op on the transform, and bad values mean one.
+    const auto before = view.transform();
+    view.setDisplayStretch(1.0, 2.0);
+    require(before == view.transform(), "an equal stretch touched the view");
+    view.setDisplayStretch(0.0, -3.0);
+    require(view.displayStretch() == QPointF(1.0, 1.0),
+        "non-positive stretch factors were not treated as one");
+}
+
+void viewChangedReportsEveryMoveAndNoReplacement()
+{
+    amrvis::qt::ImageView view;
+    view.resize(400, 300);
+    view.show();
+    QApplication::processEvents();
+    int changes = 0;
+    QObject::connect(&view, &amrvis::qt::ImageView::viewChanged,
+        &view, [&changes] { ++changes; });
+    // A tile on a canvas, as a mapped warp's window is placed.
+    const QRectF canvas(0.0, 0.0, 200.0, 100.0);
+    view.setTileImage(0, solidImage(100, 50), QRectF(0.0, 0.0, 200.0, 100.0),
+        canvas, amrvis::qt::ImageTransformPolicy::GeometryAware);
+    QApplication::processEvents();
+    require(changes > 0, "installing and fitting the first tile reported no view change");
+
+    // Replacing the tile on the unchanged canvas, Preserve: the transform,
+    // the scroll position and the viewport are as they were, so nothing is
+    // reported -- the guard that keeps a demand render from re-triggering.
+    changes = 0;
+    view.setTileImage(0, solidImage(120, 60), QRectF(50.0, 25.0, 100.0, 50.0),
+        canvas, amrvis::qt::ImageTransformPolicy::Preserve);
+    QApplication::processEvents();
+    require(changes == 0, "replacing a tile on an unchanged canvas reported a view change");
+
+    // A wheel zoom, a scroll, a resize: each is reported.
+    changes = 0;
+    view.zoomBy(2.0);
+    QApplication::processEvents();
+    require(changes >= 1, "a zoom reported no view change");
+    changes = 0;
+    auto* bar = view.horizontalScrollBar();
+    require(bar->maximum() > 0, "the zoomed view did not scroll, so this proves nothing");
+    bar->setValue(bar->maximum() / 2);
+    QApplication::processEvents();
+    require(changes >= 1, "a scroll reported no view change");
+    changes = 0;
+    view.resize(300, 200);
+    QApplication::processEvents();
+    require(changes >= 1, "a resize reported no view change");
+
+    // Leaving a virtual canvas that was never entered leaves the explicit
+    // canvas and the tile alone.
+    changes = 0;
+    const auto placed = view.tileSceneRect(0);
+    view.setVirtualCanvas(std::nullopt);
+    QApplication::processEvents();
+    require(view.tileSceneRect(0) == placed && view.sceneRect() == canvas,
+        "leaving an absent virtual canvas displaced the tile or dropped the canvas");
+    require(changes == 0, "leaving an absent virtual canvas reported a view change");
+}
 
 int main(int argc, char* argv[])
 {
     QApplication application(argc, argv);
+    viewChangedReportsEveryMoveAndNoReplacement();
+    displayStretchLivesInTheViewTransform();
     scaleBarUsesNativeOrExplicitUnits();
     scaleBarIsPaintedOverTheSlice();
     scaleBarIsPaintedIntoExportedComposition();
@@ -464,5 +743,8 @@ int main(int argc, char* argv[])
     fullyVisibleSceneIgnoresPan();
     arrowKeysRequestPanOnlyWhenFocusedWithAnImage();
     tearingDownTheSceneForgetsThePointTally();
+    tilesShareOnePlacedScene();
+    clearingAnAbsentTileLeavesTheViewAlone();
+    fitFramesTheCanvasNotTheTilesOnShow();
     return 0;
 }

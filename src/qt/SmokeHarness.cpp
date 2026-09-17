@@ -46,7 +46,8 @@ Outcome dispatch(Context& context)
              &dispatchShortcuts,
              &dispatchSequence,
              &dispatchVolume,
-             &dispatchDerived
+             &dispatchDerived,
+             &dispatchCompanion
          }) {
         if (auto outcome = themed(context); outcome.handled) {
             return outcome;

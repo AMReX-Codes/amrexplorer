@@ -35,6 +35,10 @@ You can also start without a path and use the File menu:
   Headerless `_D_*` files are supported when their companion `_H` file is
   present in the same directory.
 - **Open MultiFab...** opens a standalone MultiFab header.
+- **Open Companion Plotfile...** shows a second 3-D plotfile in the same
+  window beside the open one, when the two share a plane -- see
+  [Companion plotfiles](#companion-plotfiles); **Open Remote Companion
+  Plotfile...** takes one from a server. **Close Companion** removes it.
 - **Open New Window** creates an independent viewer for side-by-side
   comparison.
 - **Close Window** (Ctrl+W, Cmd+W on macOS) closes only the current window;
@@ -44,6 +48,8 @@ You can also start without a path and use the File menu:
 Cylindrical RZ and 3-D spherical plotfiles open normally but are displayed on
 their logical grid. **2-D spherical (r, θ)** plotfiles can also be shown in
 true physical space — see [2-D spherical coordinates](#2-d-spherical-coordinates).
+Plotfiles that store their cell corners' positions (ERF, REMORA) can be shown
+on that stretched grid — see [Mapped grids](#mapped-grids).
 
 ## Remote datasets
 
@@ -152,6 +158,10 @@ provided the script passes the remote command through (`exec ssh target
 - *"unknown option: --stdio"*: the `amrexplorer-server` installed on the
   remote machine predates this client. Build and install a current one -- see
   [INSTALL.md](../INSTALL.md).
+- *"Remote values: float"* in the status bar: the remote server predates
+  full-precision values (protocol 1.5), so a field whose values differ only in
+  their eighth significant digit or beyond renders flat. Hover it for the full
+  notice; installing a current server clears it.
 - The tail of the remote side's error output is included in the failure
   message, and the Diagnostics dock shows the session's state at any time.
 - A shell startup file that prints output is harmless before the session
@@ -194,10 +204,11 @@ The main controls are:
    Units...** to identify the plotfile coordinate unit, or **View > Scale Bar**
    to show or hide the annotation. It is omitted when the horizontal coordinate
    is an angle (the spherical theta-r view), and the option is disabled when
-   cell sizes are anisotropic.
+   the screen does not show the same length per pixel along both axes (see
+   [Aspect ratio and axis scaling](#aspect-ratio-and-axis-scaling)).
 6. **Isometric view** shows the domain, grid boxes, and current slice planes;
-   **View > Volume Rendering...** opens the same view with the field
-   ray-cast into it.
+   drag to turn it in any direction and wheel to zoom. **View > Volume
+   Rendering...** opens the same view with the field ray-cast into it.
 7. **Color Scale** reports the active value-to-color mapping.
 8. **Animation** controls a 3-D plane sweep or an open plotfile sequence.
 
@@ -267,7 +278,11 @@ screen pixels per finest-level cell. A very wide local domain cannot be shown
 at finest resolution all at once, so the requested factor may not be reachable;
 the Scale button then reports what it applied, such as `32x→16x`. Rubber-band
 zoom is unaffected: selecting a subregion re-reads that region at finest
-resolution.
+resolution. When the display is stretched (see
+[Aspect ratio and axis scaling](#aspect-ratio-and-axis-scaling)), the factor
+applies along the dataset's tightest axis and the others get more pixels per
+cell, the same number on every panel: in Physical Size a fixed scale shows x
+as wide on the XY panel as on the XZ panel beside it.
 
 The line-plot window can accumulate curves, which is useful when comparing
 variables, levels, or positions. Its horizontal axis uses physical coordinates
@@ -303,6 +318,42 @@ stays `0.1`. Give an explicit precision, such as `%.13g`, to pin the digit
 count and stop it adapting; **Full precision** in that dialog sets `%.17g`,
 which is every digit a double can carry.
 
+## Aspect ratio and axis scaling
+
+By default a slice panel draws one square screen pixel per finest-level cell,
+so its shape is the region's extent in cells. Plotfiles whose cells are not
+square (dx differs from dy or dz) then look stretched relative to the physical
+domain. **View > Aspect Ratio** offers two proportions:
+
+- **Cell Counts** — the default described above.
+- **Physical Size** — each axis is scaled by its finest-level cell size, so the
+  panel has the physical aspect of the region it shows. A domain a thousand
+  times taller than wide becomes a thin strip; use axis scaling to widen it.
+
+**View > Aspect Ratio > Axis Scaling...** stretches the X, Y, and Z axes by
+factors of your own, on top of the chosen proportion. Each 3-D panel applies
+the factors of the two axes it shows, and the isometric wireframe in the
+lower-right panel is stretched by all three, so a shallow ocean's grid boxes
+stay visible there too. With a [companion
+plotfile](#companion-plotfiles) open, the axis perpendicular to the shared
+plane has one factor per dataset. The factors reset to 1 when you open a
+new dataset or sequence and are kept while stepping through a sequence's
+frames; the proportion persists across sessions.
+
+The stretch is applied on screen only. The slice raster keeps one sample per
+finest cell, readouts and overlays follow the stretch, and image and animation
+exports reproduce it. An export caps its longer side at 8192 pixels, so an
+extreme stretch reduces the resolution of the shorter side. The scale bar is offered while the screen shows the same
+length per pixel along both axes: in Cell Counts mode that requires square
+cells, in Physical Size mode equal axis factors. Vector glyphs are drawn in
+cell units, so a stretched display skews their arrows.
+
+The controls are unavailable for 2-D spherical plotfiles, whose R-Z view is
+already physical, and Physical Size is unavailable for standalone FABs and
+MultiFabs, which carry no cell sizes. While a [mapped grid](#mapped-grids) is
+shown the display is physical too: the menu shows Physical Size in effect,
+Axis Scaling still applies, and the persisted proportion is untouched.
+
 ## Working with 3-D data
 
 A 3-D dataset is shown as three orthogonal slices:
@@ -313,8 +364,10 @@ A 3-D dataset is shown as three orthogonal slices:
 
 Change a plane with the X, Y, and Z index controls in **3D Position**. A right
 click in any slice moves the other two planes so that all three intersect at
-the selected point. Crosshairs and the isometric view show their shared
-location.
+the selected point. Each panel draws two lines where the other planes cut it,
+and the isometric view draws the planes; press **I** or choose **View > Slice
+Planes** to show or hide both. They are shown by default, and the choice
+persists across sessions.
 
 Each slice panel can be navigated independently. Field, level, range,
 logarithmic mapping, and palette are shared so the three panels remain
@@ -324,14 +377,81 @@ The **Plane Sweep** controls in the Animation panel select an axis and step or
 play through its sample indices. The speed slider controls the delay between
 frames.
 
+### Companion plotfiles
+
+Coupled simulations often write two plotfiles that meet at a plane: an
+atmosphere above the ocean surface and the ocean below it, for example. With
+a 3-D plotfile open, choose **File > Open Companion Plotfile...** (or start
+`amrexplorer atmosphere_plt --companion ocean_plt`) to show the second one in
+the same window. The two domains must touch along exactly one axis and
+overlap along the other two; anything else is refused with a message and the
+open dataset stays as it was.
+
+The companion may be local or remote whatever the open plotfile is. **File >
+Open Companion Plotfile...** browses this machine; **File > Open Remote
+Companion Plotfile...** a server: the one the open plotfile came from when it
+is remote (the dialog keeps that session), else any server, over the window's
+remote session, started from the dialog if there is none. The command line
+form is `amrexplorer --ssh host /data/atmosphere_plt --companion
+/data/ocean_plt`. Plotfiles on two different servers cannot be paired.
+
+In the two panels that show the perpendicular axis, both datasets are drawn
+stacked at their physical positions and aligned along the shared axis, each
+at one raster sample per finest cell. The panel normal to the shared plane
+shows whichever dataset holds the current slice position; moving the position
+across the interface switches it. The position control along the
+perpendicular axis counts the lower dataset's rows then the upper's, and the
+shared axes count cells over the union of the two domains.
+
+A second toolbar row, named after the companion's directory, holds its own
+**Field**, **Level**, and **Range** controls, and the Color Scale panel shows
+one bar per dataset; the palette and **Log** are shared. Tick **Same as
+primary** to colour the companion with the primary's displayed range instead;
+its own range controls and colour bar are then withheld and one scale serves
+both. Velocity vectors are drawn on the primary only. Probing, right-click
+slice moves, and line plots work on whichever dataset is under the pointer.
+**View > Aspect Ratio > Axis Scaling...** offers one factor per dataset along
+the perpendicular axis, so a shallow ocean can be stretched under a tall
+atmosphere, and one factor for each shared axis. A rubber-band selection,
+which may straddle the interface, re-slices each dataset for the part inside
+its own domain and frames the selection; Shift-drag and the arrow keys move
+that window and refresh both; **Sync Rubber-band Zoom** carries the selection's
+extents to the other panels along the axes they share. Wheel zoom and the
+fixed scales act on the view alone. A fixed scale means what it means for the
+open plotfile by itself: in Physical Size its tightest cell is one pixel at
+1x, and a companion with finer cells shows them smaller than a pixel until its
+own factor in **Axis Scaling...** stretches them.
+
+With **View > Mapped Grid** on (see [Mapped grids](#mapped-grids)), each
+dataset that carries node positions is drawn on them and the other, if it
+has none, stays on its logical grid beside it; the menu is offered when
+either does. The two are stacked about the interface as before, each
+dataset's own vertical factor still applies, and the display is Physical
+Size while the grid is on. A rubber band, Shift-drag and the arrow keys frame
+the window as before; a mapped dataset is redrawn for what the panel shows
+of it rather than re-sliced.
+
+The Expression Editor's definitions reach the companion too, computed
+against its own stored fields: its **Field** list shows the ones it resolves,
+and greys the rest with the reason. Applying a change reloads both datasets,
+and the companion keeps its selected field by name.
+
+While a companion is open the Dataset Metadata panel lists both plotfiles,
+the isometric view outlines both domains in the panels' proportions (so a
+shallow ocean under a tall atmosphere stays visible), and image export composes the
+stacked panels without axes (their two vertical scales differ). Volume
+rendering, particles, the Dataset window, sequences, and the scale bar are
+not available in this mode. Opening any other dataset closes the companion.
+
 ## Volume rendering
 
 **View > Volume Rendering...** opens a window that ray-casts the whole 3-D
 field: every pixel accumulates the color and opacity of the cells along its
 line of sight, so translucent structure inside the domain shows through. The
-window has its own copy of the isometric view -- drag to rotate, wheel
-to zoom, and the **XY**, **XZ**, **YZ** buttons for the axis-aligned views --
-with the domain outline and the slice planes drawn over the rendered volume.
+window has its own copy of the isometric view -- drag to turn it in any
+direction, wheel to zoom, and the **XY**, **XZ**, **YZ** buttons for the
+axis-aligned views --
+with the domain outline drawn over the rendered volume.
 The AMR grid boxes can be drawn too, though they start off here.
 
 The window follows the main window: the field, the AMR level, the range mode
@@ -398,6 +518,25 @@ match. Its own controls set the opacity:
   the domain over the volume. The outline is on by default and the boxes are
   not: box edges crossing a translucent field read as structure in it, which
   is worth asking for rather than having to switch off.
+- **Isosurface** draws the surface where a field equals one value -- a shaded
+  shell, lit from where you are looking -- inside the volume, in depth order
+  with it, so a translucent volume shows through a translucent surface and a
+  surface hides what is behind it. Tick the group to turn it on. **Field** is
+  the field the surface is taken from, and it need not be the one the volume
+  shows: a density isosurface inside a temperature volume is the usual reason
+  to want one. It starts on a volume-fraction field (`vfrac` or `volfrac`)
+  when the plotfile has one, since that surface at 0.5 is an embedded
+  boundary's geometry; otherwise it starts on the volume's field and follows
+  it until you pick another. **Value** is the iso-value in the field's own
+  units; the slider
+  under it runs over the field's range and starts in the middle, or type a
+  value. **Color** and **Opacity** are the surface's own -- the palette plays
+  no part in it. The color is remembered across sessions; the field and the
+  value belong to a plotfile and start afresh. Dragging a slider shows drafts
+  like a moving camera does.
+- **Show volume** is ticked by default and has a say only while there is an
+  isosurface: clear it to draw the surface alone. The volume's field is then
+  not sampled at all, so a surface of one field costs nothing for the other.
 
 While the camera moves the window shows quick half-resolution drafts and
 renders the full frame once it settles. Rotating and zooming reuse the field
@@ -412,12 +551,18 @@ sends back the picture, never the field. It needs an `amrexplorer-server`
 that speaks protocol 1.2; against an older server the menu item stays
 disabled. **Smooth sampling** needs protocol 1.3, since the server is what
 does the sampling; against a 1.2 server the box is greyed out and says so,
-and the volume is rendered from the nearest voxel.
+and the volume is rendered from the nearest voxel. The **Isosurface** group
+and **Show volume** need protocol 1.6 for the same reason; against an older
+server the group is greyed out and says so, and the volume is drawn alone.
+Turning the view freely needs protocol 1.8; against an older server a drag
+turns it about the vertical axis only, and the view's tooltip says so.
 
 The server's `--max-volume-voxels` and `--volume-cache-mib` options set how
-large one volume and one dataset's cache may get. They are per volume
+large one sampled grid and one dataset's cache may get. They are per grid
 and per dataset, not a total for the server, so sizing a host means multiplying
-them by how many datasets and connections you allow. `--max-volume-voxels`
+them by how many datasets and connections you allow -- and a render with an
+isosurface of a second field holds two grids, so a cache that fits only one
+re-samples the second on every camera move. `--max-volume-voxels`
 starts at the largest a client may ask for, so it is there to tighten a server
 rather than to open one up; a request wanting more than it permits is rendered
 at the lower detail rather than refused.
@@ -564,7 +709,8 @@ between palettes.
 Press **B** or choose **View > Boxes** to show AMR grid boundaries.
 
 Choose **View > Scale Bar** to show or hide the length annotation. The option
-is unavailable when cell sizes are anisotropic. Plotfiles do not declare their
+is unavailable when the screen does not show the same length per pixel along
+both axes, as with non-square cells in Cell Counts mode. Plotfiles do not declare their
 length unit, so AMReXplorer leaves it unset by default and displays native
 coordinate values in scientific notation. Choose **View > Length Units...** to
 identify the unit used by the plotfile; AMReXplorer can then label the bar in a
@@ -619,7 +765,8 @@ particle is drawn only where it falls inside the cell the plane cuts, so each
 panel shows one cell's thickness of particles and follows the plane as you move
 it. The thickness is the cell actually drawn at that point, so a region shown at
 a coarse level keeps its thicker cell rather than losing particles to a finer
-level's spacing; where a panel shows no data it shows no particles either.
+level's spacing, and on a mapped grid it is the cell's own faces, which follow
+the terrain; where a panel shows no data it shows no particles either.
 
 Particle settings are not saved between sessions. Species selection, colors,
 subset percentage, seed, point size, and the slice-cell filter all reset when a
@@ -641,14 +788,57 @@ the vertical axis. AMReXplorer can present it three ways, chosen under **View >
 - **r-θ** — the logical grid drawn directly, r horizontal and θ vertical.
 - **θ-r** — the same logical grid transposed, θ horizontal and r vertical.
 
-**View > 2-D Spherical > Supersampling** sets how finely the logical grid is
-resampled for the R-Z view (1x–16x); higher factors trace the curved cell
-boundaries more smoothly at the cost of a larger image.
+The R-Z view is drawn the way a [mapped grid](#mapped-grids) is: at the
+screen's resolution with smoothed cell edges, the arcs kept round at any zoom,
+and redrawn shortly after each zoom or pan. The whole (r, θ) grid is sliced
+once; zooming only changes what is drawn of it. Rubber-band zoom frames the
+selected rectangle, and an exported image holds the part of the wedge the
+panel shows.
 
 Vector glyphs are available in all three layouts. In the R-Z view each arrow is
 anchored at its physical position and the (v_r, v_θ) components are rotated
 into physical directions. Line plots and particle overlays are available in the
 r-θ and θ-r layouts but not in the R-Z view.
+
+## Mapped grids
+
+Some plotfiles store where their cell corners really are. ERF and REMORA write
+a nodal MultiFab (`Level_N/Nu_nd`, listed after the level paths in the Header)
+whose components `amrexvec_nu_x`, `_y`, `_z` give each corner's displacement
+from its uniform position: a corner sits at prob_lo + (i·dx, j·dy, k·dz) + nu.
+Terrain-following and stretched vertical grids are the usual case. The data
+itself stays cell-centered, and by default AMReXplorer draws it on the
+logical grid as for any other plotfile.
+
+**View > Mapped Grid > Show on Mapped Grid** (off by default; the choice
+persists across sessions) draws each cell as the quadrilateral its four
+corners define instead. In a 3-D slice at cell index c along the normal, the
+corners are the average of node layers c and c+1. The cells are drawn at the
+screen's resolution with smoothed edges and redrawn shortly after each zoom
+or pan, so slanted edges stay straight at any zoom. The menu is available
+only when the open plotfile carries the node positions; the Dataset Metadata
+panel lists them under **Mapped grid**.
+
+While the mapped grid is shown the display is physical: **View > Aspect
+Ratio** shows Physical Size in effect (the persisted proportion is left as it
+was), **Axis Scaling...** still stretches the axes, and fixed scales work as
+in Physical Size. The R-Z view of a
+[2-D spherical plotfile](#2-d-spherical-coordinates) is drawn the same way. The probe reports the physical position under the cursor
+and the logical cell it belongs to; rubber-band zoom frames the rectangle;
+grid boxes, contours, vector glyphs, particles and the scale bar follow the
+warp. An exported image holds the part of the slice the panel shows.
+
+Over a remote session the node positions come from the server, which must
+be current (protocol 1.7 or newer); with an older one the menu says so. The
+raster is sized so the node plane fits the server's frame budget, and a zoom
+re-slices the cells on show.
+
+Limits: line plots and volume rendering use the logical grid, and the line
+tool is unavailable while the mapped grid is shown. In the two panels that
+show the stretched axis the crosshair guide along that axis is omitted,
+since a constant logical coordinate is a curve on screen. A companion
+plotfile is drawn on its own grid too (see
+[Companion plotfiles](#companion-plotfiles)).
 
 ## Plotfile sequences and animation
 
@@ -680,8 +870,10 @@ Transparency is available only for PNG, not MP4.
 
 The **View** menu controls these optional panels:
 
-- **Dataset Metadata** shows plotfile geometry, levels, variables, and related
-  metadata.
+- **Dataset Metadata** shows the plotfile's format, time, coordinate system,
+  physical domain, fields, whether it carries a [mapped grid](#mapped-grids),
+  and for each level its grid count, cell counts, index domain, cell sizes,
+  refinement ratio, and step.
 - **Color Scale** shows the current numeric range and palette.
 - **Diagnostics** reports request, I/O, and cache activity.
 - **Animation** contains plane-sweep and sequence controls.
@@ -696,12 +888,14 @@ and applies to every open window. The image viewports and the color scale keep
 their neutral gray under every skin, so a colormap looks the same whichever
 one you pick.
 
-Window geometry, logarithmic mapping, palette, skin, number format, and
-animation speed persist across sessions.
+Window geometry, logarithmic mapping, palette, skin, number format,
+animation speed, aspect ratio proportion, the mapped-grid display, and the
+isosurface color persist across sessions.
 
 Each open dataset has a 1 GiB data cache by default, and volume rendering fills
-a second cache of the same size with the grids it samples the field into, so a
-dataset you have volume-rendered can hold up to twice that. Closing the volume
+a second cache of the same size with the grids it samples the field into (an
+isosurface of a second field holds a second grid there), so a dataset you have
+volume-rendered can hold up to twice that. Closing the volume
 window does not give that memory back -- the grids stay cached for as long as
 the dataset is open, so that reopening the window draws immediately. Set
 `AMREXPLORER_CACHE_SIZE_MB` to a positive number of MiB before launching to
@@ -718,6 +912,7 @@ Independent windows have independent datasets, caches, and view state.
 | Shortcut | Action |
 | --- | --- |
 | B | Toggle AMR grid boxes |
+| I | Toggle the slice planes (panel lines and isometric view) |
 | 0 | Reset the zoom to the whole domain |
 | 1 through 6 | Use fixed scales from 1x through 32x |
 | Ctrl+0 | Composite the finest available level |

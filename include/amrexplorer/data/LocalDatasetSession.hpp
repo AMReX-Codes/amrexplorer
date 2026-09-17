@@ -47,6 +47,11 @@ struct VolumeGridKeyHash {
 // ReadCancelled when the token stops.
 [[nodiscard]] VolumeRange visibleVolumeRange(
     const VolumeGrid& grid, bool logarithmic, StopToken cancellation = {});
+// The range a frame reports when there is nothing to resolve one from: a
+// grid with no finite value, or a render that hides the volume and so never
+// maps a value at all. Neutral but usable -- finite, ordered, positive when
+// logarithmic -- so the frame passes the same checks as any other.
+[[nodiscard]] VolumeRange neutralVolumeRange(bool logarithmic) noexcept;
 
 class LocalDatasetSession final : public DatasetSession {
 public:
@@ -96,6 +101,14 @@ public:
     {
         return supportsVolumeRendering();
     }
+    [[nodiscard]] bool supportsVolumeIsosurface() const noexcept override
+    {
+        return supportsVolumeRendering();
+    }
+    [[nodiscard]] bool supportsVolumeOrientation() const noexcept override
+    {
+        return supportsVolumeRendering();
+    }
     [[nodiscard]] VolumeFrame renderVolume(const VolumeRenderRequest& request,
         StopToken cancellation = {}) override;
     // The same render with a bound on the threads it may use, or 0 to leave
@@ -111,6 +124,15 @@ public:
     // budget does (every unpinned grid is evicted and nothing is resident);
     // it is false only while a pinned grid still exceeds it.
     [[nodiscard]] bool setVolumeGridCacheBudget(std::uint64_t bytes);
+
+    // A plotfile whose Header lists the Nu_nd displacement MultiFab.
+    [[nodiscard]] bool supportsMappedGrid() const noexcept override;
+    // The names of its node-position components (amrexvec_nu_x, ...), for
+    // the catalog a server sends; empty without a mapped grid.
+    [[nodiscard]] std::vector<std::string> mappedGridComponentNames() const;
+    [[nodiscard]] MappedGridPlane requestMappedGridPlane(
+        const MappedGridPlaneRequest& request,
+        StopToken cancellation = {}) override;
 
     // Locally there is nothing between the definitions and the dataset that
     // opens with them.

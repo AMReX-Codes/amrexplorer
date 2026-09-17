@@ -9,19 +9,23 @@
 //       [newTime] [--no-statistics] [--non-finite] [--drop-field <name>]
 //
 // Copies the fixture into destDir and writes each level's Cell_D_* payloads
-// at the FabOnDisk offsets its Cell_H records. An optional time value replaces
-// the Header time line, giving plotfile-sequence frames distinct times.
+// at the FabOnDisk offsets its Cell_H records; a level with a Nu_nd_H (a
+// mapped-grid fixture) also gets its Nu_nd_D_* node displacements, from
+// mappedGridRecipe below. An optional time value replaces the Header time
+// line, giving plotfile-sequence frames distinct times.
 // --no-statistics rewrites the VisMF headers as legal version 2 headers whose
 // FabOnDisk records point directly to the generated binary payloads.
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <limits>
-#include <algorithm>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -47,10 +51,28 @@ struct FixtureHeader {
     int dimension = 0;
     std::size_t timeLine = 0;
     std::size_t physicalUpperLine = 0;
+    // The physical domain and each level's cell size, which place a node
+    // index in space for the mapped-grid recipe.
+    std::array<double, 3> physicalLower{0.0, 0.0, 0.0};
+    std::array<double, 3> physicalUpper{1.0, 1.0, 1.0};
+    std::vector<std::array<double, 3>> cellSize;
 };
 
+std::array<double, 3> readTriple(const std::string& line, int dimension,
+    const char* what)
+{
+    std::istringstream input(line);
+    std::array<double, 3> values{0.0, 0.0, 0.0};
+    for (int axis = 0; axis < dimension; ++axis) {
+        input >> values[static_cast<std::size_t>(axis)];
+    }
+    require(static_cast<bool>(input), what);
+    return values;
+}
+
 // Plotfile Header layout: version, field count, one line per field name,
-// dimension, time, ...
+// dimension, time, finest level, physical lower, physical upper, refinement
+// ratios, level domains, level steps, one cell-size line per level, ...
 FixtureHeader readHeader(const std::filesystem::path& path)
 {
     std::ifstream input(path);
@@ -73,6 +95,20 @@ FixtureHeader readHeader(const std::filesystem::path& path)
     header.physicalUpperLine = header.timeLine + 3;
     require(header.dimension == 2 || header.dimension == 3,
         "the fixture is neither 2-D nor 3-D");
+    const auto finestLevel = std::stoi(header.lines[header.timeLine + 1]);
+    const auto cellSizeLine = header.timeLine + 7;
+    require(finestLevel >= 0
+            && header.lines.size() > cellSizeLine + static_cast<std::size_t>(finestLevel),
+        "the fixture Header is missing its cell-size lines");
+    header.physicalLower = readTriple(header.lines[header.timeLine + 2],
+        header.dimension, "could not parse the Header physical lower bound");
+    header.physicalUpper = readTriple(header.lines[header.physicalUpperLine],
+        header.dimension, "could not parse the Header physical upper bound");
+    for (int level = 0; level <= finestLevel; ++level) {
+        header.cellSize.push_back(readTriple(
+            header.lines[cellSizeLine + static_cast<std::size_t>(level)],
+            header.dimension, "could not parse a Header cell-size line"));
+    }
     return header;
 }
 
@@ -140,13 +176,81 @@ std::vector<BlockRecord> readCellHeader(
     return blocks;
 }
 
-// Analytic cell values, component-major with i fastest — the recipe of
-// test_line_query.cpp: density(i, j) = (i + j) / 2, temperature = 100 +
-// density, 3-D q(i, j, k) = (i + j + k) / 9, where i/j/k are cell indices at
-// the level storing the grid.
+// The value of one component at one index of a block; `ordinal` counts the
+// values written so far in the block (component-major, i fastest).
+using ValueRecipe = std::function<double(
+    int component, int i, int j, int k, std::size_t ordinal)>;
+
+// The recipe of test_line_query.cpp: density(i, j) = (i + j) / 2,
+// temperature = 100 + density, 3-D q(i, j, k) = (i + j + k) / 9, where i/j/k
+// are cell indices at the level storing the grid.
+ValueRecipe fieldRecipe(int dimension, bool nonFiniteValues, double scale)
+{
+    return [dimension, nonFiniteValues, scale](
+               int component, int i, int j, int k, std::size_t ordinal) {
+        if (nonFiniteValues) {
+            switch (ordinal % 3) {
+            case 0:
+                return std::numeric_limits<double>::quiet_NaN();
+            case 1:
+                return std::numeric_limits<double>::infinity();
+            default:
+                return -std::numeric_limits<double>::infinity();
+            }
+        }
+        const auto base = dimension == 2
+            ? 0.5 * static_cast<double>(i + j)
+            : static_cast<double>(i + j + k) / 9.0;
+        return scale * (component == 0 ? base : 100.0 + base);
+    };
+}
+
+// The mapped-grid (Nu_nd) recipe: a terrain that is highest at the far
+// (x, y) corner and flattens out towards the top of the domain, with no
+// horizontal displacement. A function of the node's physical position
+// (lower + index * cell size of the level storing it), so every level of a
+// refined fixture describes the same terrain. With the domain [lo, hi] and
+// fractions X = (x - xlo) / (xhi - xlo) etc.:
+//
+//   nu_x = nu_y = 0
+//   nu_z(x, y, z) = 0.125 * (1 - Z) * (X + Y) / 2      (3-D)
+//   nu_y(x, y)    = 0.125 * (1 - Y) * X                (2-D)
+//
+// On the unit-domain fixtures every factor is exact in binary, so a test
+// can recompute the value and compare exactly; bilinear in each in-plane
+// pair, so linear interpolation between stored nodes reproduces it. Keep in
+// sync with test_mapped_grid_query.cpp.
+ValueRecipe mappedGridRecipe(const FixtureHeader& header,
+    const std::array<double, 3>& cellSize)
+{
+    const auto dimension = header.dimension;
+    const auto lower = header.physicalLower;
+    const auto upper = header.physicalUpper;
+    return [dimension, lower, upper, cellSize](
+               int component, int i, int j, int k, std::size_t) {
+        constexpr double amplitude = 0.125;
+        const auto fraction = [&](int axis, int index) {
+            const auto a = static_cast<std::size_t>(axis);
+            return static_cast<double>(index) * cellSize[a] / (upper[a] - lower[a]);
+        };
+        if (dimension == 3) {
+            if (component != 2) {
+                return 0.0;
+            }
+            return amplitude * (1.0 - fraction(2, k))
+                * (fraction(0, i) + fraction(1, j)) / 2.0;
+        }
+        if (component != 1) {
+            return 0.0;
+        }
+        return amplitude * (1.0 - fraction(1, j)) * fraction(0, i);
+    };
+}
+
+// Analytic values of one block, component-major with i fastest.
 std::vector<double> blockValues(
     const BlockRecord& block, int dimension, int fieldCount,
-    bool nonFiniteValues, double scale)
+    const ValueRecipe& recipe)
 {
     const auto lower = [&block](int axis) {
         return block.indices[static_cast<std::size_t>(axis)];
@@ -160,28 +264,8 @@ std::vector<double> blockValues(
             k <= (dimension == 3 ? upper(2) : 0); ++k) {
             for (int j = lower(1); j <= upper(1); ++j) {
                 for (int i = lower(0); i <= upper(0); ++i) {
-                    const auto base = dimension == 2
-                        ? 0.5 * static_cast<double>(i + j)
-                        : static_cast<double>(i + j + k) / 9.0;
-                    if (nonFiniteValues) {
-                        switch (values.size() % 3) {
-                        case 0:
-                            values.push_back(
-                                std::numeric_limits<double>::quiet_NaN());
-                            break;
-                        case 1:
-                            values.push_back(
-                                std::numeric_limits<double>::infinity());
-                            break;
-                        default:
-                            values.push_back(
-                                -std::numeric_limits<double>::infinity());
-                            break;
-                        }
-                    } else {
-                        values.push_back(
-                            scale * (component == 0 ? base : 100.0 + base));
-                    }
+                    values.push_back(
+                        recipe(component, i, j, k, values.size()));
                 }
             }
         }
@@ -193,7 +277,7 @@ std::vector<double> blockValues(
 // test_line_query.cpp's writeFab: an ASCII header line followed by
 // little-endian doubles.
 void writeFab(const std::filesystem::path& path, BlockRecord& block,
-    int dimension, int fieldCount, bool nonFiniteValues, double scale)
+    int dimension, int fieldCount, const ValueRecipe& recipe)
 {
     if (block.offset == 0) {
         std::ofstream create(path, std::ios::binary | std::ios::trunc);
@@ -206,8 +290,7 @@ void writeFab(const std::filesystem::path& path, BlockRecord& block,
         + block.boxText + " " + std::to_string(fieldCount) + "\n";
     output << header;
     block.payloadOffset = block.offset + header.size();
-    const auto values = blockValues(
-        block, dimension, fieldCount, nonFiniteValues, scale);
+    const auto values = blockValues(block, dimension, fieldCount, recipe);
     output.write(reinterpret_cast<const char*>(values.data()),
         static_cast<std::streamsize>(values.size() * sizeof(double)));
     require(static_cast<bool>(output), "could not write a fixture FAB payload");
@@ -366,6 +449,7 @@ int main(int argc, char* argv[])
             require(static_cast<bool>(input),
                 "could not parse the Header physical upper bound");
             upper[0] = *domainUpperX;
+            header.physicalUpper[0] = *domainUpperX;
             std::ostringstream output;
             output << std::setprecision(17);
             for (std::size_t axis = 0; axis < upper.size(); ++axis) {
@@ -403,13 +487,32 @@ int main(int argc, char* argv[])
             break;
         }
         auto blocks = readCellHeader(levelDir / "Cell_H", header.dimension);
+        const auto recipe = fieldRecipe(header.dimension, nonFiniteValues, scale);
         for (auto& block : blocks) {
             writeFab(levelDir / block.fileName, block,
-                header.dimension, header.fieldCount, nonFiniteValues, scale);
+                header.dimension, header.fieldCount, recipe);
         }
         if (omitStatistics) {
             writeHeaderWithoutStatistics(
                 levelDir / "Cell_H", blocks, header.fieldCount);
+        }
+        // A mapped-grid fixture also carries the nodal Nu_nd MultiFab, one
+        // component per space dimension, filled from mappedGridRecipe.
+        const auto nodalHeader = levelDir / "Nu_nd_H";
+        if (std::filesystem::is_regular_file(nodalHeader)) {
+            auto nodalBlocks = readCellHeader(nodalHeader, header.dimension);
+            require(static_cast<std::size_t>(level) < header.cellSize.size(),
+                "the Header lists no cell size for a Nu_nd level");
+            const auto nodalRecipe = mappedGridRecipe(
+                header, header.cellSize[static_cast<std::size_t>(level)]);
+            for (auto& block : nodalBlocks) {
+                writeFab(levelDir / block.fileName, block,
+                    header.dimension, header.dimension, nodalRecipe);
+            }
+            if (omitStatistics) {
+                writeHeaderWithoutStatistics(
+                    nodalHeader, nodalBlocks, header.dimension);
+            }
         }
     }
     writeParticles(destination, header.dimension);

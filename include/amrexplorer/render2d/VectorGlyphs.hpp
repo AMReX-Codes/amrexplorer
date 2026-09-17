@@ -1,6 +1,7 @@
 #pragma once
 
 #include <amrexplorer/core/Geometry.hpp>
+#include <amrexplorer/core/MappedGrid.hpp>
 #include <amrexplorer/core/Result.hpp>
 
 #include <vector>
@@ -52,5 +53,23 @@ struct VectorSegment {
 [[nodiscard]] std::vector<VectorSegment> generateSphericalRZVectorGlyphs(
     const ScalarPlane& uComponent, const ScalarPlane& vComponent, int count,
     const RealBox& displayRegion);
+
+// A glyph segment in display (physical) coordinates, in double: a view zoomed
+// deep into a large domain resolves finer than a float.
+struct DisplaySegment {
+    double x0 = 0.0;
+    double y0 = 0.0;
+    double x1 = 0.0;
+    double y1 = 0.0;
+};
+
+// generateVectorGlyphs' arrows on a mapped grid, whose velocity components are
+// Cartesian: each arrow's base moves through the node positions, while its
+// shaft and head keep their direction, at `lengthPerPixel` physical lengths per
+// plane pixel on both axes. `segments` are that function's triples (shaft,
+// then its two head barbs); a trailing partial triple is dropped.
+[[nodiscard]] std::vector<DisplaySegment> mappedVectorGlyphs(
+    const MappedGridPlane& nodes, const std::vector<VectorSegment>& segments,
+    double lengthPerPixel);
 
 } // namespace amrvis

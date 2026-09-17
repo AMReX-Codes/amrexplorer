@@ -1,8 +1,10 @@
 #include <amrexplorer/core/OrthoProjection.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <numbers>
 
 namespace amrvis {
 namespace {
@@ -27,51 +29,136 @@ Normalisation normalisation(const RealBox& domain) noexcept
 }
 
 // View coordinates of a normalised point: x1 right, y2 up, depth toward the
-// viewer -- Rz(azimuth) followed by the elevation rotation about x.
+// viewer -- the camera's rotation applied to the world point.
 struct ViewPoint {
     double x1 = 0.0;
     double y2 = 0.0;
     double depth = 0.0;
 };
 
-// The camera's two rotations, resolved once. Every conversion below needs
-// all four of these, so a caller applying the rotation more than once -- a
-// ray field resolves four vectors -- takes the trig once, not per vector.
+// The camera's rotation as a matrix, resolved once from the unit quaternion:
+// row 0 is the view's x1 axis in world terms, row 1 its y2, row 2 its depth.
+// A caller applying the rotation more than once -- a ray field resolves four
+// vectors -- builds it once, not per vector.
 struct Rotation {
-    double cosAz = 1.0;
-    double sinAz = 0.0;
-    double cosEl = 1.0;
-    double sinEl = 0.0;
+    std::array<Real3, 3> rows;
 };
 
 Rotation rotationOf(const OrthoCamera& camera) noexcept
 {
-    return {std::cos(camera.azimuth), std::sin(camera.azimuth),
-        std::cos(camera.elevation), std::sin(camera.elevation)};
+    const auto q = normalized(camera.rotation);
+    Rotation rotation;
+    rotation.rows[0] = Real3{{1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+        2.0 * (q.x * q.y - q.w * q.z), 2.0 * (q.x * q.z + q.w * q.y)}};
+    rotation.rows[1] = Real3{{2.0 * (q.x * q.y + q.w * q.z),
+        1.0 - 2.0 * (q.x * q.x + q.z * q.z), 2.0 * (q.y * q.z - q.w * q.x)}};
+    rotation.rows[2] = Real3{{2.0 * (q.x * q.z - q.w * q.y),
+        2.0 * (q.y * q.z + q.w * q.x), 1.0 - 2.0 * (q.x * q.x + q.y * q.y)}};
+    return rotation;
+}
+
+double dot(const Real3& a, const Real3& b) noexcept
+{
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
 ViewPoint toView(const Rotation& rotation, const Real3& normalised) noexcept
 {
-    const auto x1 = normalised[0] * rotation.cosAz - normalised[1] * rotation.sinAz;
-    const auto y1 = normalised[0] * rotation.sinAz + normalised[1] * rotation.cosAz;
-    return {x1, y1 * rotation.cosEl - normalised[2] * rotation.sinEl,
-        y1 * rotation.sinEl + normalised[2] * rotation.cosEl};
+    return {dot(rotation.rows[0], normalised), dot(rotation.rows[1], normalised),
+        dot(rotation.rows[2], normalised)};
 }
 
-// The inverse rotation: a view-space vector back to normalised space.
+// The inverse rotation (the transpose): a view-space vector back to
+// normalised space.
 Real3 toWorld(const Rotation& rotation, const ViewPoint& view) noexcept
 {
-    // Undo the elevation (transpose of the x rotation), then the azimuth.
-    const auto y1 = view.y2 * rotation.cosEl + view.depth * rotation.sinEl;
-    const auto z = -view.y2 * rotation.sinEl + view.depth * rotation.cosEl;
     Real3 world;
-    world[0] = view.x1 * rotation.cosAz + y1 * rotation.sinAz;
-    world[1] = -view.x1 * rotation.sinAz + y1 * rotation.cosAz;
-    world[2] = z;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        world[axis] = rotation.rows[0][axis] * view.x1
+            + rotation.rows[1][axis] * view.y2 + rotation.rows[2][axis] * view.depth;
+    }
     return world;
 }
 
 } // namespace
+
+double norm(const Quaternion& q) noexcept
+{
+    return std::sqrt(normSquared(q));
+}
+
+Quaternion normalized(const Quaternion& q) noexcept
+{
+    const auto length = norm(q);
+    if (!std::isfinite(length) || !(length > 0.0)) {
+        return {};
+    }
+    return {q.w / length, q.x / length, q.y / length, q.z / length};
+}
+
+bool nearUnit(const Quaternion& q, double tolerance) noexcept
+{
+    const auto length = norm(q);
+    return std::isfinite(length) && std::abs(length - 1.0) <= tolerance;
+}
+
+Quaternion axisAngle(const Real3& axis, double angle) noexcept
+{
+    const auto length = std::sqrt(dot(axis, axis));
+    if (!std::isfinite(length) || !(length > 0.0)) {
+        return {};
+    }
+    const auto s = std::sin(angle / 2.0) / length;
+    return {std::cos(angle / 2.0), axis[0] * s, axis[1] * s, axis[2] * s};
+}
+
+Real3 rotate(const Quaternion& q, const Real3& vector) noexcept
+{
+    const auto rotation = rotationOf(OrthoCamera{q, 1.0});
+    return {{dot(rotation.rows[0], vector), dot(rotation.rows[1], vector),
+        dot(rotation.rows[2], vector)}};
+}
+
+OrthoCamera orthoCameraFromAngles(double azimuth, double elevation, double zoom) noexcept
+{
+    // The turn about z first, then the tilt about the turned x axis: the
+    // tilt's quaternion on the left.
+    return {aboutX(std::cos(elevation / 2.0), std::sin(elevation / 2.0))
+            * aboutZ(std::cos(azimuth / 2.0), std::sin(azimuth / 2.0)),
+        zoom};
+}
+
+OrthoAngles nearestOrthoAngles(const OrthoCamera& camera) noexcept
+{
+    // The nearest roll-free rotation Rx(el) * Rz(az), measured by the angle
+    // between rotations: the tilt first, from the matrix entries that carry
+    // it, then the turn that best goes with whatever tilt came out.
+    // At a quarter-turn roll those entries are rounding dust and every tilt
+    // is equally near, so dust counts as zero and the tilt comes out level
+    // -- a fixed choice, not the dust's. The turn stays exact there: its two
+    // terms square to at least a half whatever the tilt is.
+    const auto q = normalized(camera.rotation);
+    const auto settled = [](double value) { return std::abs(value) < 1.0e-12 ? 0.0 : value; };
+    const auto elevation = std::atan2(settled(2.0 * (q.w * q.x - q.y * q.z)),
+        settled(1.0 - 2.0 * (q.x * q.x + q.y * q.y)));
+    const auto cosHalf = std::cos(elevation / 2.0);
+    const auto sinHalf = std::sin(elevation / 2.0);
+    // Half the turn, so the doubled angle wraps back into [-pi, pi].
+    const auto azimuth
+        = 2.0 * std::atan2(q.z * cosHalf - q.y * sinHalf, q.w * cosHalf + q.x * sinHalf);
+    return {std::remainder(azimuth, 2.0 * std::numbers::pi), elevation};
+}
+
+std::optional<OrthoAngles> orthoAnglesOf(const OrthoCamera& camera) noexcept
+{
+    // Without roll, world z has no sideways component on screen: the matrix
+    // entry that carries it is 2 (xz + wy).
+    const auto q = normalized(camera.rotation);
+    if (std::abs(q.x * q.z + q.w * q.y) > 1.0e-9) {
+        return std::nullopt;
+    }
+    return nearestOrthoAngles(camera);
+}
 
 ViewportFrame viewportFrame(int width, int height, double margin) noexcept
 {

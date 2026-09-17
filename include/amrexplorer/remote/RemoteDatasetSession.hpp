@@ -43,6 +43,8 @@ public:
     // plotfile; the frame comes back rendered, validated against the request.
     [[nodiscard]] bool supportsVolumeRendering() const noexcept override;
     [[nodiscard]] bool supportsVolumeSampling() const noexcept override;
+    [[nodiscard]] bool supportsVolumeIsosurface() const noexcept override;
+    [[nodiscard]] bool supportsVolumeOrientation() const noexcept override;
     // True when the server speaks protocol 1.4 -- which is also the only way
     // this session could have installed the list it was opened with, which is
     // what the GUI's reload loop relies on (see DatasetSession).
@@ -54,6 +56,19 @@ public:
         const override;
     [[nodiscard]] VolumeFrame renderVolume(const VolumeRenderRequest& request,
         StopToken cancellation = {}) override;
+    // True when the server speaks protocol 1.7 and the plotfile carries node
+    // positions; the plane comes back computed on the server, validated
+    // against the request and the catalog.
+    [[nodiscard]] bool supportsMappedGrid() const noexcept override;
+    // The protocol half alone: false against a server that predates 1.7,
+    // whose catalog cannot say whether the plotfile has node positions.
+    [[nodiscard]] bool peerSupportsMappedGrid() const noexcept;
+    [[nodiscard]] MappedGridPlane requestMappedGridPlane(
+        const MappedGridPlaneRequest& request,
+        StopToken cancellation = {}) override;
+    // The node components' names from the catalog, for the metadata panel.
+    [[nodiscard]] const std::vector<std::string>& mappedGridComponentNames()
+        const noexcept;
     [[nodiscard]] DatasetPage requestDatasetPage(
         const DatasetPageRequest& request, StopToken cancellation = {}) override;
     [[nodiscard]] std::optional<ValueRange> requestRange(
@@ -107,6 +122,7 @@ private:
     std::vector<DerivedFieldDefinition> m_derivedFieldDefinitions;
     std::size_t m_storedFieldCount = 0;
     std::vector<DerivedFieldSkip> m_derivedFieldSkips;
+    std::vector<std::string> m_mappedGridComponentNames;
     mutable std::mutex m_mutex;
     bool m_open = true;
 

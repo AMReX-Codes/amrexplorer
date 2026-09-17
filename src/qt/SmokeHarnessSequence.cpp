@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -197,6 +198,100 @@ Outcome dispatchSequence(Context& context)
         QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
             &application, [&application] { application.exit(1); });
         QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
+        && std::string_view(argv[1]) == "--mapped-grid-sequence-smoke-test") {
+        // Two frames of plotfile_3d_mapped with Mapped Grid on. Once a frame
+        // lands the view asks the warp for the window it shows; that ask must
+        // not restart the frame being displayed, which would load and display
+        // it twice. Frame 1 is stepped to with the x-z panel zoomed and lands
+        // drawn for that window, so nothing is re-warped after it.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        struct Progress {
+            std::vector<int> displays;
+            int settles = 0;
+            int settlesAtFrame = -1;
+            bool zoomed = false;
+            bool stepped = false;
+            QRectF zoomWindow;
+        };
+        auto progress = std::make_shared<Progress>();
+        const auto report = [&window, progress](const char* message) {
+            std::string list;
+            for (const auto index : progress->displays) {
+                list += ' ' + std::to_string(index);
+            }
+            qCritical("%s (frames displayed:%s, mapped %d, settles after frame 1: %d)",
+                message, list.c_str(), window.activeViewIsMappedForTest() ? 1 : 0,
+                progress->settlesAtFrame < 0 ? -1
+                                             : progress->settles - progress->settlesAtFrame);
+        };
+        QObject::connect(&window, &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, progress] {
+                ++progress->settles;
+                if (!progress->zoomed || progress->stepped) {
+                    return;
+                }
+                // The zoom's warp has landed once nothing is on its way.
+                QTimer::singleShot(0, &window, [&window, progress] {
+                    if (progress->stepped || window.sliceRequestPendingForTest()
+                        || window.slicesInFlightForTest() > 0) {
+                        return;
+                    }
+                    window.setActiveViewForTest(1);
+                    progress->zoomWindow = window.activeViewMappedWindowForTest();
+                    progress->stepped = true;
+                    window.stepSequence(1);
+                });
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, &application, progress, report](int index) {
+                progress->displays.push_back(index);
+                if (progress->displays.size() == 1 && index == 0) {
+                    // Long enough for a restarted load of this small frame to
+                    // be displayed again, and for each view's window.
+                    QTimer::singleShot(1000, &window,
+                        [&window, &application, progress, report] {
+                            window.setActiveViewForTest(1);  // the x-z panel
+                            if (progress->displays != std::vector<int>{0}
+                                || !window.activeViewIsMappedForTest()
+                                || window.activeViewMappedWindowForTest().isEmpty()) {
+                                report("frame 0 did not land once on its warp");
+                                application.exit(1);
+                                return;
+                            }
+                            progress->zoomed = true;
+                            for (int notch = 0; notch < 3; ++notch) {
+                                window.wheelActiveViewForTest(1);
+                            }
+                        });
+                } else if (index == 1 && progress->settlesAtFrame < 0) {
+                    progress->settlesAtFrame = progress->settles;
+                    QTimer::singleShot(1000, &window,
+                        [&window, &application, progress, report] {
+                            const auto xz = window.mappedPanelForTest(1);
+                            const bool ok = progress->displays == std::vector<int>{0, 1}
+                                && progress->settles == progress->settlesAtFrame
+                                && xz.warped && !progress->zoomWindow.isEmpty()
+                                && xz.window == progress->zoomWindow
+                                && std::abs(xz.tileDevice.width() - xz.image.width()) < 1e-6
+                                && std::abs(xz.tileDevice.height() - xz.image.height())
+                                    < 1e-6;
+                            if (!ok) {
+                                report("frame 1 did not land drawn for the zoomed window");
+                            }
+                            application.exit(ok ? 0 : 1);
+                        });
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(60000, &application,
+            [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.setMappedGridForTest(true);
             window.openSequence({first, second});
         });
     } else if (argc == 5

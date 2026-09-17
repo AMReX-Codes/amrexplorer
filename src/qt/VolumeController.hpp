@@ -9,6 +9,7 @@
 #include <amrexplorer/pipeline/VolumePipeline.hpp>
 #include <amrexplorer/render2d/Palette.hpp>
 
+#include <QColor>
 #include <QMetaObject>
 #include <QObject>
 #include <QPointer>
@@ -21,8 +22,10 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 class QAction;
+class QSettings;
 class QTimer;
 class QWidget;
 
@@ -75,6 +78,15 @@ class VolumeWindow;
 [[nodiscard]] RealBox volumeVisibleRegion(const RealBox& domain,
     const std::array<std::optional<RealBox>, 3>& viewRegions) noexcept;
 
+// The field an isosurface should start on when the host's list has a volume
+// fraction in it: a field named vfrac or volfrac (case-insensitive), or
+// failing an exact match one whose name starts that way. An embedded-boundary
+// plotfile's fraction at 0.5 is the geometry, which is what an isosurface is
+// most often opened to see. nullopt when the list has none, and the surface
+// starts on the volume's own field instead.
+[[nodiscard]] std::optional<FieldId> volumeFractionField(
+    const std::vector<std::pair<FieldId, QString>>& fields);
+
 // The volume view's state machine, extracted from MainWindow the way the
 // other collaborators are: it owns the Volume Rendering... action and the
 // Volume window, decides when a render is due -- a camera move, a changed
@@ -102,9 +114,8 @@ public:
         std::function<RangeController::Selection()> rangeSelection;
         // The palette in effect (colours; alpha ramp when the file had one).
         std::function<const Palette&()> palette;
-        // The three slice positions and whether the planes are shown.
+        // The three slice positions.
         std::function<std::array<double, 3>()> slicePositions;
-        std::function<bool()> slicePlanesVisible;
         // True once application shutdown began: late results are dropped
         // without touching the GUI.
         std::function<bool()> isShuttingDown;
@@ -116,6 +127,15 @@ public:
         // moving camera and the frame already up is left in place until the
         // next draft replaces it.
         std::function<bool()> sequencePlaying;
+        // Every field the host offers, id and display name, derived fields
+        // included: what the isosurface may be taken from. Optional, like the
+        // rest; without it the isosurface controls list nothing.
+        std::function<std::vector<std::pair<FieldId, QString>>()> fields;
+        // The application's settings store, opened per use: where the
+        // isosurface colour is kept across sessions. The field and the value
+        // are not -- they belong to a plotfile, the colour to a person.
+        // Optional; without it nothing is remembered.
+        std::function<std::unique_ptr<QSettings>()> settings;
     };
 
     VolumeController(Hooks hooks, QObject* parent = nullptr);
@@ -133,8 +153,8 @@ public:
     // Host notifications. configureForDataset: a dataset opened or a sequence
     // frame arrived -- the geometry is pushed and, with the window open, a
     // frame rendered with the same camera. refresh: field, level, range, log
-    // or palette changed. slicePositionsChanged / slicePlanesVisibilityChanged:
-    // overlay-only, no render. reset: the dataset is going away -- cancel,
+    // or palette changed. slicePositionsChanged: overlay-only, no render.
+    // reset: the dataset is going away -- cancel,
     // close the window, disable the action. cancel: in-flight work is
     // abandoned (shutdown, a dataset going away); the window stays.
     void configureForDataset();
@@ -153,13 +173,14 @@ public:
     void regionChanged();
     void refresh();
     void slicePositionsChanged();
-    void slicePlanesVisibilityChanged();
     void reset();
     void cancel();
 
     // The last frame displayed (empty until one is), for tests.
     [[nodiscard]] const VolumeFrame& lastFrame() const noexcept { return m_lastFrame; }
     [[nodiscard]] bool renderInFlight() const noexcept { return m_inFlight; }
+    // The open window, or null, for tests that drive its controls.
+    [[nodiscard]] VolumeWindow* window() const noexcept;
 
 signals:
     // A render started (+1) or ended (-1), for the host's activity count.
@@ -175,6 +196,14 @@ private:
     void startRender();
     void pushGeometry();
     void pushPalette();
+    // The host's field list into the isosurface controls, and the chosen
+    // field's range fetched for them -- on a worker, since a remote session's
+    // first answer is a round trip; the same key is not asked twice.
+    void pushFields();
+    void fetchIsosurfaceRange();
+    // The window's isosurface colour into the settings when it differs from
+    // what was last saved or restored.
+    void persistIsosurfaceColor();
     // The window is going away, closed here or by the user: abandon the render
     // in flight and forget that a frame was ever shown in it.
     void forgetWindow();
@@ -185,8 +214,21 @@ private:
     // every frame means it never elapses at the frame intervals the Speed
     // slider allows, and nothing renders at all.
     void abandonInFlight();
-    [[nodiscard]] QString describe(
-        const VolumeDisplayResult& result, const QString& fieldName) const;
+    [[nodiscard]] QString describe(const VolumeDisplayResult& result,
+        const QString& fieldName, const QString& isosurfaceName) const;
+
+    // What the last isosurface range was fetched for. The session by
+    // identity rather than by id, because a sequence opens a new one per
+    // frame and each has a range of its own; a late answer for an earlier key
+    // is dropped by generation.
+    struct IsosurfaceRangeKey {
+        std::weak_ptr<DatasetSession> dataset;
+        FieldId field;
+        int maximumLevel = 0;
+        CompositionPolicy composition = CompositionPolicy::FinestAvailable;
+    };
+    [[nodiscard]] static bool sameKey(
+        const IsosurfaceRangeKey& a, const IsosurfaceRangeKey& b) noexcept;
 
     Hooks m_hooks;
     QPointer<QAction> m_action;
@@ -212,6 +254,14 @@ private:
     // stretching something, and only then is it worth a draft.
     bool m_frameShown = false;
     VolumeFrame m_lastFrame;
+    std::optional<IsosurfaceRangeKey> m_isosurfaceRangeFor;
+    std::uint64_t m_isosurfaceRangeGeneration = 0;
+    // Stops the range fetch in flight: superseded by a newer one, or the
+    // window going away. The generation drops its result; this drops the
+    // work, which for a remote session is a round trip the pool would
+    // otherwise wait out.
+    StopSource m_isosurfaceRangeStop;
+    std::optional<QColor> m_persistedIsosurfaceColor;
 };
 
 } // namespace amrvis::qt

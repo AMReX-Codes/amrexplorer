@@ -135,6 +135,8 @@ int main()
         PayloadKind::DirectoryListing,
         PayloadKind::RenderedFrameRequest,
         PayloadKind::RenderedFrameResponse,
+        PayloadKind::MappedGridPlaneRequest,
+        PayloadKind::MappedGridPlaneResponse,
     };
     for (const auto kind : payloadKinds) {
         codec::NativeEnvelope native;
@@ -252,6 +254,52 @@ int main()
                 == slice.gridBoxes.front().physicalRegion,
         "bounded slice response did not round-trip");
 
+    // --- the 1.5 value vectors -------------------------------------------
+    {
+        // Two doubles one float ulp apart cannot both survive the legacy
+        // encoding, which is what makes them the test.
+        constexpr double narrowLow = 1.2566370621199999e-06;
+        constexpr double narrowHigh = 1.25663706213e-06;
+        require(static_cast<float>(narrowLow) == static_cast<float>(narrowHigh),
+            "the fixture pair no longer collapses under the legacy encoding");
+        SliceQueryResult narrow;
+        narrow.plane.width = 2;
+        narrow.plane.height = 1;
+        narrow.plane.physicalRegion = RealBox{
+            Real3{{0.0, 0.0, 0.0}}, Real3{{1.0, 1.0, 0.0}}};
+        narrow.plane.values = {narrowLow, narrowHigh};
+        narrow.plane.valid = {1, 1};
+        narrow.plane.sourceLevel = {0, 0};
+
+        // A current peer: the doubles go in the wide vector and come back
+        // bit for bit.
+        auto current = codec::toWire(narrow, CacheMetrics{});
+        require(current.values.empty() && current.values_f64.size() == 2,
+            "a current peer was not sent the double vector alone");
+        require(codec::fromWire(current).plane.values == narrow.plane.values,
+            "the double vector did not round-trip");
+
+        // A pre-1.5 peer: floats only, and the pair collapses. Lossy by
+        // construction, but consistently so -- pinned here so the legacy path
+        // cannot quietly start sending both vectors or neither.
+        auto legacy = codec::toWire(narrow, CacheMetrics{}, 4);
+        require(legacy.values_f64.empty() && legacy.values.size() == 2,
+            "a pre-1.5 peer was not sent the float vector alone");
+        const auto promoted = codec::fromWire(legacy).plane.values;
+        require(promoted.size() == 2 && promoted[0] == promoted[1],
+            "the legacy float encoding did not collapse the pair");
+        require(promoted[0] == static_cast<double>(static_cast<float>(narrowLow)),
+            "the legacy path did not promote the float it sent");
+
+        // Both populated is ambiguous: which vector wins would decide the
+        // payload's meaning, so it is refused rather than resolved.
+        auto ambiguous = codec::toWire(narrow, CacheMetrics{});
+        ambiguous.values = {1.0F, 2.0F};
+        requireRejected(
+            [&] { static_cast<void>(codec::fromWire(ambiguous)); },
+            "a slice carrying both value vectors was accepted");
+    }
+
     auto wrongIdentifier = bytes;
     wrongIdentifier[4] = 'X';
     requireRejected([&] { static_cast<void>(
@@ -305,6 +353,91 @@ int main()
     }
     require(misalignedLayouts == 1,
         "the fixture did not produce a misaligned [double] layout");
+
+    // Protocol 1.7: a mapped grid's node plane round-trips, and a response
+    // whose vectors disagree with its node counts or levels is refused.
+    {
+        MappedGridPlaneRequest planeRequest;
+        planeRequest.dataset = DatasetId{9};
+        planeRequest.normalDirection = 1;
+        planeRequest.physicalPosition = 0.375;
+        planeRequest.visibleRegion = slice.plane.physicalRegion;
+        planeRequest.maximumLevel = 1;
+        planeRequest.composition = CompositionPolicy::ExactLevel;
+        planeRequest.outputSize = {3, 2};
+        const auto decodedRequest = codec::fromWire(codec::toWire(planeRequest));
+        require(decodedRequest.dataset == planeRequest.dataset
+                && decodedRequest.normalDirection == 1
+                && decodedRequest.physicalPosition == 0.375
+                && decodedRequest.maximumLevel == 1
+                && decodedRequest.composition == CompositionPolicy::ExactLevel
+                && decodedRequest.outputSize == planeRequest.outputSize,
+            "mapped-grid plane request did not round-trip");
+
+        MappedGridPlane plane;
+        plane.width = 4;   // 3 x 2 cells: 4 x 3 nodes
+        plane.height = 3;
+        plane.physicalRegion = slice.plane.physicalRegion;
+        for (int node = 0; node < 12; ++node) {
+            plane.a.push_back(0.25 * (node % 4));
+            plane.b.push_back(0.5 * (node / 4) + 0.01 * node);
+        }
+        plane.faceLevels = {0, 1};
+        plane.normalLower.assign(24, 0.0);
+        plane.normalUpper.assign(24, 0.25);
+        const auto planeEnvelope = codec::decode(codec::encode(
+            11, codec::toWire(plane, CacheMetrics{})));
+        require(codec::inspect(*planeEnvelope).payload
+                == PayloadKind::MappedGridPlaneResponse,
+            "mapped-grid plane response kind did not round-trip");
+        const auto decodedPlane
+            = codec::fromWire(*planeEnvelope->payload.AsMappedGridPlaneResponse());
+        require(decodedPlane.width == 4 && decodedPlane.height == 3
+                && decodedPlane.a == plane.a && decodedPlane.b == plane.b
+                && decodedPlane.faceLevels == plane.faceLevels
+                && decodedPlane.normalLower == plane.normalLower
+                && decodedPlane.normalUpper == plane.normalUpper,
+            "mapped-grid plane response did not round-trip");
+
+        auto shortNodes = codec::toWire(plane, CacheMetrics{});
+        shortNodes.b.pop_back();
+        requireRejected([&] { static_cast<void>(codec::fromWire(shortNodes)); },
+            "a mapped-grid plane short of a node was accepted");
+        auto unsorted = codec::toWire(plane, CacheMetrics{});
+        unsorted.face_levels = {1, 0};
+        requireRejected([&] { static_cast<void>(codec::fromWire(unsorted)); },
+            "a mapped-grid plane with unsorted levels was accepted");
+        auto shortFaces = codec::toWire(plane, CacheMetrics{});
+        shortFaces.normal_upper.resize(12);
+        requireRejected([&] { static_cast<void>(codec::fromWire(shortFaces)); },
+            "a mapped-grid plane short of a face block was accepted");
+        auto infinite = codec::toWire(plane, CacheMetrics{});
+        infinite.a[5] = std::numeric_limits<double>::infinity();
+        requireRejected([&] { static_cast<void>(codec::fromWire(infinite)); },
+            "a mapped-grid plane with a non-finite node was accepted");
+        auto huge = codec::toWire(plane, CacheMetrics{});
+        huge.width = std::numeric_limits<int>::max();
+        huge.height = std::numeric_limits<int>::max();
+        requireRejected([&] { static_cast<void>(codec::fromWire(huge)); },
+            "a mapped-grid plane whose node count overflows was accepted");
+
+        auto mapped = opened;
+        mapped.catalog.hasMappedGrid = true;
+        mapped.mappedGridComponentNames = {"amrexvec_nu_x", "amrexvec_nu_y"};
+        const auto mappedWire = codec::toWire(mapped);
+        require(mappedWire.has_mapped_grid
+                && mappedWire.mapped_grid_component_names.size() == 2,
+            "the mapped grid is not on the wire catalog");
+        const auto decodedMapped = codec::fromWire(mappedWire);
+        require(decodedMapped.catalog.hasMappedGrid
+                && decodedMapped.mappedGridComponentNames
+                    == mapped.mappedGridComponentNames,
+            "the mapped grid did not survive the wire catalog");
+        auto namesAlone = codec::toWire(opened);
+        namesAlone.mapped_grid_component_names = {"amrexvec_nu_x"};
+        requireRejected([&] { static_cast<void>(codec::fromWire(namesAlone)); },
+            "component names without a mapped grid were accepted");
+    }
 
     codec::fb::SliceViewResponseT inconsistent;
     inconsistent.width = 2;
@@ -615,15 +748,94 @@ int main()
     volume.maximumLevel = 1;
     volume.composition = CompositionPolicy::ExactLevel;
     volume.region = RealBox{Real3{{0.0, -1.0, 2.0}}, Real3{{1.0, 1.0, 3.0}}};
-    volume.camera = {0.7, -0.2, 2.5};
+    volume.camera = orthoCameraFromAngles(0.7, -0.2, 2.5);
     volume.outputSize = {320, 200};
     volume.range = VolumeRange{0.5, 4.0, true};
     volume.transfer.colors = {0x0000FFU, 0x00FF00U, 0xFF0000U};
     volume.transfer.opacities = {0.0F, 0.5F, 1.0F};
     volume.samplesPerVoxel = 4;
     volume.maximumVoxels = 1 << 20;
-    require(codec::fromWire(codec::toWire(volume)) == volume,
-        "a volume request with a range did not round-trip");
+    // Exact: the orientation crosses the wire as sent (protocol 1.8).
+    const auto roundTrips = [](const VolumeRenderRequest& request) {
+        return codec::fromWire(codec::toWire(request)) == request;
+    };
+    require(roundTrips(volume), "a volume request with a range did not round-trip");
+    // Protocol 1.8: the orientation is on the wire for a current peer, the
+    // two angles for an older one -- the same rotation while the camera has
+    // no roll, and zeros once it has, which the connection never sends to
+    // such a peer. A bad orientation is refused; one beside angles wins.
+    {
+        const auto sameRotation = [](const Quaternion& a, const Quaternion& b) {
+            const auto dotted = a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;
+            return std::abs(dotted) >= 1.0 - 1.0e-12;
+        };
+        const auto current = codec::toWire(volume);
+        require(current.has_orientation && current.orientation_w == volume.camera.rotation.w
+                && current.orientation_z == volume.camera.rotation.z
+                && current.azimuth == 0.0 && current.elevation == 0.0,
+            "a 1.8 request does not carry the orientation");
+        const auto older = codec::toWire(volume, 7);
+        require(!older.has_orientation && std::abs(older.azimuth - 0.7) < 1.0e-12
+                && std::abs(older.elevation + 0.2) < 1.0e-12
+                && sameRotation(codec::fromWire(older).camera.rotation, volume.camera.rotation)
+                && codec::fromWire(older).camera.zoom == volume.camera.zoom,
+            "a 1.7 request does not carry the camera as its angles");
+        auto rolled = volume;
+        rolled.camera.rotation
+            = axisAngle({{0.0, 0.0, 1.0}}, 0.4) * rolled.camera.rotation;
+        const auto rolledOlder = codec::toWire(rolled, 7);
+        const auto nearest = nearestOrthoAngles(rolled.camera);
+        require(!rolledOlder.has_orientation && rolledOlder.azimuth == nearest.azimuth
+                && rolledOlder.elevation == nearest.elevation,
+            "a rolled camera for a 1.7 peer did not fall to its nearest angles");
+        require(roundTrips(rolled), "a rolled camera did not round-trip");
+        auto both = codec::toWire(rolled);
+        both.azimuth = 1.0;
+        both.elevation = 0.5;
+        require(codec::fromWire(both).camera == rolled.camera,
+            "the orientation did not win over the angles beside it");
+        auto stretched = codec::toWire(volume);
+        stretched.orientation_w *= 2.0;
+        requireRejected([&] { static_cast<void>(codec::fromWire(stretched)); },
+            "a non-unit orientation was accepted");
+        auto broken = codec::toWire(volume);
+        broken.orientation_x = std::numeric_limits<double>::quiet_NaN();
+        requireRejected([&] { static_cast<void>(codec::fromWire(broken)); },
+            "a non-finite orientation was accepted");
+    }
+    // Protocol 1.6: the isosurface and the volume flag round-trip, the flag
+    // on the wire says when the isosurface fields mean something, and a
+    // non-finite value or opacity is refused.
+    {
+        auto withIsosurface = volume;
+        withIsosurface.isosurface = VolumeIsosurface{FieldId{3}, 1, 0.75, 0x40C0FFU, 0.6F};
+        require(roundTrips(withIsosurface),
+            "a volume request with an isosurface did not round-trip");
+        withIsosurface.showVolume = false;
+        require(roundTrips(withIsosurface), "an isosurface-only request did not round-trip");
+        const auto wire = codec::toWire(withIsosurface);
+        require(wire.has_isosurface && !wire.show_volume && wire.isosurface_field == 3
+                && wire.isosurface_component == 1 && wire.isosurface_value == 0.75
+                && wire.isosurface_color == 0x40C0FFU,
+            "the isosurface fields are not what the wire carries");
+        const auto plain = codec::toWire(volume);
+        require(!plain.has_isosurface && plain.show_volume,
+            "a request without an isosurface set the wire flag");
+        auto bad = wire;
+        bad.isosurface_value = std::numeric_limits<double>::quiet_NaN();
+        requireRejected([&] { static_cast<void>(codec::fromWire(bad)); },
+            "a NaN isosurface value was accepted");
+        bad = wire;
+        bad.isosurface_opacity = std::numeric_limits<float>::infinity();
+        requireRejected([&] { static_cast<void>(codec::fromWire(bad)); },
+            "an infinite isosurface opacity was accepted");
+        // Without the flag the same fields are ignored, as a 1.5 peer's
+        // defaults would be.
+        bad = wire;
+        bad.has_isosurface = false;
+        require(!codec::fromWire(bad).isosurface.has_value(),
+            "isosurface fields without the flag produced an isosurface");
+    }
     // The value on the wire, not just that it survives a round trip. Two
     // transposed mappings are inverses of each other, so every round-trip
     // check in the suite passes while a peer on the other side of a real
@@ -661,8 +873,7 @@ int main()
     }
     volume.range.reset();
     volume.logarithmic = true;
-    require(codec::fromWire(codec::toWire(volume)) == volume,
-        "a volume request without a range did not round-trip");
+    require(roundTrips(volume), "a volume request without a range did not round-trip");
     auto volumeWire = codec::toWire(volume);
     volumeWire.transfer_opacities.pop_back();
     requireRejected([&] { static_cast<void>(codec::fromWire(volumeWire)); },
@@ -756,11 +967,15 @@ int main()
             require(narrowToFloat(-value) == -largest,
                 "a double that rounds to -FLT_MAX was reported as infinite");
         }
-        require(std::isinf(narrowToFloat(floatOverflowThreshold))
-                && narrowToFloat(floatOverflowThreshold) > 0.0F,
+        // Through a volatile, not the constant itself: MSVC inlines the helper,
+        // folds the cast in the branch the guard never reaches, and reports
+        // the overflow it would have had as an error (C4756).
+        volatile double threshold = floatOverflowThreshold;
+        require(std::isinf(narrowToFloat(threshold))
+                && narrowToFloat(threshold) > 0.0F,
             "a double at the overflow threshold was not +infinity");
-        require(std::isinf(narrowToFloat(-floatOverflowThreshold))
-                && narrowToFloat(-floatOverflowThreshold) < 0.0F,
+        require(std::isinf(narrowToFloat(-threshold))
+                && narrowToFloat(-threshold) < 0.0F,
             "a double at the negative threshold was not -infinity");
         require(std::isnan(narrowToFloat(
                     std::numeric_limits<double>::quiet_NaN())),

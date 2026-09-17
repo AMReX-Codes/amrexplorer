@@ -90,6 +90,7 @@ PlotfileDataset::PlotfileDataset(
             : std::vector<ParticleSpeciesMetadata>{})
     , m_blockReader(m_plotfile, m_fields.metadata)
     , m_cache(cacheBudgetBytes)
+    , m_mappedGrid(makeMappedGrid(m_plotfile, id, cacheBudgetBytes, m_metadataResult))
 {
     if (m_id.value == 0) {
         throw std::invalid_argument("PlotfileDataset id must be nonzero");
@@ -110,10 +111,50 @@ PlotfileDataset::PlotfileDataset(std::filesystem::path root, DatasetId id,
           discoverParticlesForPlotfileRoot(m_plotfile, cancellation))
     , m_blockReader(m_plotfile, m_fields.metadata)
     , m_cache(cacheBudgetBytes)
+    , m_mappedGrid(makeMappedGrid(m_plotfile, id, cacheBudgetBytes, m_metadataResult))
 {
     if (m_id.value == 0) {
         throw std::invalid_argument("selected FAB dataset requires an id");
     }
+}
+
+PlotfileDataset::PlotfileDataset(MappedGridTag, std::filesystem::path root,
+    DatasetId id, std::uint64_t cacheBudgetBytes,
+    std::shared_ptr<const DatasetMetadata> metadata)
+    : m_plotfile(std::move(root))
+    , m_id(id)
+    , m_metadataResult{std::move(metadata), {}, {}, {}}
+    , m_fields(installFields(m_metadataResult, {}))
+    , m_blockReader(m_plotfile, m_fields.metadata)
+    , m_cache(cacheBudgetBytes)
+{
+}
+
+std::uint64_t PlotfileDataset::mappedGridCacheBudget(
+    std::uint64_t cacheBudgetBytes) noexcept
+{
+    // The whole block budget, as the volume-grid pool takes it: a node block
+    // is as large as a field block of the same box, so a smaller pool would
+    // refuse node positions for exactly the plotfiles whose fields fit. The
+    // pool only fills while the mapped grid is shown.
+    return cacheBudgetBytes;
+}
+
+std::shared_ptr<PlotfileDataset> PlotfileDataset::makeMappedGrid(
+    const std::filesystem::path& root, DatasetId id,
+    std::uint64_t cacheBudgetBytes, const PlotfileMetadataResult& source)
+{
+    if (!source.mappedGrid || id.value == 0) {
+        return nullptr;
+    }
+    return std::shared_ptr<PlotfileDataset>(new PlotfileDataset(
+        MappedGridTag{}, root, id, mappedGridCacheBudget(cacheBudgetBytes),
+        source.mappedGrid));
+}
+
+std::shared_ptr<PlotfileDataset> PlotfileDataset::mappedGrid() const noexcept
+{
+    return m_mappedGrid;
 }
 
 const DatasetMetadata& PlotfileDataset::metadata() const noexcept
@@ -435,11 +476,18 @@ CacheMetrics PlotfileDataset::cacheMetrics() const
 
 bool PlotfileDataset::setCacheBudget(std::uint64_t bytes)
 {
+    if (m_mappedGrid) {
+        static_cast<void>(
+            m_mappedGrid->setCacheBudget(mappedGridCacheBudget(bytes)));
+    }
     return m_cache.setBudget(bytes);
 }
 
 void PlotfileDataset::clearUnpinnedCache()
 {
+    if (m_mappedGrid) {
+        m_mappedGrid->clearUnpinnedCache();
+    }
     m_cache.clearUnpinned();
 }
 

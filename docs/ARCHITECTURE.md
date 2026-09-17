@@ -18,10 +18,10 @@ whole compute path can run — and be tested — headless.
  pipeline      render2d       data          pipeline: SlicePipeline, VolumePipeline, DisplayCoordinator,
    |             |             |                       SliceRangeResolver, ParticleProjection
  query           |          (LocalDatasetSession,     render2d: ScalarRenderer, Contours,
-   |             |           RemoteDatasetSession,               VectorGlyphs, SphericalWarp, Palette
+   |             |           RemoteDatasetSession,               VectorGlyphs, SphericalWarp, MappedGridWarp, Palette
   io            core         SessionValidation, ...)   render3d: VolumeRaycaster (data links it:
    |             |             |             |                    a session samples and renders)
-  core         cache         core          remote      query:   SliceQuery, LineQuery, VolumeQuery
+  core         cache         core          remote      query:   SliceQuery, LineQuery, VolumeQuery, MappedGridQuery
    |                          |                         io:      plotfile readers, FitsWriter
 expression               expression                     core:    Geometry, Metadata, Request, Result,
                                                                  Volume, OrthoProjection, DerivedField
@@ -42,9 +42,23 @@ contour polylines, vector glyphs, resolved color range — with no Qt dependency
 `MainWindow` is the one window; it owns the plane views (`PlaneViewState`
 per 2-D view and 3-D panel), the slice request/arrival paths, the
 visible-range sync that keeps three 3-D panels on one color range, zoom/pan,
-crosshairs and the probe, and the menus and docks. Everything else the window
-does is delegated to an **owned collaborator**, each a `QObject` created by
-the window, wired to it in one of two ways:
+crosshairs and the probe, and the menus and docks. Everything about one
+dataset lives in a `DatasetLayer` (session, catalog, field and level
+selectors, range controls, colour bar, and three plane view states); the
+window holds two, the primary and an optional companion plotfile that shares
+a plane with it (`PairGeometry`, `MainWindowCompanion.cpp`). A layer's session
+may be local or remote in any combination; a remote companion rides the
+primary's own connection, or the window's remote session beside a local
+primary. Each `ImageView` draws one tile per layer in a shared scene, so a
+companion adds states and tiles rather than panels, and a paired zoom is a
+scene window that each layer maps back to its own region (`PairLayout`,
+which places a layer's tile from its display bounds, the node box of a
+mapped grid, about the logical interface). One `TilePlacement`
+(`MappedGeometry.hpp`) answers where any tile sits, on its own mapped canvas
+or on the pair's.
+Everything else the window does is
+delegated to an **owned collaborator**, each a `QObject` created by the
+window, wired to it in one of two ways:
 
 - **`Hooks`** — a struct of `std::function`s the window fills in at
   construction, for what the collaborator must *ask* the window (the open
@@ -97,6 +111,12 @@ implementations, interchangeable to everything above them:
   to a server that itself runs a `LocalDatasetSession`.
 
 The GUI opens one or the other and is otherwise agnostic to where the data lives.
+Capabilities a session may lack are asked for before they are offered
+(`supportsVolumeRendering`, `supportsVolumeOrientation`,
+`supportsDerivedFields`, `supportsMappedGrid`); a
+mapped-grid plotfile's node positions come through `requestMappedGridPlane`,
+computed by the local session and, over protocol 1.7, fetched whole from the
+server by the remote one. The warp itself always runs on the client.
 
 ## Threading model
 
@@ -138,7 +158,8 @@ either should preserve its invariants.
    re-derives and cross-checks every server *response* (raster size, region,
    source levels, grid-box provenance, page/particle shape, a rendered
    volume frame's size, range and sampling metrics) against the request
-   before the client trusts it.
+   before the client trusts it, and checks a volume request's fields -- the
+   volume's and the isosurface's -- against the catalog before it is sent.
 
 ## Where to start reading
 
@@ -147,6 +168,8 @@ either should preserve its invariants.
 | A slice request end to end | `src/pipeline/SlicePipeline.cpp` → `src/query/SliceQuery.cpp` |
 | A volume frame end to end | `src/pipeline/VolumePipeline.cpp` → `src/data/LocalDatasetSession.cpp` (`renderVolume`) → `src/query/VolumeQuery.cpp` → `src/render3d/VolumeRaycaster.cpp`; the camera math both the view and the caster use is `include/amrexplorer/core/OrthoProjection.hpp` |
 | Plotfile reading / hardening | `src/io/plotfile/`, `include/amrexplorer/io/detail/FabHeaderParsing.hpp` |
+| A mapped-grid slice end to end | `src/qt/MainWindowInteraction.cpp` (`updateMappedDemand`: the window on screen, at its device pixels) → `src/pipeline/SlicePipeline.cpp` (`applyMappedGrid`) → `src/query/MappedGridQuery.cpp` (node positions for the slice) → `src/render2d/MappedGridWarp.cpp` (quads rasterized into that window with coverage antialiasing, source index) → `src/qt/MappedGeometry.hpp` (where the window lands on the panel's physical canvas; with a companion, the layer's band of `PairLayout` in `src/qt/PairGeometry.hpp`) and `src/qt/PlaneMapping.hpp` (overlays and the probe map through it) |
+| The spherical R-Z view end to end | the same loop over `applyDisplayCoordinates` → `applySphericalWarp` in `src/pipeline/SlicePipeline.cpp` → `src/render2d/SphericalWarp.cpp` (`warpSphericalRZ`, the sector's cells subdivided along θ and rasterized through `include/amrexplorer/render2d/detail/QuadRasterizer.hpp`, the core `MappedGridWarp.cpp` shares) → `MappedGeometry.hpp`; the probe and overlays keep the analytic (R, Z) ↔ (r, θ) arms of `PlaneMapping.hpp` |
 | A derived field end to end | `include/amrexplorer/core/DerivedField.hpp` (resolve a definition against a dataset) → `src/io/plotfile/PlotfileDataset.cpp` (`readDerivedBlock`) → `src/expression/Expression.cpp`. Installed when the dataset is opened, so above `PlotfileDataset` a derived field is an ordinary `FieldId` |
 | The remote protocol | `src/remote/Codec.hpp`, `Frame.cpp` (Channel/Socket), `Server.cpp`, `Connection.cpp` |
 | Response validation | `src/data/SessionValidation.cpp` |

@@ -24,12 +24,20 @@
 #                 sequence-density-preserve |
 #                 sequence-equal-size-transform-preserve |
 #                 sequence-geometry-refit | sequence-noop | sequence-failure |
-#                 remote-canvas-wheel | remote-cell-aspect | volume |
+#                 remote-canvas-wheel | remote-cell-aspect |
+#                 physical-aspect | physical-fixed-scale | mapped-grid |
+#                 mapped-grid-sequence | mapped-grid-cap | spherical-rz |
+#                 remote-physical-aspect | companion |
+#                 remote-companion | companion-derived | companion-zoom |
+#                 mixed-companion | mapped-companion |
+#                 mixed-mapped-companion |
+#                 volume |
 #                 derived-field | derived-field-sequence |
 #                 derived-field-frames | derived-field-playback |
 #                 scale-state | effective-scale |
 #                 arrow-key-routing | animation-dock-role | open-failure |
 #                 idle-ui-state | menu-shortcuts | sequence-scale-report |
+#                 slice-planes |
 #                 spherical-scale-report |
 #                 fixed-scale-centre | fab-overlap-failure |
 #                 fab-direct-open-failure
@@ -40,13 +48,20 @@ foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
 endforeach()
 
 set(ENV{QT_QPA_PLATFORM} offscreen)
+# Qt logs to os_log / the debugger on macOS and Windows unless told to use
+# stderr; the driver needs a failed step's qCritical text in its output.
+set(ENV{QT_LOGGING_TO_CONSOLE} 1)
 
 # Isolate QSettings per run: a fresh, empty config directory makes every smoke
 # test start from defaults, so persisted UI state (spherical display mode and
-# supersample factor, palette, log scale, ...) never leaks between runs or from
-# the developer's own config and skews an assertion.
+# supersample factor, palette, aspect mode, ...) never leaks between runs or
+# from the developer's own config and skews an assertion. XDG_CONFIG_HOME
+# does that on Linux alone; AMREXPLORER_SETTINGS_DIR makes the test binary
+# store its QSettings there on every platform (the registry and macOS
+# preferences ignore XDG).
 file(REMOVE_RECURSE "${WORK}/config")
 set(ENV{XDG_CONFIG_HOME} "${WORK}/config")
+set(ENV{AMREXPLORER_SETTINGS_DIR} "${WORK}/config")
 
 macro(run_or_die)
     execute_process(COMMAND ${ARGN}
@@ -71,6 +86,7 @@ elseif(MODE STREQUAL "slice")
 elseif(MODE STREQUAL "volume")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --volume-smoke-test "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --isosurface-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "derived-field")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --derived-field-smoke-test "${WORK}/plt")
@@ -186,6 +202,9 @@ elseif(MODE STREQUAL "spherical-scale-report")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --spherical-scale-report-smoke-test
         "${WORK}/plt")
+elseif(MODE STREQUAL "slice-planes")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --slice-planes-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "idle-ui-state")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --idle-ui-state-smoke-test "${WORK}/plt")
@@ -221,6 +240,71 @@ elseif(MODE STREQUAL "remote-cell-aspect")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --remote-cell-aspect-smoke-test
         "${WORK}/plt")
+elseif(MODE STREQUAL "physical-aspect")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --physical-aspect-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "physical-fixed-scale")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --physical-fixed-scale-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "mapped-grid")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --mapped-grid-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "mapped-grid-sequence")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    run_or_die("${AMREXPLORER_QT}" --mapped-grid-sequence-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "mapped-grid-cap")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --mapped-grid-cap-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "spherical-rz")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --spherical-rz-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "remote-physical-aspect")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --remote-physical-aspect-smoke-test
+        "${WORK}/plt")
+elseif(MODE STREQUAL "companion")
+    # Two plotfiles sharing a plane: SOURCE above SOURCE2, touching at z = 0.
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/upper")
+    run_or_die("${MATERIALIZER}" "${SOURCE2}" "${WORK}/lower")
+    # The companion path ends in a separator, as a shell completion leaves
+    # it; its name must still be the directory's.
+    run_or_die("${AMREXPLORER_QT}" --companion-smoke-test
+        "${WORK}/upper" "${WORK}/lower/")
+elseif(MODE STREQUAL "remote-companion")
+    # The same pair, both served by the in-process loopback server.
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/upper")
+    run_or_die("${MATERIALIZER}" "${SOURCE2}" "${WORK}/lower")
+    run_or_die("${AMREXPLORER_QT}" --remote-companion-smoke-test
+        "${WORK}/upper" "${WORK}/lower")
+elseif(MODE STREQUAL "companion-derived")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/upper")
+    run_or_die("${MATERIALIZER}" "${SOURCE2}" "${WORK}/lower")
+    run_or_die("${AMREXPLORER_QT}" --companion-derived-smoke-test
+        "${WORK}/upper" "${WORK}/lower")
+elseif(MODE STREQUAL "companion-zoom")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/upper")
+    run_or_die("${MATERIALIZER}" "${SOURCE2}" "${WORK}/lower")
+    run_or_die("${AMREXPLORER_QT}" --companion-zoom-smoke-test
+        "${WORK}/upper" "${WORK}/lower")
+elseif(MODE STREQUAL "mapped-companion")
+    # Both plotfiles carry node positions: each is drawn on its own grid.
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/upper")
+    run_or_die("${MATERIALIZER}" "${SOURCE2}" "${WORK}/lower")
+    run_or_die("${AMREXPLORER_QT}" --mapped-companion-smoke-test
+        "${WORK}/upper" "${WORK}/lower")
+elseif(MODE STREQUAL "mixed-mapped-companion")
+    # A mapped primary over a flat companion.
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/upper")
+    run_or_die("${MATERIALIZER}" "${SOURCE2}" "${WORK}/lower")
+    run_or_die("${AMREXPLORER_QT}" --mixed-mapped-companion-smoke-test
+        "${WORK}/upper" "${WORK}/lower")
+elseif(MODE STREQUAL "mixed-companion")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/upper")
+    run_or_die("${MATERIALIZER}" "${SOURCE2}" "${WORK}/lower")
+    run_or_die("${AMREXPLORER_QT}" --mixed-companion-smoke-test
+        "${WORK}/upper" "${WORK}/lower")
 elseif(MODE STREQUAL "remote-canvas-wheel")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --remote-canvas-wheel-smoke-test
@@ -296,9 +380,6 @@ elseif(MODE STREQUAL "particle-settings-reset")
 elseif(MODE STREQUAL "raster-zoom")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --raster-zoom-smoke-test "${WORK}/plt")
-elseif(MODE STREQUAL "spherical-supersample")
-    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
-    run_or_die("${AMREXPLORER_QT}" --spherical-supersample-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "rubber-zoom-sync")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --rubber-zoom-sync-smoke-test "${WORK}/plt")

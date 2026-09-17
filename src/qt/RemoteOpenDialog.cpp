@@ -11,13 +11,23 @@
 
 namespace amrvis::qt {
 
-RemoteOpenDialog::RemoteOpenDialog(bool sequence,
+RemoteOpenDialog::RemoteOpenDialog(Kind kind,
     const QString& sessionDestination, const QString& lastDestination,
     std::function<QString(const QString&)> executableFor, QWidget* parent)
     : QDialog(parent)
 {
-    setWindowTitle(sequence ? tr("Open Remote Plotfile Sequence")
-                            : tr("Open Remote Plotfile"));
+    const bool sequence = kind == Kind::Sequence;
+    switch (kind) {
+    case Kind::Sequence:
+        setWindowTitle(tr("Open Remote Plotfile Sequence"));
+        break;
+    case Kind::Companion:
+        setWindowTitle(tr("Open Remote Companion Plotfile"));
+        break;
+    case Kind::Plotfile:
+        setWindowTitle(tr("Open Remote Plotfile"));
+        break;
+    }
     // Wide enough that a typical scratch-filesystem path is visible whole.
     setMinimumWidth(560);
     auto* layout = new QFormLayout(this);
@@ -29,6 +39,11 @@ RemoteOpenDialog::RemoteOpenDialog(bool sequence,
            "session. Enter the plotfile path, or use Browse... to pick it "
            "on the remote machine."),
         this);
+    if (kind == Kind::Companion) {
+        explanation->setText(explanation->text()
+            + tr(" The plotfile is shown beside the open one; a remote open "
+                 "plotfile takes its companion from the same server."));
+    }
     explanation->setWordWrap(true);
     layout->addRow(explanation);
     // Prefill from the live session so opening another path reuses it; a

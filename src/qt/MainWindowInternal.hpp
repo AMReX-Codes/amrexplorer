@@ -56,6 +56,7 @@
 #include <QWheelEvent>
 #include <QCloseEvent>
 #include <QColorDialog>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDialog>
@@ -108,6 +109,8 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
+#include <QDoubleSpinBox>
+#include <QAbstractButton>
 #include <QtConcurrentRun>
 #include <QtDebug>
 
@@ -260,6 +263,41 @@ inline QPainterPath sphericalSectorPath(const PlaneMapping& mapping,
     return path;
 }
 
+// A scene rect from the Qt-free layouts (PairLayout, MappedLayout).
+inline QRectF toQRectF(const SceneRect& rect)
+{
+    return QRectF(rect.x, rect.y, rect.width, rect.height);
+}
+
+// Scene-space outline of a plane-pixel rectangle on a mapped grid: each edge
+// is walked in steps of at most one plane pixel through the node positions,
+// so a box outline follows the stretched cell edges exactly (the bilinear map
+// is exact along a cell edge). Used for the mapped grid-box outlines and the
+// picked-cell highlight.
+inline QPainterPath mappedCellPath(const PlaneMapping& mapping,
+    double col0, double col1, double row0, double row1)
+{
+    const auto walk = [&mapping](QPainterPath& path, double fromCol,
+                          double fromRow, double toCol, double toRow) {
+        const auto steps = std::clamp(static_cast<int>(std::ceil(
+            std::max(std::abs(toCol - fromCol), std::abs(toRow - fromRow)))),
+            1, 4096);
+        for (int i = 1; i <= steps; ++i) {
+            const double t = static_cast<double>(i) / steps;
+            path.lineTo(mapping.sceneFromPlanePixel(
+                fromCol + (toCol - fromCol) * t, fromRow + (toRow - fromRow) * t));
+        }
+    };
+    QPainterPath path;
+    path.moveTo(mapping.sceneFromPlanePixel(col0, row0));
+    walk(path, col0, row0, col1, row0);
+    walk(path, col1, row0, col1, row1);
+    walk(path, col1, row1, col0, row1);
+    walk(path, col0, row1, col0, row0);
+    path.closeSubpath();
+    return path;
+}
+
 #ifdef AMREXPLORER_QT_TEST_ACCESS
 // A gate the visible-range sync worker waits on when armed, so the staleness
 // regression test can hold a sync mid-flight, invalidate a panel, then release
@@ -302,7 +340,66 @@ inline std::atomic<int> waiting{0};        // # of workers currently parked
 }
 
 } // namespace visible_sync_test
+
+// A gate the cache-path slice worker waits on while armed, so a smoke can
+// hold a warped view's redraw mid-flight until a later refresh has
+// cancelled it, then let both run (the held one lands stale). Bounded like
+// the sync gate, so a test that dies without releasing still exits.
+namespace slice_worker_test {
+
+inline std::atomic<bool> gateArmed{false};
+
+inline void waitAtGate()
+{
+    for (int waited = 0; waited < 10000 && gateArmed.load(); ++waited) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+} // namespace slice_worker_test
 #endif
+
+// Fill a level combo for a dataset with the given finest level: "Finest
+// available", the composite "Levs 0-N" rows, then "Level N only". Shared by
+// the primary's selector and a companion's.
+inline void populateLevelCombo(QComboBox* combo, int finestLevel)
+{
+    combo->clear();
+    combo->addItem(QObject::tr("Finest available"), -1);
+    // "Level N only" is redundant when there is only one level; the whole
+    // block is skipped for finestLevel == 0 so the combo shows just the
+    // "Finest available" entry.
+    if (finestLevel <= 0) {
+        return;
+    }
+    // "Update to Level N" (composite 0..N) in reverse order, from
+    // finestLevel-1 down to 1; only when there are at least three levels.
+    for (int level = finestLevel - 1; level >= 1; --level) {
+        combo->addItem(QObject::tr("Levs 0-%1").arg(level),
+            kUpdateToLevelOffset + level);
+    }
+    for (int level = 0; level <= finestLevel; ++level) {
+        combo->addItem(QObject::tr("Level %1 only").arg(level), level);
+    }
+}
+
+// A dataset's short name for titles, toolbars, the dock and export file
+// names: the plotfile directory's basename. A path written with a trailing
+// separator has an empty filename(), so the separator is dropped first; a
+// bare root falls back to the whole path.
+inline QString datasetDisplayName(const std::filesystem::path& path)
+{
+    auto trimmed = path.string();
+    while (trimmed.size() > 1
+        && (trimmed.back() == '/' || trimmed.back() == std::filesystem::path::preferred_separator)) {
+        trimmed.pop_back();
+    }
+    auto name = std::filesystem::path(trimmed).filename().string();
+    if (name.empty()) {
+        name = trimmed;
+    }
+    return QString::fromStdString(name);
+}
 
 // A gate the slice worker of a chosen 3-D panel parks at, so a test can land
 // one panel's zoom while its siblings' slices are still in flight -- the

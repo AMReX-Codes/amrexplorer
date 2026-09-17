@@ -19,6 +19,7 @@
 #include <QLoggingCategory>
 #include <QMessageBox>
 #include <QProcess>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QTextStream>
 #include <QTimer>
@@ -28,6 +29,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -38,11 +40,14 @@ QtMessageHandler g_previousMessageHandler = nullptr;
 void printUsage(std::FILE* output)
 {
     std::fprintf(output,
-        "usage: amrexplorer [PLOTFILE...]\n"
-        "       amrexplorer --ssh SSH_DESTINATION [--server PATH] [--] "
-        "[REMOTE_PLOTFILE...]\n\n"
+        "usage: amrexplorer [PLOTFILE...] [--companion PLOTFILE]\n"
+        "       amrexplorer --ssh SSH_DESTINATION [--server PATH] "
+        "[--companion REMOTE_PLOTFILE] [--] [REMOTE_PLOTFILE...]\n\n"
         "Open one plotfile directory, or several to play them as a\n"
         "sequence, or none for an empty window.\n\n"
+        "  --companion PLOTFILE   show a second 3-D plotfile beside the first;\n"
+        "                         the two must share a plane (after --ssh, a\n"
+        "                         plotfile on the same server)\n"
         "  --ssh SSH_DESTINATION  run amrexplorer-server on the destination\n"
         "                         through ssh and open the remote plotfile\n"
         "                         paths there; with no paths, only establish\n"
@@ -133,6 +138,13 @@ void filterWaylandPopupWarning(QtMsgType type,
     if (type == QtWarningMsg && context.category != nullptr
         && std::strcmp(context.category, "qt.qpa.wayland") == 0
         && message.contains(QLatin1String("topmost grabbing popup"))) {
+        return;
+    }
+    // The offscreen platform (the smoke tests) says this whenever Qt itself
+    // propagates a window's size hints, which nothing here calls; a smoke
+    // that fails prints it too, and it is not the failure.
+    if (type == QtWarningMsg
+        && message == QLatin1String("This plugin does not support propagateSizeHints()")) {
         return;
     }
     if (g_previousMessageHandler != nullptr) {
@@ -418,6 +430,18 @@ int main(int argc, char* argv[])
     icon.addFile(QStringLiteral(":/amrexplorer-256.png"));
     application.setWindowIcon(icon);
     ensureDesktopEntry();
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+    // The smoke drivers give each run its own settings directory so persisted
+    // UI state (aspect mode, palette, ...) never leaks between tests running
+    // side by side. XDG_CONFIG_HOME covers Linux only; the registry and
+    // CFPreferences ignore it, so an INI store under this directory is used
+    // on every platform.
+    const auto settingsDir = qEnvironmentVariable("AMREXPLORER_SETTINGS_DIR");
+    if (!settingsDir.isEmpty()) {
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDir);
+    }
+#endif
     amrvis::qt::MainWindow window;
     window.show();
     // The smoke-test harnesses (SmokeHarness*.cpp) claim their options first;
@@ -449,19 +473,42 @@ int main(int argc, char* argv[])
             qCritical("%s", parsed.error.c_str());
             return 2;
         }
+        // A companion after --ssh is a plotfile on the same server, opened
+        // beside the one path once its slices are up; the window ties it to
+        // that load, so a startup that fails leaves nothing waiting.
         QTimer::singleShot(0, &window,
             [&window, request = std::move(*parsed.request)] {
                 window.startSshRemoteSession(request.destination,
-                    request.serverExecutable, request.paths);
+                    request.serverExecutable, request.paths, request.companion);
             });
     } else if (argc >= 2 && !std::string_view(argv[1]).starts_with("-")) {
         // One or more plotfile paths: a single path opens a dataset, two or
         // more open a plotfile sequence (matching the GUI's Open Plotfile
-        // Sequence, which also takes plotfile directories).
+        // Sequence, which also takes plotfile directories). A trailing
+        // "--companion PATH" opens that plotfile beside the first once its
+        // slices are up (File > Open Companion Plotfile...).
         std::vector<std::filesystem::path> paths;
+        std::optional<std::filesystem::path> companion;
         paths.reserve(static_cast<std::size_t>(argc - 1));
         for (int index = 1; index < argc; ++index) {
+            if (std::string_view(argv[index]) == "--companion") {
+                if (index + 1 >= argc) {
+                    std::fprintf(stderr,
+                        "amrexplorer: --companion requires a plotfile path\n");
+                    return 2;
+                }
+                companion = std::filesystem::path(argv[++index]);
+                continue;
+            }
             paths.emplace_back(argv[index]);
+        }
+        if (companion) {
+            QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+                &window, [&window, companion](bool success) {
+                    if (success) {
+                        window.openCompanion(*companion);
+                    }
+                }, Qt::SingleShotConnection);
         }
         QTimer::singleShot(0, &window, [&window, paths] {
             if (paths.size() == 1) {

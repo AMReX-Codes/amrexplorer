@@ -1,5 +1,6 @@
 #include <amrexplorer/render2d/VectorGlyphs.hpp>
 #include <amrexplorer/core/CoordinateSystem.hpp>
+#include <amrexplorer/render2d/MappedGridWarp.hpp>
 #include <amrexplorer/render2d/detail/PlaneValidation.hpp>
 
 #include <algorithm>
@@ -238,6 +239,33 @@ std::vector<VectorSegment> generateSphericalRZVectorGlyphs(
         }
     }
     return segments;
+}
+
+std::vector<DisplaySegment> mappedVectorGlyphs(const MappedGridPlane& nodes,
+    const std::vector<VectorSegment>& segments, double lengthPerPixel)
+{
+    std::vector<DisplaySegment> arrows;
+    arrows.reserve(segments.size() - segments.size() % 3);
+    for (std::size_t arrow = 0; arrow + 2 < segments.size(); arrow += 3) {
+        const auto& shaft = segments[arrow];
+        const auto base = mappedDisplayPosition(nodes, shaft.x0, shaft.y0);
+        if (!std::isfinite(base[0]) || !std::isfinite(base[1])) {
+            continue;
+        }
+        // A point of this arrow, from its offset to the base in plane pixels.
+        const auto place = [&](float x, float y) {
+            return std::array<double, 2>{
+                base[0] + (static_cast<double>(x) - shaft.x0) * lengthPerPixel,
+                base[1] + (static_cast<double>(y) - shaft.y0) * lengthPerPixel};
+        };
+        const auto tip = place(shaft.x1, shaft.y1);
+        arrows.push_back({base[0], base[1], tip[0], tip[1]});
+        for (std::size_t barb = 1; barb <= 2; ++barb) {
+            const auto end = place(segments[arrow + barb].x1, segments[arrow + barb].y1);
+            arrows.push_back({tip[0], tip[1], end[0], end[1]});
+        }
+    }
+    return arrows;
 }
 
 } // namespace amrvis

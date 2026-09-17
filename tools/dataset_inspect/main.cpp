@@ -42,6 +42,17 @@ void printText(const amrvis::PlotfileMetadataResult& result)
         std::cout << "  - level " << level.level << ": " << level.boxes.size()
                   << " grids, data " << level.dataPath << '\n';
     }
+    if (result.mappedGrid) {
+        const auto& grid = *result.mappedGrid;
+        std::cout << "mapped_grid: " << grid.fields.size() << " components\n";
+        for (const auto& level : grid.levels) {
+            std::cout << "  - level " << level.level << ": "
+                      << level.boxes.size() << " grids, data "
+                      << level.dataPath << '\n';
+        }
+    } else {
+        std::cout << "mapped_grid: none\n";
+    }
     std::cout << "metadata_files_read: " << result.metrics.filesRead << '\n'
               << "metadata_bytes_read: " << result.metrics.bytesRead << '\n'
               << "payload_files_read: " << result.metrics.payloadFilesRead << '\n'
@@ -71,8 +82,25 @@ void printJson(const amrvis::PlotfileMetadataResult& result)
                   << ", \"data_path\": \"" << jsonEscape(level.dataPath) << "\"}";
         std::cout << (i + 1 == metadata.levels.size() ? "\n" : ",\n");
     }
-    std::cout << "  ],\n"
-              << "  \"metadata_files_read\": " << result.metrics.filesRead << ",\n"
+    std::cout << "  ],\n";
+    if (result.mappedGrid) {
+        const auto& grid = *result.mappedGrid;
+        std::cout << "  \"mapped_grid\": {\"components\": " << grid.fields.size()
+                  << ", \"levels\": [";
+        for (std::size_t i = 0; i < grid.levels.size(); ++i) {
+            if (i != 0) {
+                std::cout << ", ";
+            }
+            std::cout << "{\"level\": " << grid.levels[i].level
+                      << ", \"grids\": " << grid.levels[i].boxes.size()
+                      << ", \"data_path\": \""
+                      << jsonEscape(grid.levels[i].dataPath) << "\"}";
+        }
+        std::cout << "]},\n";
+    } else {
+        std::cout << "  \"mapped_grid\": null,\n";
+    }
+    std::cout << "  \"metadata_files_read\": " << result.metrics.filesRead << ",\n"
               << "  \"metadata_bytes_read\": " << result.metrics.bytesRead << ",\n"
               << "  \"payload_files_read\": " << result.metrics.payloadFilesRead << ",\n"
               << "  \"payload_bytes_read\": " << result.metrics.payloadBytesRead << "\n"

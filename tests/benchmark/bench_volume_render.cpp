@@ -6,10 +6,12 @@
 // scale the workload via argv for real numbers:
 //
 //   bench_volume_render [gridDim] [outputDim] [samplesPerVoxel] [iterations]
-//                       [threads] [linear]
+//                       [threads] [linear] [isosurface]
 //
 // `linear` is 1 for trilinear sampling (the renderer's default) and 0 for
 // nearest, so the eight-fetch and one-fetch costs can be compared directly.
+// `isosurface` is 0 for the volume alone, 1 for an isosurface over it (a
+// second grid read per sample) and 2 for the isosurface alone.
 // Measure at a grid that does not fit in cache -- 64^3 of float is 1 MiB and
 // sits in L2, where the seven extra fetches look free -- and pin the thread
 // count so two runs are comparable.
@@ -68,6 +70,9 @@ int main(int argc, char** argv)
     const int iterations = argument(argc, argv, 4, 2);
     const int threads = argument(argc, argv, 5, 0);
     const int linear = argument(argc, argv, 6, 1);
+    // 0: the volume alone; 1: an isosurface of the same field at 0.5 over it,
+    // the price of a second grid read per sample; 2: that isosurface alone.
+    const int isosurfaceMode = argument(argc, argv, 7, 0);
     // Bounded as the renderer bounds them, so an out-of-range argument is
     // this file's own message rather than an uncaught std::invalid_argument
     // escaping main and aborting through std::terminate.
@@ -84,6 +89,8 @@ int main(int argc, char** argv)
     require(samplesPerVoxel <= amrvis::maxVolumeSamplesPerVoxel,
         "samples per voxel exceeds the renderer's limit");
     require(linear == 0 || linear == 1, "linear must be 0 or 1");
+    require(isosurfaceMode >= 0 && isosurfaceMode <= 2,
+        "isosurface must be 0, 1 or 2");
     require(amrvis::volumeVoxelCount({gridDim, gridDim, gridDim})
             <= amrvis::maxVolumeVoxelBudget,
         "the grid exceeds the renderer's voxel budget");
@@ -130,17 +137,32 @@ int main(int argc, char** argv)
         settings.transfer.opacities.push_back(static_cast<float>(opacity));
     }
 
+    amrvis::RaycastGrids grids{&grid, nullptr};
+    if (isosurfaceMode != 0) {
+        settings.isosurface = amrvis::VolumeIsosurface{
+            amrvis::FieldId{0}, 0, 0.5, 0xC0C0C0U, 0.8F};
+        grids.isosurface = &grid;
+    }
+    if (isosurfaceMode == 2) {
+        settings.showVolume = false;
+        grids.volume = nullptr;
+    }
+
     amrvis::VolumeFrame frame;
     const auto started = std::chrono::steady_clock::now();
     for (int iteration = 0; iteration < iterations; ++iteration) {
-        frame = amrvis::raycastVolume(grid, settings);
+        frame = amrvis::raycastVolume(grids, settings);
     }
     const auto elapsed = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - started).count();
 
     const auto centre = frame.pixels[static_cast<std::size_t>(outputDim / 2)
         * static_cast<std::size_t>(outputDim) + static_cast<std::size_t>(outputDim / 2)];
-    require((centre >> 24U) == 255U && (centre & 0xFFU) == 255U,
+    // The white core saturates the centre; with an isosurface in front the
+    // centre carries the grey surface instead, so only coverage is checked.
+    require(isosurfaceMode == 0
+            ? (centre >> 24U) == 255U && (centre & 0xFFU) == 255U
+            : (centre >> 24U) > 0U,
         "the opaque core did not saturate the centre pixel");
     require(frame.pixels.front() == 0U && frame.pixels.back() == 0U,
         "the corners outside the domain were lit");
@@ -152,6 +174,8 @@ int main(int argc, char** argv)
               << amrvis::raycastThreadCount(
                      settings.threadCount, settings.outputSize[1])
               << " threads, " << (linear == 1 ? "linear" : "nearest")
+              << (isosurfaceMode == 1 ? " + isosurface"
+                     : isosurfaceMode == 2 ? " isosurface only" : "")
               << ": " << perFrame * 1000.0 << " ms/frame, "
               << pixels / elapsed / 1.0e6 << " Mpx/s\n";
     return 0;

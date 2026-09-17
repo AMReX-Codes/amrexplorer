@@ -141,28 +141,46 @@ int main()
         }
     }
 
-    // R-Z: warped into the sector's physical bounding box at the supersampled
-    // resolution, with opaque pixels inside the sector and transparent ones
-    // outside (the sector never fills its axis-aligned bounding box).
+    // R-Z without a window: the whole sector at its natural size, a square
+    // pitch a quarter of the smaller of the radial cell and the outer
+    // tangential arc (both 0.0625 here), with opaque pixels inside the sector, transparent
+    // ones outside (the sector never fills its bounding box) and fading ones
+    // where its boundary crosses a pixel; a source index names the cells.
     const auto bounds = sphericalDisplayBounds(rtheta.slice.plane.physicalRegion);
     require(approx(rz.displayRegion.lower[0], bounds.lower[0])
             && approx(rz.displayRegion.upper[0], bounds.upper[0])
             && approx(rz.displayRegion.lower[1], bounds.lower[1])
             && approx(rz.displayRegion.upper[1], bounds.upper[1]),
         "R-Z display region is the sector bounding box");
-    require(rz.image.width > 16 && rz.image.height > 8,
-        "R-Z raster is supersampled beyond the logical grid");
+    require(approx(rz.mappedBounds.lower[0], bounds.lower[0])
+            && approx(rz.mappedBounds.upper[1], bounds.upper[1]),
+        "R-Z bounds are the sector bounding box");
+    const double spanR = bounds.upper[0] - bounds.lower[0];
+    const double spanZ = bounds.upper[1] - bounds.lower[1];
+    require(rz.image.width == static_cast<int>(std::lround(spanR / 0.015625))
+            && rz.image.height == static_cast<int>(std::lround(spanZ / 0.015625)),
+        "R-Z raster is the sector at its natural pitch");
+    require(rz.displaySourceIndex
+            && rz.displaySourceIndex->size()
+                == static_cast<std::size_t>(rz.image.width)
+                    * static_cast<std::size_t>(rz.image.height),
+        "R-Z raster carries a source index per pixel");
     std::size_t opaque = 0;
     std::size_t transparent = 0;
+    std::size_t fading = 0;
     for (const auto pixel : rz.image.rgba) {
-        if (((pixel >> 24) & 0xFFU) == 0U) {
+        const auto alpha = (pixel >> 24) & 0xFFU;
+        if (alpha == 0U) {
             ++transparent;
-        } else {
+        } else if (alpha == 255U) {
             ++opaque;
+        } else {
+            ++fading;
         }
     }
     require(opaque > 0, "R-Z raster has sector interior");
     require(transparent > 0, "R-Z raster has transparent exterior");
+    require(fading > 0, "R-Z raster fades at the sector boundary");
 
     std::filesystem::remove_all(root);
     std::cout << "spherical_display OK\n";

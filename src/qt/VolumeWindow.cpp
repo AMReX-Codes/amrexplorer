@@ -3,27 +3,37 @@
 #include "CloseWindowAction.hpp"
 #include "IsoWidget.hpp"
 #include "OpacityCurveWidget.hpp"
+#include "ScientificDoubleSpinBox.hpp"
 #include "WidgetImageExport.hpp"
 
 #include <QAction>
 #include <QCheckBox>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QDockWidget>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QGroupBox>
+#include <QIcon>
 #include <QImage>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPixmap>
 #include <QPointer>
+#include <QPushButton>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QWidget>
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace amrvis::qt {
 
@@ -190,6 +200,7 @@ void VolumeWindow::buildControls()
     // is: this is a local render's answer, and setSamplingSelectable revises
     // it for a server that cannot be asked.
     setSamplingSelectable(true);
+    setOrientationSelectable(true);
     // Grid boxes off, domain outline on: box edges crossing a translucent
     // field read as structure in it, which is worth asking for rather than
     // having to switch off. Both are said here and only here -- the view's own
@@ -205,6 +216,7 @@ void VolumeWindow::buildControls()
     form->addRow(QString(), m_boxesCheck);
     form->addRow(QString(), m_outlineCheck);
     layout->addLayout(form);
+    buildIsosurfaceControls(layout, panel);
     m_status = new QLabel(panel);
     // Named for the same reason the check boxes are: neither label is the one
     // an unqualified findChild would return twice running, and the order they
@@ -260,6 +272,313 @@ void VolumeWindow::buildControls()
     m_view->setDomainOutlineVisible(m_outlineCheck->isChecked());
 }
 
+void VolumeWindow::buildIsosurfaceControls(QVBoxLayout* layout, QWidget* panel)
+{
+    // Above the group rather than in it: it is about the volume, and it only
+    // has a say while there is a surface to show instead.
+    m_showVolumeCheck = new QCheckBox(tr("Show volume"), panel);
+    m_showVolumeCheck->setObjectName(QStringLiteral("volumeShowVolumeCheck"));
+    m_showVolumeCheck->setChecked(true);
+    layout->addWidget(m_showVolumeCheck);
+
+    // Off by default, like the region limit: a surface is a deliberate ask.
+    m_isosurfaceGroup = new QGroupBox(tr("Isosurface"), panel);
+    m_isosurfaceGroup->setObjectName(QStringLiteral("volumeIsosurfaceGroup"));
+    m_isosurfaceGroup->setCheckable(true);
+    m_isosurfaceGroup->setChecked(false);
+    auto* form = new QFormLayout(m_isosurfaceGroup);
+    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    m_isosurfaceField = new QComboBox(m_isosurfaceGroup);
+    m_isosurfaceField->setObjectName(QStringLiteral("volumeIsosurfaceFieldCombo"));
+    m_isosurfaceField->setToolTip(
+        tr("The field whose iso-value surface is drawn; it need not be the "
+           "field the volume shows"));
+    form->addRow(tr("Field:"), m_isosurfaceField);
+    m_isosurfaceValue = new ScientificDoubleSpinBox(m_isosurfaceGroup);
+    m_isosurfaceValue->setObjectName(QStringLiteral("volumeIsosurfaceValueSpin"));
+    m_isosurfaceValue->setRange(-std::numeric_limits<double>::max(),
+        std::numeric_limits<double>::max());
+    m_isosurfaceValue->setToolTip(tr("The value the surface is drawn at, in the "
+                                     "field's own units"));
+    form->addRow(tr("Value:"), m_isosurfaceValue);
+    // Over the field's range, once the host has one; a thousand steps so a
+    // drag moves the surface smoothly rather than in visible jumps.
+    m_isosurfaceSlider = new QSlider(Qt::Horizontal, m_isosurfaceGroup);
+    m_isosurfaceSlider->setObjectName(QStringLiteral("volumeIsosurfaceValueSlider"));
+    m_isosurfaceSlider->setRange(0, 1000);
+    m_isosurfaceSlider->setValue(500);
+    form->addRow(QString(), m_isosurfaceSlider);
+    m_isosurfaceColor = new QPushButton(m_isosurfaceGroup);
+    m_isosurfaceColor->setObjectName(QStringLiteral("volumeIsosurfaceColorButton"));
+    m_isosurfaceColor->setToolTip(tr("Choose the surface's colour; it is shaded "
+                                     "by a light from the viewer"));
+    form->addRow(tr("Color:"), m_isosurfaceColor);
+    m_isosurfaceOpacity = new QSlider(Qt::Horizontal, m_isosurfaceGroup);
+    m_isosurfaceOpacity->setObjectName(QStringLiteral("volumeIsosurfaceOpacitySlider"));
+    // From one, not zero: a surface at zero opacity draws nothing, and with
+    // the volume hidden the frame would be blank under a status line naming
+    // a surface. Nothing invisible is worth asking for.
+    m_isosurfaceOpacity->setRange(1, 100);
+    m_isosurfaceOpacity->setValue(100);
+    m_isosurfaceOpacity->setToolTip(
+        tr("How opaque the surface is: less than full lets the volume and "
+           "the surface's far side show through"));
+    form->addRow(tr("Opacity:"), m_isosurfaceOpacity);
+    layout->addWidget(m_isosurfaceGroup);
+    setIsosurfaceColor(m_isosurfaceColorValue);
+    setIsosurfaceSelectable(true);
+
+    connect(m_showVolumeCheck, &QCheckBox::toggled, this, [this](bool on) {
+        // Only what the user asked for: the tick syncIsosurfaceEnabled puts
+        // in while the box has no say is blocked, so it never lands here.
+        m_volumeWanted = on;
+        emit isosurfaceChanged();
+    });
+    connect(m_isosurfaceGroup, &QGroupBox::toggled, this, [this] {
+        syncIsosurfaceEnabled();
+        emit isosurfaceChanged();
+    });
+    connect(m_isosurfaceField, qOverload<int>(&QComboBox::currentIndexChanged), this,
+        [this](int index) {
+            if (index < 0) {
+                return;   // the list being refilled
+            }
+            m_isosurfaceFieldChosen = true;
+            // A new field, a new range: the value defaults again once the
+            // host has fetched it.
+            m_isosurfaceValueChosen = false;
+            emit isosurfaceChanged();
+        });
+    // Keyboard tracking is off in the spin box, so this is a committed value.
+    connect(m_isosurfaceValue, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+        [this](double) {
+            m_isosurfaceValueChosen = true;
+            syncIsosurfaceSlider();
+            emit isosurfaceChanged();
+        });
+    connect(m_isosurfaceSlider, &QSlider::valueChanged, this,
+        [this](int position) { setIsosurfaceValueFromSlider(position); });
+    connect(m_isosurfaceSlider, &QSlider::sliderReleased, this,
+        [this] { emit isosurfaceChanged(); });
+    connect(m_isosurfaceColor, &QPushButton::clicked, this,
+        [this] { chooseIsosurfaceColor(); });
+    connect(m_isosurfaceOpacity, &QSlider::valueChanged, this, [this](int) {
+        if (m_isosurfaceOpacity->isSliderDown()) {
+            emit isosurfaceDragged();
+        } else {
+            emit isosurfaceChanged();
+        }
+    });
+    connect(m_isosurfaceOpacity, &QSlider::sliderReleased, this,
+        [this] { emit isosurfaceChanged(); });
+}
+
+void VolumeWindow::syncIsosurfaceEnabled()
+{
+    const bool surface = m_isosurfaceSelectable && m_isosurfaceGroup->isChecked();
+    // The volume box: a say only while a surface could stand in for the
+    // volume. Otherwise ticked, silently, because the render does show the
+    // volume then, whatever was last asked; the ask is kept in m_volumeWanted
+    // and put back when the box gets its say again.
+    m_showVolumeCheck->setEnabled(surface);
+    {
+        const QSignalBlocker blocker(m_showVolumeCheck);
+        m_showVolumeCheck->setChecked(!surface || m_volumeWanted);
+    }
+    m_showVolumeCheck->setToolTip(surface
+            ? tr("Draw the volume as well as the surface; off, the surface "
+                 "is drawn alone and the volume's field is not even sampled")
+            : tr("The volume is always drawn while there is no isosurface"));
+    // The slider: only over a range. Set explicitly, because the group's own
+    // enabling of its children on a re-tick would otherwise hand a rangeless
+    // slider back.
+    m_isosurfaceSlider->setEnabled(surface && m_isosurfaceRange.has_value());
+}
+
+void VolumeWindow::setIsosurfaceFields(
+    const std::vector<std::pair<FieldId, QString>>& fields, FieldId fallback)
+{
+    const QSignalBlocker blocker(m_isosurfaceField);
+    const auto previousName = m_isosurfaceField->currentText();
+    const auto previousField = isosurfaceField();
+    m_isosurfaceField->clear();
+    int chosen = -1;
+    int fallbackRow = -1;
+    for (const auto& [field, name] : fields) {
+        const auto row = m_isosurfaceField->count();
+        m_isosurfaceField->addItem(name, static_cast<unsigned int>(field.value));
+        if (m_isosurfaceFieldChosen && chosen < 0 && name == previousName) {
+            chosen = row;
+        }
+        if (fallbackRow < 0 && field == fallback) {
+            fallbackRow = row;
+        }
+    }
+    if (chosen < 0) {
+        // Nothing chosen, or the chosen field is gone: follow the volume's.
+        m_isosurfaceFieldChosen = false;
+        chosen = fallbackRow >= 0 ? fallbackRow : (fields.empty() ? -1 : 0);
+    }
+    m_isosurfaceField->setCurrentIndex(chosen);
+    if (isosurfaceField() != previousField) {
+        m_isosurfaceValueChosen = false;
+    }
+}
+
+void VolumeWindow::setIsosurfaceValueRange(std::optional<ValueRange> range)
+{
+    // A range that spans nothing gives the slider nothing to map.
+    if (range
+        && !(std::isfinite(range->minimum) && std::isfinite(range->maximum)
+            && range->maximum > range->minimum)) {
+        range.reset();
+    }
+    m_isosurfaceRange = range;
+    m_isosurfaceSlider->setToolTip(range
+            ? tr("Slide the iso-value over the field's range [%1, %2]")
+                  .arg(range->minimum)
+                  .arg(range->maximum)
+            : tr("This field's range is not known, so type the iso-value"));
+    syncIsosurfaceEnabled();
+    if (range && !m_isosurfaceValueChosen) {
+        // The first range for a field, and no value asked for: start in the
+        // middle, where a surface most likely exists. Silently through the
+        // spin box, then say so once if the surface is on, since the picture
+        // changes.
+        // In halves: the sum of two bounds near the top of the double range
+        // overflows where each half does not.
+        const auto middle = 0.5 * range->minimum + 0.5 * range->maximum;
+        const bool changed = m_isosurfaceValue->value() != middle;
+        {
+            const QSignalBlocker blocker(m_isosurfaceValue);
+            m_isosurfaceValue->setValue(middle);
+        }
+        syncIsosurfaceSlider();
+        if (changed && isosurface()) {
+            emit isosurfaceChanged();
+        }
+        return;
+    }
+    syncIsosurfaceSlider();
+}
+
+void VolumeWindow::setIsosurfaceSelectable(bool selectable)
+{
+    m_isosurfaceSelectable = selectable;
+    m_isosurfaceGroup->setEnabled(selectable);
+    m_isosurfaceGroup->setToolTip(selectable
+            ? tr("Draw the surface where a field equals a value, shaded, with "
+                 "its own colour and opacity")
+            : tr("This server predates isosurfaces (protocol 1.6) and renders "
+                 "the volume alone; install a current amrexplorer-server"));
+    syncIsosurfaceEnabled();
+}
+
+void VolumeWindow::setIsosurfaceColor(const QColor& color)
+{
+    m_isosurfaceColorValue = color;
+    QPixmap swatch(16, 16);
+    swatch.fill(color);
+    m_isosurfaceColor->setIcon(QIcon(swatch));
+    m_isosurfaceColor->setText(color.name().toUpper());
+}
+
+void VolumeWindow::chooseIsosurfaceColor()
+{
+    // Parented here, so this window is the one that comes back to the front
+    // when the dialog closes, and opened without a nested event loop: an
+    // async dataset switch can close this window while the dialog is up, and
+    // a heap dialog owned by it simply dies with it, where the blocking
+    // getColor's stack-owned dialog would be freed under its own call (the
+    // hazard exportImage parents its prompts to the main window to avoid).
+    auto* dialog = new QColorDialog(m_isosurfaceColorValue, this);
+    dialog->setWindowTitle(tr("Isosurface Color"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &QColorDialog::colorSelected, this, [this](const QColor& chosen) {
+        if (chosen.isValid()) {
+            setIsosurfaceColor(chosen);
+            emit isosurfaceChanged();
+        }
+    });
+    dialog->open();
+}
+
+void VolumeWindow::setIsosurfaceValueFromSlider(int position)
+{
+    if (!m_isosurfaceRange) {
+        return;
+    }
+    const auto fraction = static_cast<double>(position)
+        / static_cast<double>(m_isosurfaceSlider->maximum());
+    // Weighted rather than through the span, which overflows for a range
+    // spanning most of the double line; each term is bounded by its bound.
+    const auto value = (1.0 - fraction) * m_isosurfaceRange->minimum
+        + fraction * m_isosurfaceRange->maximum;
+    {
+        const QSignalBlocker blocker(m_isosurfaceValue);
+        m_isosurfaceValue->setValue(value);
+    }
+    m_isosurfaceValueChosen = true;
+    if (m_isosurfaceSlider->isSliderDown()) {
+        emit isosurfaceDragged();
+    } else {
+        emit isosurfaceChanged();
+    }
+}
+
+void VolumeWindow::syncIsosurfaceSlider()
+{
+    if (!m_isosurfaceRange) {
+        return;
+    }
+    // Halves again, so neither difference can overflow.
+    const auto halfSpan = 0.5 * m_isosurfaceRange->maximum - 0.5 * m_isosurfaceRange->minimum;
+    const auto fraction
+        = (0.5 * m_isosurfaceValue->value() - 0.5 * m_isosurfaceRange->minimum) / halfSpan;
+    const auto position = static_cast<int>(std::lround(std::clamp(fraction, 0.0, 1.0)
+        * static_cast<double>(m_isosurfaceSlider->maximum())));
+    const QSignalBlocker blocker(m_isosurfaceSlider);
+    m_isosurfaceSlider->setValue(position);
+}
+
+bool VolumeWindow::showVolume() const
+{
+    // No surface, nothing else to draw: the volume is shown whatever the box
+    // says (and syncIsosurfaceEnabled keeps it ticked then).
+    return !isosurface().has_value() || m_showVolumeCheck->isChecked();
+}
+
+std::optional<VolumeIsosurface> VolumeWindow::isosurface() const
+{
+    if (!m_isosurfaceSelectable || !m_isosurfaceGroup->isChecked()) {
+        return std::nullopt;
+    }
+    const auto field = isosurfaceField();
+    if (!field) {
+        return std::nullopt;
+    }
+    VolumeIsosurface iso;
+    iso.field = *field;
+    iso.component = 0;
+    iso.value = m_isosurfaceValue->value();
+    iso.color = static_cast<std::uint32_t>(m_isosurfaceColorValue.rgb()) & 0x00FFFFFFU;
+    iso.opacity = static_cast<float>(m_isosurfaceOpacity->value()) / 100.0F;
+    return iso;
+}
+
+std::optional<FieldId> VolumeWindow::isosurfaceField() const
+{
+    if (m_isosurfaceField->currentIndex() < 0) {
+        return std::nullopt;
+    }
+    return FieldId{m_isosurfaceField->currentData().toUInt()};
+}
+
+QString VolumeWindow::isosurfaceFieldName() const
+{
+    return m_isosurfaceField->currentText();
+}
+
 void VolumeWindow::setDatasetGeometry(const DatasetMetadata& metadata)
 {
     m_view->setGeometry(metadata);
@@ -268,11 +587,6 @@ void VolumeWindow::setDatasetGeometry(const DatasetMetadata& metadata)
 void VolumeWindow::setSlicePositions(double x, double y, double z)
 {
     m_view->setSlicePositions(x, y, z);
-}
-
-void VolumeWindow::setSlicePlanesVisible(bool visible)
-{
-    m_view->setSlicePlanesVisible(visible);
 }
 
 void VolumeWindow::setColorPalette(const Palette* palette)
@@ -387,6 +701,16 @@ void VolumeWindow::setSamplingSelectable(bool selectable)
             : tr("This server predates smooth sampling (protocol 1.3) and "
                  "always reads the nearest voxel; install a current "
                  "amrexplorer-server"));
+}
+
+void VolumeWindow::setOrientationSelectable(bool selectable)
+{
+    m_view->setFreeRotation(selectable);
+    m_view->setToolTip(selectable
+            ? tr("Drag to rotate, wheel to zoom")
+            : tr("This server predates free camera orientation (protocol 1.8) "
+                 "and turns the view about the vertical axis only; install a "
+                 "current amrexplorer-server"));
 }
 
 qreal VolumeWindow::viewDevicePixelRatio() const

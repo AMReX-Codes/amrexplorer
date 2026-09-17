@@ -347,6 +347,12 @@ VolumeDisplayResult renderWithFallback(
         request.outputSize, dataset->maximumResponseBytes());
     int fallbackFrom = -1;
     int fallbackTo = -1;
+    // A hidden volume maps nothing through a range, so none is resolved for
+    // it: the field's statistics may be unusable, and an isosurface-only
+    // render must not fail on a range it never reads. The session answers a
+    // request without one with its neutral range.
+    const auto rangeChoice
+        = request.showVolume ? choice : std::optional<VolumeRangeChoice>{};
     // Whether the range moves with the level, i.e. whether a fallback makes
     // the resolved range wrong and the render worth repeating. Only Level
     // does: Visible is resolved by the renderer from the grid it sampled, so
@@ -356,7 +362,8 @@ VolumeDisplayResult renderWithFallback(
     // returns the same bounds whatever the fallback did. Repeating for File
     // would cost a second render, and a second round trip to a server, to
     // arrive at the range it already had.
-    const bool levelDependentRange = choice && choice->mode == RangeMode::Level;
+    const bool levelDependentRange
+        = rangeChoice && rangeChoice->mode == RangeMode::Level;
 
     // Work done by an attempt whose frame is then discarded. The sampling and
     // the payload reads happened and cost what they cost; the repeat runs
@@ -376,16 +383,16 @@ VolumeDisplayResult renderWithFallback(
     };
     for (;;) {
         try {
-            if (choice) {
+            if (rangeChoice) {
                 // Per attempt, not once: request.maximumLevel is what the
                 // loop lowers, and a Level range is read per level. The other
                 // modes resolve to the same range every time round, which
                 // costs a statistics lookup and nothing else -- only the
                 // repeat below is worth gating on the mode.
-                request.logarithmic = choice->logarithmic;
+                request.logarithmic = rangeChoice->logarithmic;
                 request.range = resolveVolumeRange(dataset, request.field,
-                    request.maximumLevel, request.composition, choice->mode,
-                    choice->userRange, choice->logarithmic, cancellation);
+                    request.maximumLevel, request.composition, rangeChoice->mode,
+                    rangeChoice->userRange, rangeChoice->logarithmic, cancellation);
             }
             auto frame = dataset->renderVolume(request, cancellation);
             // A fallback the session made inside this attempt counts the same

@@ -115,7 +115,8 @@ PlotfileMetadataResult StandaloneMetadataReader::readFab(
     return {
         std::shared_ptr<const DatasetMetadata>(std::move(metadata)),
         MetadataReadMetrics{1, headerBytes, 0, 0},
-        "FAB"
+        "FAB",
+        nullptr
     };
 }
 
@@ -166,7 +167,7 @@ PlotfileMetadataResult makeSelectedFabMetadata(
     metadata->physicalDomain = sampleBounds(level, storedBox, source.dimension);
     validateStandalone(*metadata);
     return {std::shared_ptr<const DatasetMetadata>(std::move(metadata)),
-        MetadataReadMetrics{}, "FAB"};
+        MetadataReadMetrics{}, "FAB", nullptr};
 }
 
 PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
@@ -223,7 +224,8 @@ PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
     return {
         std::shared_ptr<const DatasetMetadata>(std::move(metadata)),
         MetadataReadMetrics{1, index.bytesRead, 0, 0},
-        "VisMF-" + std::to_string(index.version)
+        "VisMF-" + std::to_string(index.version),
+        nullptr
     };
 }
 

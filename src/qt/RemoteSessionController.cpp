@@ -29,6 +29,13 @@ void RemoteSessionController::install(
 {
     m_connection = std::move(connection);
     m_label = std::move(label);
+    // A property of the connection, so it is derived once here and stands for
+    // the session's life. A status message cannot carry it: the open that
+    // follows the ready line replaces it within the same event-loop turn.
+    m_precisionNotice
+        = m_connection && !m_connection->supportsDoublePrecisionValues()
+        ? QString::fromLatin1(remote::doublePrecisionValuesUnsupportedMessage)
+        : QString();
     ++m_connectionGeneration;
     emit sessionChanged();
 }
@@ -108,6 +115,7 @@ void RemoteSessionController::start(std::string destination,
     m_session.reset();
     m_connection.reset();
     m_label.clear();
+    m_precisionNotice.clear();
     m_session = std::make_unique<SshRemoteSession>(this);
     emit statusMessage(
         tr("Starting remote session on %1...").arg(destinationText), 0);
@@ -123,12 +131,14 @@ void RemoteSessionController::start(std::string destination,
             const auto& server = connection->serverInfo();
             install(std::move(connection),
                 tr("ssh %1").arg(QString::fromStdString(destination)));
+            // One multi-arg call: chaining would rescan the inserted text, so
+            // a peer whose reported name held a marker could steer the rest.
             emit statusMessage(
                 tr("Remote session on %1 is ready (%2 %3, %4 worker threads)")
                     .arg(QString::fromStdString(destination),
                         QString::fromStdString(server.serverName),
-                        QString::fromStdString(server.softwareVersion))
-                    .arg(server.workerCount),
+                        QString::fromStdString(server.softwareVersion),
+                        QString::number(server.workerCount)),
                 0);
             if (!paths.empty()) {
                 emit openRequested(paths, paths.size() > 1);
@@ -217,6 +227,65 @@ void RemoteSessionController::promptOpen(QWidget* parent, bool sequence)
         std::move(paths));
 }
 
+void RemoteSessionController::promptCompanion(QWidget* parent, bool sameServer)
+{
+    RemoteOpenDialog dialog(RemoteOpenDialog::Kind::Companion, sessionDestination(),
+        m_hooks.settings()
+            ->value(QStringLiteral("remote/sshDestination"))
+            .toString(),
+        [this](const QString& destination) {
+            return serverExecutableFor(destination);
+        },
+        parent);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    const auto destination = dialog.destination();
+    const auto executable = dialog.executable();
+    const bool matches = sessionMatches(destination, executable);
+    if (destination.isEmpty() || executable.isEmpty()) {
+        QMessageBox::warning(parent, dialog.windowTitle(),
+            tr("The SSH destination and the server executable are required."));
+        return;
+    }
+    // A new session would replace the connection the open plotfile came
+    // over, and its datasets with it.
+    if (sameServer && !matches) {
+        QMessageBox::warning(parent, dialog.windowTitle(),
+            tr("A plotfile on show came over the session on %1; a companion "
+               "must come from the same server, so keep that destination and "
+               "server executable (or close the companion first).")
+                .arg(sessionDestination()));
+        return;
+    }
+    if (dialog.browseRequested()) {
+        const auto pick = [this, parent] {
+            auto paths = runBrowser(parent, m_connection, /*sequence=*/false);
+            if (!paths.empty()) {
+                emit companionRequested(std::move(paths.front()));
+            }
+        };
+        if (matches) {
+            pick();
+        } else {
+            start(destination.toStdString(), executable.toStdString(), {}, pick);
+        }
+        return;
+    }
+    auto paths = dialog.paths();
+    if (paths.empty()) {
+        QMessageBox::warning(parent, dialog.windowTitle(),
+            tr("The plotfile path is required."));
+        return;
+    }
+    if (matches) {
+        emit companionRequested(std::move(paths.front()));
+        return;
+    }
+    start(destination.toStdString(), executable.toStdString(), {},
+        [this, path = std::move(paths.front())] { emit companionRequested(path); });
+}
+
 void RemoteSessionController::browse(QWidget* parent, bool sequence)
 {
     if (!connected()) {
@@ -224,30 +293,49 @@ void RemoteSessionController::browse(QWidget* parent, bool sequence)
                               "(File > Open Remote Plotfile...)."));
         return;
     }
+    auto paths = runBrowser(parent, m_connection, sequence);
+    if (paths.empty()) {
+        return;
+    }
+    // One plotfile picked in the sequence browser is just that plotfile.
+    const bool asSequence = paths.size() > 1;
+    emit openRequested(std::move(paths), asSequence);
+}
+
+std::string RemoteSessionController::chooseRemotePlotfile(QWidget* parent,
+    const std::shared_ptr<remote::Connection>& connection)
+{
+    if (!connection || !connection->connected()) {
+        emit errorReported(tr("The remote session that opened the plotfile "
+                              "has ended."));
+        return {};
+    }
+    auto paths = runBrowser(parent, connection, /*sequence=*/false);
+    return paths.empty() ? std::string{} : std::move(paths.front());
+}
+
+std::vector<std::string> RemoteSessionController::runBrowser(QWidget* parent,
+    const std::shared_ptr<remote::Connection>& connection, bool sequence)
+{
     // The last directory browsed is remembered per destination: a path is a
     // property of one machine, like the server executable.
     const auto destination
         = m_session ? sessionDestination() : m_label;
     const auto settingsKey
         = QStringLiteral("remote/lastDirectories/%1").arg(destination);
-    RemoteFileDialog dialog(m_connection,
+    RemoteFileDialog dialog(connection,
         m_hooks.settings()->value(settingsKey).toString(),
         sequence ? RemoteFileDialog::SelectionMode::PlotfileSequence
                  : RemoteFileDialog::SelectionMode::SinglePlotfile,
         parent);
     if (dialog.exec() != QDialog::Accepted) {
-        return;
+        return {};
     }
     auto paths = dialog.selectedPaths();
-    if (paths.empty()) {
-        return;
-    }
-    if (!dialog.currentDirectory().isEmpty()) {
+    if (!paths.empty() && !dialog.currentDirectory().isEmpty()) {
         m_hooks.settings()->setValue(settingsKey, dialog.currentDirectory());
     }
-    // One plotfile picked in the sequence browser is just that plotfile.
-    const bool asSequence = paths.size() > 1;
-    emit openRequested(std::move(paths), asSequence);
+    return paths;
 }
 
 QString RemoteSessionController::diagnosticsLines() const
@@ -264,6 +352,10 @@ QString RemoteSessionController::diagnosticsLines() const
         if (remotePath) {
             text += tr("\nremote path: %1")
                         .arg(QString::fromStdString(*remotePath));
+        }
+        const auto precisionNotice = valuePrecisionNotice();
+        if (!precisionNotice.isEmpty()) {
+            text += tr("\nremote values: float -- %1").arg(precisionNotice);
         }
     } else if (m_session) {
         text += tr("\nremote session: ssh %1 (starting)")

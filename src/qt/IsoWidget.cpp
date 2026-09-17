@@ -24,6 +24,14 @@ namespace {
 
 constexpr double pi = 3.14159265358979323846;
 
+// An angle brought into [-pi, pi): the rotation is periodic, and a long drag
+// would otherwise run the numbers off without bound.
+double wrapAngle(double angle) noexcept
+{
+    const auto turns = std::floor((angle + pi) / (2.0 * pi));
+    return angle - turns * 2.0 * pi;
+}
+
 // Cube corner indexing: bit 0 = x side, bit 1 = y side, bit 2 = z side.
 constexpr std::array<std::array<int, 2>, 12> boxEdges{{
     {{0, 1}}, {{2, 3}}, {{4, 5}}, {{6, 7}},
@@ -39,6 +47,7 @@ IsoWidget::IsoWidget(QWidget* parent)
 {
     setMinimumSize(200, 150);
     setMouseTracking(true);
+    seedAnglesFromCamera();
 
     const auto makeBtn = [this](const QString& label) {
         auto* btn = new QPushButton(label, this);
@@ -58,23 +67,71 @@ IsoWidget::IsoWidget(QWidget* parent)
     m_btnXZ = makeBtn(QStringLiteral("XZ"));
     m_btnYZ = makeBtn(QStringLiteral("YZ"));
 
-    connect(m_btnXY, &QPushButton::clicked, this, [this] {
-        setViewAngles(orthoPresetXY.azimuth, orthoPresetXY.elevation);
-    });
-    connect(m_btnXZ, &QPushButton::clicked, this, [this] {
-        setViewAngles(orthoPresetXZ.azimuth, orthoPresetXZ.elevation);
-    });
-    connect(m_btnYZ, &QPushButton::clicked, this, [this] {
-        setViewAngles(orthoPresetYZ.azimuth, orthoPresetYZ.elevation);
-    });
+    connect(m_btnXY, &QPushButton::clicked, this, [this] { setPreset(orthoPresetXY); });
+    connect(m_btnXZ, &QPushButton::clicked, this, [this] { setPreset(orthoPresetXZ); });
+    connect(m_btnYZ, &QPushButton::clicked, this, [this] { setPreset(orthoPresetYZ); });
 }
 
-void IsoWidget::setGeometry(const DatasetMetadata& metadata)
+void IsoWidget::setGeometry(const DatasetMetadata& metadata, DisplayMap displayMap)
+{
+    setGeometries({&metadata}, std::move(displayMap));
+}
+
+void IsoWidget::setPairedGeometry(const DatasetMetadata& primary,
+    const DatasetMetadata& companion, DisplayMap displayMap)
+{
+    setGeometries({&primary, &companion}, std::move(displayMap));
+}
+
+Real3 IsoWidget::toDisplay(std::size_t dataset, const Real3& point) const
+{
+    return m_displayMap ? m_displayMap(dataset, point) : point;
+}
+
+RealBox IsoWidget::toDisplay(std::size_t dataset, const RealBox& box) const
+{
+    // The map is monotonic per axis, so corners map to corners.
+    return {toDisplay(dataset, box.lower), toDisplay(dataset, box.upper)};
+}
+
+std::size_t IsoWidget::datasetHolding(int axis, double position) const
+{
+    const auto a = static_cast<std::size_t>(axis);
+    for (std::size_t dataset = 0; dataset < m_physicalDomains.size(); ++dataset) {
+        const auto& box = m_physicalDomains[dataset];
+        if (position >= box.lower[a] && position < box.upper[a]) {
+            return dataset;
+        }
+    }
+    return 0;
+}
+
+void IsoWidget::setGeometries(const std::vector<const DatasetMetadata*>& metadata,
+    DisplayMap displayMap)
 {
     const bool hadGeometry = m_hasGeometry;
     const auto previousDomain = m_domain;
-    m_hasGeometry = metadata.dimension == 3;
-    m_domain = datasetSampleBounds(metadata);
+    m_hasGeometry = !metadata.empty()
+        && std::all_of(metadata.begin(), metadata.end(),
+            [](const DatasetMetadata* m) { return m->dimension == 3; });
+    m_displayMap = std::move(displayMap);
+    // The union of the datasets' bounds; one dataset is its own union.
+    m_datasetDomains.clear();
+    m_physicalDomains.clear();
+    for (std::size_t dataset = 0; dataset < metadata.size(); ++dataset) {
+        m_physicalDomains.push_back(datasetSampleBounds(*metadata[dataset]));
+        m_datasetDomains.push_back(toDisplay(dataset, m_physicalDomains.back()));
+    }
+    m_domain = m_datasetDomains.empty() ? RealBox{} : m_datasetDomains.front();
+    for (const auto& box : m_datasetDomains) {
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            m_domain.lower[axis] = std::min(m_domain.lower[axis], box.lower[axis]);
+            m_domain.upper[axis] = std::max(m_domain.upper[axis], box.upper[axis]);
+        }
+    }
+    if (m_datasetDomains.size() < 2) {
+        m_datasetDomains.clear();
+    }
     m_levels.clear();
     // The frame belonged to the previous geometry: kept across a domain that
     // moved, it would be drawn under a wireframe for a region it was not
@@ -92,10 +149,11 @@ void IsoWidget::setGeometry(const DatasetMetadata& metadata)
         m_backdropCamera = OrthoCamera{};
     }
     if (m_hasGeometry) {
-        m_levels.reserve(metadata.levels.size());
-        for (const auto& level : metadata.levels) {
-            m_levels.push_back({level.level, level.domain, level.cellSize,
-                level.indexOrigin, level.boxes});
+        for (std::size_t dataset = 0; dataset < metadata.size(); ++dataset) {
+            for (const auto& level : metadata[dataset]->levels) {
+                m_levels.push_back({level.level, dataset, level.domain,
+                    level.cellSize, level.indexOrigin, level.boxes});
+            }
         }
         // Default to the domain center so a caller that sets geometry but
         // forgets setSlicePositions draws the planes mid-domain instead of
@@ -107,7 +165,13 @@ void IsoWidget::setGeometry(const DatasetMetadata& metadata)
 
 void IsoWidget::setSlicePositions(double x, double y, double z)
 {
-    m_slicePositions = {x, y, z};
+    // Each coordinate through the dataset that holds it: along the axis two
+    // datasets share a plane on, the bands differ.
+    Real3 point{{x, y, z}};
+    for (int axis = 0; axis < 3; ++axis) {
+        const auto a = static_cast<std::size_t>(axis);
+        m_slicePositions[a] = toDisplay(datasetHolding(axis, point[a]), point)[a];
+    }
     update();
 }
 
@@ -171,12 +235,21 @@ void IsoWidget::paintEvent(QPaintEvent* event)
         for (const auto& level : m_levels) {
             const QPen pen(levelOutlineColor(level.level), 1);
             for (const auto& box : level.boxes) {
-                drawBox(painter, frame, physicalBox(level, box), pen);
+                drawBox(painter, frame,
+                    toDisplay(level.dataset, physicalBox(level, box)), pen);
             }
         }
     }
     if (m_domainOutlineVisible) {
-        drawBox(painter, frame, m_domain, QPen(Qt::white, 1));
+        if (m_datasetDomains.empty()) {
+            drawBox(painter, frame, m_domain, QPen(Qt::white, 1));
+        } else {
+            // Two datasets: each domain on its own, never their union, which
+            // would enclose the part of one's extent the other lacks.
+            for (const auto& box : m_datasetDomains) {
+                drawBox(painter, frame, box, QPen(Qt::white, 1));
+            }
+        }
     }
     // Translucent slice planes overlay the wireframe so the user can see where
     // the XY/XZ/YZ slices sit in the domain.
@@ -306,10 +379,29 @@ void IsoWidget::mouseMoveEvent(QMouseEvent* event)
         // while a drag right slid the near face left -- which reads as the
         // horizontal being backwards, since the vertical is what everything
         // else does too.
-        m_camera.azimuth += static_cast<double>(delta.x()) * sensitivity;
-        m_camera.elevation += static_cast<double>(delta.y()) * sensitivity;
-        m_camera.elevation = std::clamp(
-            m_camera.elevation, -pi / 2.0 + 0.01, pi / 2.0 - 0.01);
+        const auto dx = static_cast<double>(delta.x());
+        const auto dy = static_cast<double>(delta.y());
+        if (m_freeRotation) {
+            // About the screen's axes: a drag right turns about the view's
+            // vertical axis, a drag down about its horizontal one, the turn
+            // applied after the camera's own rotation. So the face under the
+            // cursor follows the cursor whatever the orientation -- upside
+            // down included, where a turn about world z would read backwards.
+            const auto length = std::hypot(dx, dy);
+            if (length > 0.0) {
+                m_camera.rotation = normalized(
+                    axisAngle({{dy, dx, 0.0}}, sensitivity * length) * m_camera.rotation);
+                seedAnglesFromCamera();
+            }
+        } else {
+            // The two angles an older server reads. Neither is limited: a
+            // vertical drag tumbles the domain on through straight-up and
+            // straight-down, where a horizontal drag, still a turn about
+            // world z, reads the other way on screen.
+            m_azimuth = wrapAngle(m_azimuth + dx * sensitivity);
+            m_elevation = wrapAngle(m_elevation + dy * sensitivity);
+            m_camera = orthoCameraFromAngles(m_azimuth, m_elevation, m_camera.zoom);
+        }
         update();
         emit cameraChanged();
         event->accept();
@@ -412,10 +504,38 @@ void IsoWidget::drawAxisIndicator(QPainter& painter) const
     painter.restore();
 }
 
-void IsoWidget::setViewAngles(double azimuth, double elevation)
+void IsoWidget::seedAnglesFromCamera()
 {
-    m_camera.azimuth = azimuth;
-    m_camera.elevation = elevation;
+    const auto angles = nearestOrthoAngles(m_camera);
+    m_azimuth = angles.azimuth;
+    m_elevation = angles.elevation;
+}
+
+void IsoWidget::setFreeRotation(bool free)
+{
+    m_freeRotation = free;
+    if (free) {
+        return;
+    }
+    // A camera that already has two angles is left as it is, bit for bit:
+    // rebuilding it from them would not reproduce it exactly, and a spurious
+    // change here -- on every geometry push against an older server -- would
+    // end a drag's draft early. A rolled camera goes onto the nearest angles,
+    // so what the older server is asked for is what the view then shows.
+    seedAnglesFromCamera();
+    if (orthoAnglesOf(m_camera).has_value()) {
+        return;
+    }
+    m_camera = orthoCameraFromAngles(m_azimuth, m_elevation, m_camera.zoom);
+    update();
+    emit cameraChanged();
+    emit interactionEnded();
+}
+
+void IsoWidget::setPreset(const OrthoCamera& preset)
+{
+    m_camera.rotation = preset.rotation;
+    seedAnglesFromCamera();
     update();
     // Both, in this order: the camera moved, and the move is already over. A
     // preset has no mouse release to end it, so without the second signal a
@@ -450,6 +570,11 @@ void IsoWidget::setCamera(const OrthoCamera& camera)
         return;
     }
     m_camera = camera;
+    seedAnglesFromCamera();
+    if (!m_freeRotation && !orthoAnglesOf(m_camera).has_value()) {
+        // On two angles the view holds no rolled camera (setFreeRotation).
+        m_camera = orthoCameraFromAngles(m_azimuth, m_elevation, m_camera.zoom);
+    }
     update();
     emit cameraChanged();
 }

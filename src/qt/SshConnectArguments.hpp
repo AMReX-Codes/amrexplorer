@@ -15,6 +15,9 @@ struct SshConnectArguments {
     // remote PATH.
     std::string serverExecutable;
     std::vector<std::string> paths;
+    // Empty when --companion was not given: a remote plotfile to show beside
+    // the one path, once its slices are up.
+    std::string companion;
 };
 
 struct SshConnectParseResult {
@@ -23,13 +26,13 @@ struct SshConnectParseResult {
 };
 
 // After the destination and the optional --server PATH, every token is a
-// remote path -- except one that starts with '-', which is an option this
-// program does not have (a mistyped --server, say) and is refused rather
-// than sent to the server as a path. A path that really starts with '-'
-// goes after a "--" token.
+// remote path -- except "--companion PATH", and one that starts with '-',
+// which is an option this program does not have (a mistyped --server, say)
+// and is refused rather than sent to the server as a path. A path that
+// really starts with '-' goes after a "--" token.
 inline SshConnectParseResult parseSshConnectArguments(std::span<const std::string_view> arguments) {
     constexpr std::string_view usage = "usage: amrexplorer --ssh SSH_DESTINATION [--server PATH] "
-                                       "[--] [REMOTE_PATH ...]";
+                                       "[--companion REMOTE_PATH] [--] [REMOTE_PATH ...]";
     if (arguments.empty() || arguments.front().empty()) {
         return {{}, std::string(usage)};
     }
@@ -50,7 +53,9 @@ inline SshConnectParseResult parseSshConnectArguments(std::span<const std::strin
     }
     request.paths.reserve(arguments.size() - pathBegin);
     bool optionsEnded = false;
-    for (const auto path : arguments.subspan(pathBegin)) {
+    const auto rest = arguments.subspan(pathBegin);
+    for (std::size_t index = 0; index < rest.size(); ++index) {
+        const auto path = rest[index];
         if (path.empty()) {
             return {{}, "remote paths must not be empty"};
         }
@@ -58,10 +63,23 @@ inline SshConnectParseResult parseSshConnectArguments(std::span<const std::strin
             optionsEnded = true;
             continue;
         }
+        if (!optionsEnded && path == "--companion") {
+            if (index + 1 >= rest.size() || rest[index + 1].empty()) {
+                return {{}, "--companion requires a remote plotfile path\n" + std::string(usage)};
+            }
+            if (!request.companion.empty()) {
+                return {{}, "--companion given twice\n" + std::string(usage)};
+            }
+            request.companion = rest[++index];
+            continue;
+        }
         if (!optionsEnded && path.front() == '-') {
             return {{}, "unknown option: " + std::string(path) + "\n" + std::string(usage)};
         }
         request.paths.emplace_back(path);
+    }
+    if (!request.companion.empty() && request.paths.size() != 1) {
+        return {{}, "--companion needs exactly one remote plotfile to pair with\n" + std::string(usage)};
     }
     return {std::move(request), {}};
 }

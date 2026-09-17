@@ -408,6 +408,7 @@ MainWindow::CompanionLoad MainWindow::loadRemoteCompanion(
 void MainWindow::installCompanion(const std::filesystem::path& path,
     CompanionLoad load, const std::optional<CompanionRestore>& restore)
 {
+    clearNavigation();
     // A reload's selections as they stand now: the load rendered `restore`,
     // and whatever moved meanwhile -- a field picked, the position dragged,
     // a zoom -- wins over it below.
@@ -547,6 +548,7 @@ void MainWindow::closeCompanion()
 
 void MainWindow::tearDownCompanion(bool replacing)
 {
+    clearNavigation();
     // A load still running for a replacement must not install after this.
     ++m_companionGeneration;
     m_companionStopSource.request_stop();
@@ -1020,6 +1022,7 @@ bool MainWindow::applyPairRegions(int normal,
 
 void MainWindow::pairRubberBandZoom(int normal, const QRectF& sceneRect)
 {
+    NavigationScope navigation(*this);
     const auto window = sceneRect.normalized();
     if (window.width() < 1.0e-9 || window.height() < 1.0e-9) {
         return;

@@ -972,6 +972,7 @@ MainWindow::MainWindow(QWidget* parent)
             saveSettings();
         });
 
+    setupNavigation();
     createMenus();
 
     connect(primary().fieldSelector, qOverload<int>(&QComboBox::currentIndexChanged),
@@ -1767,6 +1768,7 @@ void MainWindow::applyDisplayStretches()
 
 void MainWindow::setAspectMode(AspectMode mode)
 {
+    clearNavigation();
     if (mode != m_aspectMode) {
         m_aspectMode = mode;
         saveSettings();
@@ -2017,6 +2019,7 @@ void MainWindow::createMenus()
             if (displayMode == m_sphericalDisplay) {
                 return;
             }
+            clearNavigation();
             m_sphericalDisplay = displayMode;
             saveSettings();
             updateSphericalControls();
@@ -2043,6 +2046,7 @@ void MainWindow::createMenus()
         if (on == m_mappedGrid) {
             return;
         }
+        clearNavigation();
         m_mappedGrid = on;
         saveSettings();
         updateMappedGridControls();
@@ -2181,6 +2185,8 @@ void MainWindow::createMenus()
         this, [this] { showNumberFormatDialog(); });
 
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
+    viewMenu->addAction(m_navigationBack);
+    viewMenu->addAction(m_navigationForward);
     viewMenu->addMenu(scaleMenu);
     auto* lineMenu = viewMenu->addMenu(tr("Line orientation"));
     for (auto* action : m_lineOrientationGroup->actions()) {
@@ -2475,6 +2481,7 @@ QString MainWindow::chooseExpressionListPath(QWidget* parent, bool forSaving)
 
 bool MainWindow::reloadCurrentDataset()
 {
+    clearNavigation();
     // Not while closing: another window's Apply reaches every window, and a
     // worker started here would hold the I/O mutex against the quit. The
     // completion handler checks m_closing, but the read still runs.

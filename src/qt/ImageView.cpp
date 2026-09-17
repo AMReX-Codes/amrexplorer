@@ -16,6 +16,7 @@
 #include <QScrollBar>
 #include <QKeyEvent>
 #include <QFocusEvent>
+#include <QTimer>
 #include <QWheelEvent>
 #include <QPen>
 
@@ -206,6 +207,23 @@ ImageView::ImageView(QWidget* parent)
     // outside the scene. FullViewportUpdate ensures it never ghosts when
     // the viewport scrolls partial-update.
     setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
+    for (auto* bar : {horizontalScrollBar(), verticalScrollBar()}) {
+        connect(bar, &QScrollBar::sliderPressed, this, [this] {
+            m_scrollNavigationActive = true;
+            emit navigationBegan(NavigationKind::Scrollbar);
+        });
+        connect(bar, &QScrollBar::sliderReleased, this, [this] {
+            m_scrollNavigationActive = false;
+            emit navigationEnded();
+        });
+        // actionTriggered precedes the value change, including page steps.
+        connect(bar, &QScrollBar::actionTriggered, this, [this](int) {
+            emit navigationBegan(NavigationKind::Scrollbar);
+            if (!m_scrollNavigationActive) {
+                QTimer::singleShot(0, this, [this] { emit navigationEnded(); });
+            }
+        });
+    }
 }
 
 ImageView::Tile& ImageView::tile(std::size_t index)
@@ -1078,6 +1096,35 @@ QImage ImageView::composedImage(QSize outputSize, const QFont* exportFont,
     return out;
 }
 
+void ImageView::restoreNavigation(TransformMode mode, int factor,
+    const QRectF& window, const QRectF& canvas)
+{
+    if (!hasImage() || window.isEmpty() || canvas.isEmpty()) {
+        return;
+    }
+    m_scene->setSceneRect(canvas);
+    if (m_canvasRect) m_canvasRect = canvas;
+    if (mode == TransformMode::Fit) {
+        m_transformMode = TransformMode::Fit;
+        fitSceneRect(canvas);
+    } else if (mode == TransformMode::FixedScale) {
+        setFixedScale(factor);
+        centerOn(window.center());
+    } else {
+        m_transformMode = TransformMode::Custom;
+        // The snapshot is the whole viewport, including its margins.
+        // fitSceneRect would add another margin on every Back/Forward.
+        for (int pass = 0; pass < 2; ++pass) {
+            const double scale = std::min(
+                viewport()->width() / (window.width() * m_stretch.x()),
+                viewport()->height() / (window.height() * m_stretch.y()));
+            setTransform(QTransform::fromScale(scale * m_stretch.x(), scale * m_stretch.y()));
+            centerOn(window.center());
+        }
+    }
+    noteViewChanged();
+}
+
 void ImageView::fitToWindow()
 {
     if (hasImage()) {
@@ -1164,8 +1211,10 @@ void ImageView::panViewport(const QPoint& delta)
 void ImageView::mouseDoubleClickEvent(QMouseEvent* event)
 {
     if (hasImage()) {
+        emit navigationBegan(NavigationKind::Action);
         fitToWindow();
         emit fitRequested();
+        emit navigationEnded();
         event->accept();
         return;
     }
@@ -1417,7 +1466,13 @@ void ImageView::keyPressEvent(QKeyEvent* event)
     // would leave arrow panning dead there. The QShortcut binding this
     // replaced normalized that away for us.
     const auto modifiers = event->modifiers() & ~Qt::KeypadModifier;
-    if (hasImage() && modifiers == Qt::NoModifier) {
+    if (hasImage() && modifiers == Qt::NoModifier
+        && event->key() >= Qt::Key_Left && event->key() <= Qt::Key_Down) {
+        if (m_navigationKey != 0 && m_navigationKey != event->key()) {
+            emit navigationEnded();
+        }
+        m_navigationKey = event->key();
+        emit navigationBegan(NavigationKind::Key);
         switch (event->key()) {
         case Qt::Key_Left:
             emit panStepRequested(QPointF(1.0, 0.0));
@@ -1442,6 +1497,15 @@ void ImageView::keyPressEvent(QKeyEvent* event)
     QGraphicsView::keyPressEvent(event);
 }
 
+void ImageView::keyReleaseEvent(QKeyEvent* event)
+{
+    if (!event->isAutoRepeat() && event->key() == m_navigationKey) {
+        m_navigationKey = 0;
+        emit navigationEnded();
+    }
+    QGraphicsView::keyReleaseEvent(event);
+}
+
 void ImageView::wheelEvent(QWheelEvent* event)
 {
     if (!hasImage()) {
@@ -1455,7 +1519,9 @@ void ImageView::wheelEvent(QWheelEvent* event)
     }
     constexpr double zoomStep = 1.15;
     const auto factor = vertical > 0 ? zoomStep : 1.0 / zoomStep;
+    emit navigationBegan(NavigationKind::Wheel);
     zoomBy(factor);
+    emit navigationEnded(true);
     event->accept();
 }
 
@@ -1549,6 +1615,8 @@ void ImageView::focusOutEvent(QFocusEvent* event)
         emit panDragEnded(m_panAccumulated);
     }
     cancelSelection();
+    m_navigationKey = 0;
+    emit navigationEnded();
     QGraphicsView::focusOutEvent(event);
 }
 

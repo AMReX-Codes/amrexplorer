@@ -1680,6 +1680,17 @@ if(TARGET amrexplorer_qt)
     add_test(NAME selection_gestures COMMAND "${CMAKE_COMMAND}" -E env
         QT_QPA_PLATFORM=offscreen "$<TARGET_FILE:test_selection_gestures>")
 
+    add_executable(test_navigation
+        unit/test_navigation.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/LinePlotWindow.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp")
+    set_target_properties(test_navigation PROPERTIES AUTOMOC ON)
+    target_include_directories(test_navigation PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_navigation PRIVATE amrexplorer::core
+        amrexplorer::warnings Qt6::Widgets)
+    add_test(NAME navigation COMMAND "${CMAKE_COMMAND}" -E env
+        QT_QPA_PLATFORM=offscreen "$<TARGET_FILE:test_navigation>")
+
     add_executable(test_image_view_pan
         unit/test_image_view_pan.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/ImageView.cpp"
@@ -1963,6 +1974,46 @@ if(TARGET amrexplorer_qt)
     )
     set_tests_properties(
         qt_particle_settings_reset_smoke_3d PROPERTIES TIMEOUT 30)
+    add_test(NAME qt_companion_navigation_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_upper"
+            "-DSOURCE2=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_lower"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_companion_navigation"
+            -DMODE=companion-navigation
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake")
+    set_tests_properties(qt_companion_navigation_smoke PROPERTIES TIMEOUT 30)
+
+    foreach(kind remote mapped)
+        if(kind STREQUAL "remote")
+            set(navigation_fixture plotfile_3d)
+        else()
+            set(navigation_fixture plotfile_3d_mapped)
+        endif()
+        add_test(NAME qt_${kind}_navigation_smoke
+            COMMAND "${CMAKE_COMMAND}"
+                "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+                "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+                "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/${navigation_fixture}"
+                "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_navigation_${kind}"
+                -DMODE=${kind}-navigation
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake")
+        set_tests_properties(qt_${kind}_navigation_smoke PROPERTIES TIMEOUT 30)
+    endforeach()
+
+    foreach(dimension 2 3)
+        add_test(NAME qt_navigation_smoke_${dimension}d
+            COMMAND "${CMAKE_COMMAND}"
+                "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+                "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+                "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_${dimension}d"
+                "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_navigation_${dimension}d"
+                -DMODE=navigation
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake")
+        set_tests_properties(qt_navigation_smoke_${dimension}d PROPERTIES TIMEOUT 30)
+    endforeach()
+
     # A rubber-band selection in one 3-D panel synchronizes the selected
     # normalized subregion to all three panels by default.
     add_test(

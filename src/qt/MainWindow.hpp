@@ -7,6 +7,7 @@
 #include "ExportFrame.hpp"
 #include "ImageView.hpp"
 #include "NumberFormat.hpp"
+#include "NavigationHistory.hpp"
 #include "SetContoursDialog.hpp"
 
 #include <amrexplorer/core/Result.hpp>
@@ -251,6 +252,13 @@ public:
     void failNextVisibleSyncForTest();
     // Test-only: hold every cache-path slice worker at a gate until released,
     // so a refresh can be made to overtake a redraw still on its way.
+    [[nodiscard]] std::vector<QRectF> navigationWindowsForTest();
+    [[nodiscard]] bool navigationIdleForTest() const;
+    [[nodiscard]] std::size_t navigationCountForTest() const { return m_navigationHistory.size(); }
+    [[nodiscard]] ImageView* navigationViewForTest() const { return m_activeView->view; }
+    void navigationRefreshForTest();
+    void navigationZoomForTest();
+    [[nodiscard]] bool navigationWorkerWaitingForTest() const;
     void armSliceGateForTest();
     void releaseSliceGateForTest();
     void adjustActiveRequestsForTest(int delta);
@@ -640,6 +648,45 @@ private:
     // (one per plane normal, indexed by normal axis). Each view runs its own
     // async slice pipeline (stop source + generation) so moving one slice
     // plane only re-slices the view normal to it.
+    struct PlaneViewState;
+    struct NavigationPanel {
+        PlaneViewState* state = nullptr;
+        std::optional<RealBox> region;
+        QRectF window; // Stable display coordinates, with y increasing down.
+        QRectF sceneWindow; // The frame on screen when window was recorded.
+        ImageView::TransformMode mode = ImageView::TransformMode::Fit;
+        int factor = 1;
+        bool virtualCanvas = false;
+        std::optional<QRectF> pairWindow;
+        bool operator==(const NavigationPanel& other) const;
+    };
+    struct NavigationSnapshot {
+        std::vector<NavigationPanel> panels;
+        bool operator==(const NavigationSnapshot&) const = default;
+    };
+    class NavigationScope {
+    public:
+        explicit NavigationScope(MainWindow& window, bool joinGesture = false);
+        ~NavigationScope();
+    private:
+        MainWindow& m_window;
+        bool m_owner;
+    };
+    void setupNavigation();
+    void connectNavigation(ImageView* view);
+    void beginNavigation(ImageView::NavigationKind kind, ImageView* view);
+    void finishNavigation();
+    void clearNavigation();
+    void navigate(bool forward);
+    void refreshNavigationActions();
+    [[nodiscard]] QTransform navigationTransform(const PlaneViewState& state) const;
+    [[nodiscard]] NavigationPanel captureNavigationPanel(PlaneViewState& state) const;
+    [[nodiscard]] NavigationSnapshot captureNavigation();
+    void applyNavigationPanel(const NavigationPanel& panel);
+    void restorePendingNavigation(PlaneViewState& state);
+    void shiftNavigationWindow(PlaneViewState& state,
+        const RealBox& before, const RealBox& after);
+
     struct PlaneViewState {
         ImageView* view = nullptr;
         int normal = 1;
@@ -1590,6 +1637,15 @@ private:
     QAction* m_positionSeparator = nullptr;
     std::array<QSpinBox*, 3> m_sliceSpinboxes{nullptr, nullptr, nullptr};
     QTimer* m_sliceDebounce = nullptr;
+    NavigationHistory<NavigationSnapshot> m_navigationHistory;
+    std::optional<NavigationSnapshot> m_navigationBefore;
+    std::unordered_map<PlaneViewState*, NavigationPanel> m_navigationPending;
+    ImageView::NavigationKind m_navigationKind = ImageView::NavigationKind::Action;
+    ImageView* m_navigationView = nullptr;
+    QTimer* m_navigationTimer = nullptr;
+    QAction* m_navigationBack = nullptr;
+    QAction* m_navigationForward = nullptr;
+    bool m_restoringNavigation = false;
     QTimer* m_panDebounce = nullptr;
     PlaneViewState* m_panView = nullptr;
     RealBox m_panStartRegion{};
@@ -1598,6 +1654,7 @@ private:
     QRectF m_panStartSceneWindow;
     int m_panPlaneWidth = 0;
     int m_panPlaneHeight = 0;
+    QPoint m_panViewportDelta;
     QPointF m_panSceneDelta;
     QPointF m_panLastScheduledDelta;
     bool m_panDataRefresh = false;

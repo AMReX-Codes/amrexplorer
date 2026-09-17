@@ -42,6 +42,7 @@ Outcome dispatch(Context& context)
              &dispatchLifecycle,
              &dispatchRange,
              &dispatchZoom,
+             &dispatchNavigation,
              &dispatchFab,
              &dispatchShortcuts,
              &dispatchSequence,

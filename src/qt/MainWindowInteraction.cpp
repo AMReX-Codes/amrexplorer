@@ -361,6 +361,7 @@ void MainWindow::applyAxisScale(const std::array<double, 3>& axisScale,
         m_layers[1].perpendicularScale = value;
     }
     if (changed) {
+        clearNavigation();
         applyDisplayStretches();
     }
 }
@@ -980,6 +981,7 @@ void MainWindow::resetViewZoom(PlaneViewState& state)
 
 void MainWindow::resetZoomAllViews()
 {
+    NavigationScope navigation(*this);
     for (auto* state : currentViews()) {
         resetViewZoom(*state);
     }
@@ -1262,6 +1264,7 @@ void MainWindow::probeClicked(PlaneViewState& state, int x, int displayY)
 
 void MainWindow::rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect)
 {
+    NavigationScope navigation(*this);
     setActiveView(state);
     const auto& plane = *state.plane;
     if (!layerFor(state).session || plane.width <= 0 || plane.height <= 0) {
@@ -1317,6 +1320,7 @@ void MainWindow::rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect)
 void MainWindow::mappedRubberBandZoom(
     PlaneViewState& state, const QRectF& sceneRect)
 {
+    NavigationScope navigation(*this);
     setActiveView(state);
     const auto layout = mappedLayout(state);
     if (!layout || !layerFor(state).session || state.view == nullptr
@@ -1512,8 +1516,10 @@ void MainWindow::applyRubberBandZoom(
 
 void MainWindow::beginPanDrag(PlaneViewState& state)
 {
+    beginNavigation(ImageView::NavigationKind::Pan, state.view);
     setActiveView(state);
     m_panView = &state;
+    m_panViewportDelta = {};
     m_panSceneDelta = QPointF();
     m_panLastScheduledDelta = QPointF();
     if (m_pair) {
@@ -1547,10 +1553,11 @@ void MainWindow::updatePanDrag(PlaneViewState& state,
     if (m_panView != &state) {
         return;
     }
+    m_panViewportDelta += viewportDelta;
     m_panSceneDelta = totalSceneDelta;
     constexpr int minimumDrag = 4;
-    if (std::max(std::abs(totalSceneDelta.x()),
-            std::abs(totalSceneDelta.y())) < minimumDrag) {
+    if (std::max(std::abs(m_panViewportDelta.x()),
+            std::abs(m_panViewportDelta.y())) < minimumDrag) {
         return;
     }
     if (m_panDataRefresh) {
@@ -1571,13 +1578,14 @@ void MainWindow::endPanDrag(PlaneViewState& state, const QPointF& totalSceneDelt
     }
     m_panSceneDelta = totalSceneDelta;
     constexpr int minimumDrag = 4;
-    if (std::max(std::abs(totalSceneDelta.x()),
-            std::abs(totalSceneDelta.y())) >= minimumDrag
+    if (std::max(std::abs(m_panViewportDelta.x()),
+            std::abs(m_panViewportDelta.y())) >= minimumDrag
         && m_panDataRefresh) {
         flushPanDrag(true);
     }
     m_panView = nullptr;
     m_panDataRefresh = false;
+    finishNavigation();
 }
 
 void MainWindow::flushPanDrag(bool finalize)
@@ -1604,6 +1612,7 @@ void MainWindow::flushPanDrag(bool finalize)
     if (!region.has_value()) {
         return;
     }
+    shiftNavigationWindow(*m_panView, *m_panView->visibleRegion, *region);
     m_panView->visibleRegion = *region;
     m_panLastScheduledDelta = m_panSceneDelta;
     scheduleSliceRequest(*m_panView, false);
@@ -1727,6 +1736,7 @@ void MainWindow::centerViewOnData(
 
 void MainWindow::applyFixedScale(int factor)
 {
+    NavigationScope navigation(*this);
     const auto views = currentViews();
     std::vector<std::array<double, 2>> centers;
     centers.reserve(views.size());
@@ -1760,6 +1770,7 @@ void MainWindow::applyFixedScale(int factor)
 
 void MainWindow::updateRemoteFixedScaleDemand(PlaneViewState& state)
 {
+    if (m_restoringNavigation) return;
     if (!remoteDemandCanvas(state) || state.view->viewport() == nullptr) {
         return;
     }
@@ -1850,6 +1861,7 @@ void MainWindow::updateLineToolAvailability(const PlaneViewState& state)
 
 void MainWindow::updateMappedDemand(PlaneViewState& state)
 {
+    if (m_restoringNavigation) return;
     // A no-op unless the view shows a warped raster on a known canvas, and
     // never while an arrival is being installed (showSlice asks afterwards).
     if (m_applyingArrival || !isWarped(state.warp) || !state.mappedCanvasBounds
@@ -2026,6 +2038,7 @@ void MainWindow::updateMappedDemand(PlaneViewState& state)
 
 void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
 {
+    NavigationScope navigation(*this, true);
     if (!state.view->hasImage() || state.plane->width <= 0 || state.plane->height <= 0) {
         return;
     }
@@ -2062,8 +2075,20 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
                 * std::max(1.0, viewport->height() * 0.05)))));
         return;
     }
-    const auto stepX = std::max(1.0, static_cast<double>(state.plane->width) * 0.05);
-    const auto stepY = std::max(1.0, static_cast<double>(state.plane->height) * 0.05);
+    auto stepX = std::max(1.0, static_cast<double>(state.plane->width) * 0.05);
+    auto stepY = std::max(1.0, static_cast<double>(state.plane->height) * 0.05);
+    if (layerIsRemote(state) && !state.view->virtualCanvasActive()
+        && !layerFor(state).session->metadata().levels.empty()) {
+        // A remote raster pixel can be much smaller than a sample. The
+        // snapped data pan must advance at least one cell, as local arrows do.
+        const auto axes = displayAxes(state.normal);
+        const auto x = static_cast<std::size_t>(axes[0]);
+        const auto y = static_cast<std::size_t>(axes[1]);
+        const auto& dx = layerFor(state).session->metadata().levels.back().cellSize;
+        const auto& region = state.plane->physicalRegion;
+        stepX = std::max(stepX, state.plane->width * dx[x] / (region.upper[x] - region.lower[x]));
+        stepY = std::max(stepY, state.plane->height * dx[y] / (region.upper[y] - region.lower[y]));
+    }
     const QPointF sceneDelta(direction.x() * stepX, direction.y() * stepY);
 
     if (state.visibleRegion.has_value() && layerFor(state).session
@@ -2073,6 +2098,7 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
         if (!region.has_value()) {
             return;
         }
+        shiftNavigationWindow(state, *state.visibleRegion, *region);
         state.visibleRegion = *region;
         const bool remoteFixed = std::dynamic_pointer_cast<
             remote::RemoteDatasetSession>(layerFor(state).session) != nullptr

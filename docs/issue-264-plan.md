@@ -8,12 +8,17 @@ Source: https://github.com/AMReX-Codes/amrexplorer/issues/264
 - Delivery is three ordered commits for stacked PRs: selection controls,
   navigation history, and fixed-crosshair scanning. Each commit builds on the
   previous one. Local commits are authorized; publishing remains with the user.
-- This first commit implements Phase 1 and its widget regressions. Phases 2 and
-  3 follow in the next two commits. Their full agreed scope is retained below.
+- The first two commits implement Phases 1 and 2. Phase 3 follows in the third
+  commit; its full agreed scope is retained below.
+- Phase 2 adds shared image-window history and independent line-plot history,
+  with asynchronous restoration, wheel/key/scrollbar grouping, lifecycle resets,
+  and local/remote/mapped/companion smoke coverage. Its pan fixes use viewport
+  pixels for drag thresholds and ensure remote arrows advance by one sample.
 - The complete implementation was preserved before splitting at
   `/tmp/amrexplorer-issue264-stack/complete`.
-- Validation: Clang Release build with warnings as errors succeeded; all 212
-  tests run passed. Logs: `/tmp/amrexplorer-issue264-stack/phase1-{build,tests}.log`.
+- Validation: both stages built with Clang Release and warnings as errors.
+  Phase 1 passed all 212 tests run; Phase 2 passed all 218 tests run. Logs:
+  `/tmp/amrexplorer-issue264-stack/phase{1,2}-{build,tests}.log`.
 - Native macOS Control-click/trackpad behavior and external CI remain untested.
 - The `git_version_generator` CTest is excluded because its temporary Git
   commits and tags are outside the authorization to commit this implementation.

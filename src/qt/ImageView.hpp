@@ -70,6 +70,7 @@ class ImageView final : public QGraphicsView {
     Q_OBJECT
 
 public:
+    enum class NavigationKind { Action, Pan, Wheel, Key, Scrollbar };
     enum class LineOrientation { Auto, Horizontal, Vertical };
     void setLineOrientation(LineOrientation orientation) { m_lineOrientation = orientation; }
     void cancelSelection();
@@ -270,6 +271,8 @@ public:
     // Axes-enabled exports suppress outer grid strokes, not data pixels.
     [[nodiscard]] QImage composedImage(QSize outputSize, const QFont* exportFont = nullptr,
                                        bool omitOuterGridEdges = false) const;
+    void restoreNavigation(TransformMode mode, int factor,
+        const QRectF& window, const QRectF& canvas);
     void fitToWindow();
     void setFixedScale(int factor);
     void zoomBy(qreal factor);
@@ -331,6 +334,8 @@ signals:
     // covers a wheel zoom. Between the three, every way the visible part of
     // the raster can change without the raster itself changing is reported.
     void viewportMoved();
+    void navigationBegan(NavigationKind kind);
+    void navigationEnded(bool wheelBurst = false);
     void panDragBegan();
     // Total scene-coordinate offset since the drag began, plus the latest
     // viewport-pixel step (for view-only panning).
@@ -376,6 +381,7 @@ protected:
     void changeEvent(QEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;
+    void keyReleaseEvent(QKeyEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void drawForeground(QPainter* painter, const QRectF& rect) override;
     void scrollContentsBy(int dx, int dy) override;
@@ -469,6 +475,8 @@ private:
     bool m_lineHorizontal = false;
     bool m_lineWasDrag = false;
     bool m_selectionActive = false;
+    int m_navigationKey = 0;
+    bool m_scrollNavigationActive = false;
     Qt::MouseButtons m_canceledButtons = Qt::NoButton;
     QPoint m_pressPosition;
     QPoint m_lastPanPosition;

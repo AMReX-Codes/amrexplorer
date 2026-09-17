@@ -41,6 +41,7 @@ add_executable(amrexplorer_qt
     MainWindow.hpp
     MainWindowDataset.cpp
     MainWindowInteraction.cpp
+    MainWindowNavigation.cpp
     MainWindowInternal.hpp
     MainWindowSlice.cpp
     NumberFormat.cpp
@@ -107,7 +108,8 @@ if(AMREXPLORER_BUILD_TESTS)
         SmokeHarnessShortcuts.cpp
         SmokeHarnessSequence.cpp
         SmokeHarnessVolume.cpp
-        SmokeHarnessZoom.cpp)
+        SmokeHarnessZoom.cpp
+        SmokeHarnessNavigation.cpp)
     target_compile_definitions(amrexplorer_qt PRIVATE AMREXPLORER_QT_TEST_ACCESS)
 endif()
 

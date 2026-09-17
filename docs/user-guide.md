@@ -256,6 +256,12 @@ sample locations recorded by the FAB or MultiFab.
 Double-click a view, press **0**, or select **Reset Zoom** to return to the
 full domain.
 
+Use **Back** and **Forward** on the toolbar or View menu to revisit pan and zoom
+positions, including before Reset Zoom. A synchronized zoom returns all affected
+panels together. Line-plot windows have their own Back/Forward buttons. Opening
+or reloading data, changing the display layout, or moving a slice directly
+starts fresh history.
+
 ## Navigating and inspecting data
 
 The active panel is the one most recently clicked or manipulated.

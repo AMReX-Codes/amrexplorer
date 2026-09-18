@@ -75,6 +75,8 @@ VolumeWindow::VolumeWindow(QWidget* parent)
     m_wheelSettle->setSingleShot(true);
     m_wheelSettle->setInterval(300);
     connect(m_wheelSettle, &QTimer::timeout, this, &VolumeWindow::commitCamera);
+    // A drag ends any wheel burst still settling, so the two stay separate steps.
+    connect(m_view, &IsoWidget::dragBegan, this, &VolumeWindow::commitCamera);
     connect(m_view, &IsoWidget::cameraChanged, this, [this] {
         if (!m_view->dragging()) m_wheelSettle->start();
         emit cameraChanged();

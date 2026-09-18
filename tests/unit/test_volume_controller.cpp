@@ -2367,6 +2367,18 @@ int main(int argc, char** argv)
         require(view->camera() == start && !back->isEnabled(), "Back did not undo the preset");
         for (int step = 0; step < 3; ++step) forward->trigger();
         require(view->camera() == turned && !forward->isEnabled(), "Forward did not redo");
+        // A drag started before a wheel burst settles is still one step.
+        QWheelEvent wheel(QPointF(50, 50), view->mapToGlobal(QPointF(50, 50)), {},
+            {0, 120}, Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(view, &wheel);
+        const auto rezoomed = view->camera();
+        mouse(QEvent::MouseButtonPress, {50, 50}, Qt::LeftButton);
+        mouse(QEvent::MouseMove, {70, 60}, Qt::LeftButton);
+        settle(application, 400);
+        mouse(QEvent::MouseMove, {90, 70}, Qt::LeftButton);
+        mouse(QEvent::MouseButtonRelease, {90, 70}, Qt::NoButton);
+        back->trigger();
+        require(view->camera() == rezoomed, "a drag after a wheel burst was split");
         controller.closeWindow();
     }
     return 0;

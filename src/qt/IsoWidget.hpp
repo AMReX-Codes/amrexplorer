@@ -98,6 +98,7 @@ public:
     }
 
 signals:
+    void dragBegan();
     void cameraChanged();
     void interactionEnded();
     // The viewport changed size, so a backdrop rendered for the old one is

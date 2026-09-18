@@ -5,6 +5,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QScrollBar>
 #include <QTimer>
 #include <QWheelEvent>
@@ -39,12 +40,36 @@ bool same(const std::vector<QRectF>& a, const std::vector<QRectF>& b)
     }
     return true;
 }
+// Covers the expected window, give or take a scroll bar appearing or going.
+bool covers(const std::vector<QRectF>& expected, const std::vector<QRectF>& actual)
+{
+    if (expected.size() != actual.size()) return false;
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        const auto& e = expected[i];
+        const auto& a = actual[i];
+        const double epsilon = 0.01 * std::max(e.width(), e.height());
+        if (!a.adjusted(-epsilon, -epsilon, epsilon, epsilon).contains(e)
+            || a.width() > 1.05 * e.width() || a.height() > 1.05 * e.height()) {
+            qCritical("panel %zu expected about (%g,%g,%g,%g), got (%g,%g,%g,%g)", i,
+                e.x(), e.y(), e.width(), e.height(), a.x(), a.y(), a.width(), a.height());
+            return false;
+        }
+    }
+    return true;
+}
 void key(ImageView* view, int value, Qt::KeyboardModifiers modifiers = Qt::NoModifier)
 {
     QKeyEvent press(QEvent::KeyPress, value, modifiers);
     QApplication::sendEvent(view, &press);
     QKeyEvent release(QEvent::KeyRelease, value, modifiers);
     QApplication::sendEvent(view, &release);
+}
+void mouse(QWidget* widget, QEvent::Type type, QPoint position, Qt::MouseButton button,
+    Qt::MouseButtons buttons)
+{
+    QMouseEvent event(type, QPointF(position), widget->mapToGlobal(QPointF(position)),
+        button, buttons, Qt::NoModifier);
+    QApplication::sendEvent(widget, &event);
 }
 }
 Outcome dispatchNavigation(Context& context)
@@ -216,9 +241,28 @@ Outcome dispatchNavigation(Context& context)
                 break;
             }
             case 24:
+                // Wheel before Back's raster arrives: the arrival keeps the wheel zoom.
+                action(false);
+                window.wheelActiveViewForTest(1);
+                test->zoom = window.navigationWindowsForTest();
+                break;
+            case 25:
+                if (!require(covers(test->zoom, window.navigationWindowsForTest()), "Back's arrival undid a newer wheel zoom")) return;
+                // Zoomed out enough that the drag below spans raster pixels.
+                window.resetZoomAllViewsForTest();
+                break;
+            case 26:
                 if (test->original.size() > 1) {
+                    // A slice change clears history but not a drag in progress.
+                    auto* port = window.navigationViewForTest()->viewport();
+                    const QPoint from(port->width() / 4, port->height() / 4);
+                    const QPoint to(3 * port->width() / 4, 3 * port->height() / 4);
+                    mouse(port, QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+                    mouse(port, QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton);
                     window.setSlicePositionForTest(0, window.slicePositionForTest(0) + 0.01);
                     if (!require(window.navigationCountForTest() == 0, "manual slice change kept history")) return;
+                    mouse(port, QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
+                    if (!require(window.navigationCountForTest() == 1, "slice change canceled a drag")) return;
                 }
                 timer->stop(); application.exit(0);
                 break;

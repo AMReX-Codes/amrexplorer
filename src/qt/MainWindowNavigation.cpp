@@ -199,17 +199,12 @@ void MainWindow::refreshNavigationActions()
 void MainWindow::clearNavigation()
 {
     if (m_restoringNavigation) return;
+    // History only: a drag in progress (e.g. across a playback frame) goes on.
     if (m_navigationTimer) m_navigationTimer->stop();
-    if (m_panDebounce) m_panDebounce->stop();
-    m_panView = nullptr;
-    m_panDataRefresh = false;
     m_navigationBefore.reset();
     m_navigationPending.clear();
     m_navigationHistory.clear();
     m_navigationView = nullptr;
-    for (auto* state : allViewStates()) {
-        if (state->view) state->view->cancelSelection();
-    }
     refreshNavigationActions();
 }
 
@@ -240,6 +235,22 @@ void MainWindow::applyNavigationPanel(const NavigationPanel& panel)
         canvas = navigationTransform(state).inverted().mapRect(footprint);
     }
     view->restoreNavigation(panel.mode, panel.factor, scene, canvas);
+}
+
+void MainWindow::reconcilePendingNavigation(PlaneViewState& state)
+{
+    // A gesture still open when the arrival lands (a wheel zoom right after
+    // Back) supersedes the saved window: carry the current one instead.
+    if (!m_navigationBefore || m_restoringNavigation) return;
+    if (m_panView == &state && m_panDataRefresh) return;
+    const auto found = m_navigationPending.find(&state);
+    if (found == m_navigationPending.end()) return;
+    // A pair or mapped canvas keeps its scene across the arrival: leave it be.
+    if (m_pair || isWarped(state.warp)) {
+        m_navigationPending.erase(found);
+    } else {
+        found->second = captureNavigationPanel(state);
+    }
 }
 
 void MainWindow::restorePendingNavigation(PlaneViewState& state)

@@ -683,6 +683,7 @@ private:
     [[nodiscard]] NavigationPanel captureNavigationPanel(PlaneViewState& state) const;
     [[nodiscard]] NavigationSnapshot captureNavigation();
     void applyNavigationPanel(const NavigationPanel& panel);
+    void reconcilePendingNavigation(PlaneViewState& state);
     void restorePendingNavigation(PlaneViewState& state);
     void shiftNavigationWindow(PlaneViewState& state,
         const RealBox& before, const RealBox& after);

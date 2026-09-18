@@ -1668,6 +1668,18 @@ if(TARGET amrexplorer_qt)
             "$<TARGET_FILE:test_line_plot_hover>"
     )
 
+    add_executable(test_selection_gestures
+        unit/test_selection_gestures.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/ImageView.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/LinePlotWindow.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp")
+    set_target_properties(test_selection_gestures PROPERTIES AUTOMOC ON)
+    target_include_directories(test_selection_gestures PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_selection_gestures PRIVATE amrexplorer::core
+        amrexplorer::warnings Qt6::Widgets)
+    add_test(NAME selection_gestures COMMAND "${CMAKE_COMMAND}" -E env
+        QT_QPA_PLATFORM=offscreen "$<TARGET_FILE:test_selection_gestures>")
+
     add_executable(test_image_view_pan
         unit/test_image_view_pan.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/ImageView.cpp"

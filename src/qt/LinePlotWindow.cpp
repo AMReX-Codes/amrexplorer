@@ -5,6 +5,8 @@
 
 #include <amrexplorer/core/ValueMapping.hpp>
 
+#include <QFocusEvent>
+#include <QKeyEvent>
 #include <QCheckBox>
 #include <QEvent>
 #include <QFontDatabase>
@@ -91,6 +93,7 @@ LinePlotWidget::LinePlotWidget(QWidget* parent)
     , m_numberFormat(defaultNumberFormat())
 {
     setMinimumSize(420, 300);
+    setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
 }
 
@@ -108,8 +111,36 @@ void LinePlotWidget::setNumberFormat(QString format)
 
 void LinePlotWidget::resetZoom()
 {
+    cancelSelection();
     m_zoom.reset();
     update();
+}
+
+void LinePlotWidget::cancelSelection()
+{
+    if (m_dragging) {
+        m_dragging = false;
+        m_canceled = true;
+    }
+    if (m_rubberBand != nullptr) {
+        m_rubberBand->hide();
+    }
+}
+
+void LinePlotWidget::keyPressEvent(QKeyEvent* event)
+{
+    if (event->key() == Qt::Key_Escape && m_dragging) {
+        cancelSelection();
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
+void LinePlotWidget::focusOutEvent(QFocusEvent* event)
+{
+    cancelSelection();
+    QWidget::focusOutEvent(event);
 }
 
 void LinePlotWidget::setShowMarkers(bool on)
@@ -481,6 +512,8 @@ void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
 void LinePlotWidget::mousePressEvent(QMouseEvent* event)
 {
     hideHover();
+    m_canceled = false;
+    setFocus(Qt::MouseFocusReason);
     if (event->button() == Qt::LeftButton
         && plotRect().contains(event->position().toPoint())) {
         m_pressPosition = event->position().toPoint();
@@ -498,6 +531,10 @@ void LinePlotWidget::mousePressEvent(QMouseEvent* event)
 
 void LinePlotWidget::mouseMoveEvent(QMouseEvent* event)
 {
+    if (m_canceled && (event->buttons() & Qt::LeftButton)) {
+        event->accept();
+        return;
+    }
     if (m_dragging) {
         hideHover();
         if (m_rubberBand == nullptr) {
@@ -522,6 +559,11 @@ void LinePlotWidget::mouseMoveEvent(QMouseEvent* event)
 
 void LinePlotWidget::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (m_canceled && event->button() == Qt::LeftButton) {
+        m_canceled = false;
+        event->accept();
+        return;
+    }
     if (event->button() == Qt::LeftButton && m_dragging) {
         m_dragging = false;
         if (m_rubberBand != nullptr) {

@@ -8,6 +8,7 @@
 #include <amrexplorer/core/Version.hpp>
 
 #include <QKeySequence>
+#include <QToolButton>
 #include <QStyle>
 
 namespace amrvis::qt {
@@ -376,7 +377,35 @@ MainWindow::MainWindow(QWidget* parent)
     scaleMenu->addSeparator();
     scaleMenu->addAction(m_syncRubberBandZoomAction);
     m_scaleButton->setMenu(scaleMenu);
+    m_lineOrientationGroup = new QActionGroup(this);
+    const std::array<QString, 3> orientations{tr("Auto"), tr("Horizontal"), tr("Vertical")};
+    for (std::size_t i = 0; i < orientations.size(); ++i) {
+        auto* action = new QAction(orientations[i], this);
+        action->setObjectName(QStringLiteral("lineOrientation%1Action").arg(i));
+        action->setCheckable(true);
+        action->setActionGroup(m_lineOrientationGroup);
+        action->setChecked(i == 0);
+        connect(action, &QAction::triggered, this, [this, i] {
+            for (auto* state : allViewStates()) {
+                if (state->view != nullptr) {
+                    state->view->setLineOrientation(static_cast<ImageView::LineOrientation>(i));
+                }
+            }
+        });
+    }
+
     sliceToolbar->addWidget(m_scaleButton);
+    auto* lineButton = new QToolButton(m_sliceToolbar);
+    lineButton->setObjectName(QStringLiteral("lineOrientationButton"));
+    lineButton->setText(tr("Line"));
+    lineButton->setToolTip(tr("Choose the line-plot orientation"));
+    lineButton->setPopupMode(QToolButton::InstantPopup);
+    auto* lineMenu = new QMenu(lineButton);
+    for (auto* action : m_lineOrientationGroup->actions()) {
+        lineMenu->addAction(action);
+    }
+    lineButton->setMenu(lineMenu);
+    m_sliceToolbar->addWidget(lineButton);
 
     addToolBarBreak(Qt::TopToolBarArea);
     m_rangeToolbar = addToolBar(tr("Color and Overlay Controls"));
@@ -1271,6 +1300,7 @@ void MainWindow::setActiveView(PlaneViewState& state)
         m_activeView->view->setActiveBorder(false);
     }
     m_activeView = &state;
+    updateLineToolAvailability(state);
     if (m_viewDimension == 3 && !sameView) {
         state.view->setActiveBorder(true);
     }
@@ -2152,6 +2182,11 @@ void MainWindow::createMenus()
 
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
     viewMenu->addMenu(scaleMenu);
+    auto* lineMenu = viewMenu->addMenu(tr("Line orientation"));
+    for (auto* action : m_lineOrientationGroup->actions()) {
+        lineMenu->addAction(action);
+    }
+
     viewMenu->addMenu(m_levelMenu);
     viewMenu->addAction(m_boxesAction);
     viewMenu->addAction(m_scaleBarAction);

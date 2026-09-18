@@ -15,6 +15,7 @@
 #include <QResizeEvent>
 #include <QScrollBar>
 #include <QKeyEvent>
+#include <QFocusEvent>
 #include <QWheelEvent>
 #include <QPen>
 
@@ -944,6 +945,7 @@ void ImageView::setLineToolEnabled(bool enabled) noexcept
 
 void ImageView::setPlaceholder(const QString& text)
 {
+    cancelSelection();
     m_scene->clear();
     m_tiles.assign(1, Tile{});
     m_lineGuide = nullptr;
@@ -1172,6 +1174,7 @@ void ImageView::mouseDoubleClickEvent(QMouseEvent* event)
 
 void ImageView::mousePressEvent(QMouseEvent* event)
 {
+    m_canceledButtons &= ~event->button();
     if (event->button() == Qt::LeftButton) {
         m_pressPosition = event->position().toPoint();
         if (hasImage() && (event->modifiers() & Qt::ShiftModifier)) {
@@ -1184,6 +1187,7 @@ void ImageView::mousePressEvent(QMouseEvent* event)
             return;
         }
         m_panActive = false;
+        m_selectionActive = true;
     }
     bool handled = false;
     // The line tool takes a Shift+middle/right press or a right press; with
@@ -1199,6 +1203,11 @@ void ImageView::mousePressEvent(QMouseEvent* event)
             m_lineDragButton = event->button();
             m_linePressPosition = event->position().toPoint();
             m_lineDragShiftHeld = event->modifiers() & Qt::ShiftModifier;
+            m_lineWasDrag = false;
+            m_lineOrientationLocked = m_lineDragShiftHeld
+                || m_lineOrientation != LineOrientation::Auto;
+            m_lineHorizontal = event->button() == Qt::MiddleButton
+                || m_lineOrientation == LineOrientation::Horizontal;
             // The guide and the eventual request belong to the tile pressed.
             m_lineGuideTile = tileAt(mapToScene(m_linePressPosition));
             // Show the guide immediately for Shift+clicks (explicit line-plot
@@ -1217,6 +1226,11 @@ void ImageView::mousePressEvent(QMouseEvent* event)
 
 void ImageView::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (m_canceledButtons & event->button()) {
+        m_canceledButtons &= ~event->button();
+        event->accept();
+        return;
+    }
     if (m_panActive && event->button() == Qt::LeftButton) {
         m_panActive = false;
         unsetCursor();
@@ -1239,6 +1253,7 @@ void ImageView::mouseReleaseEvent(QMouseEvent* event)
                 0, std::max(0, tile.image.height() - 1)));
     };
     if (wasLineDrag) {
+        latchLineDirection(event->position().toPoint());
         const auto button = m_lineDragButton;
         const auto shiftHeld = m_lineDragShiftHeld;
         m_lineDragButton = Qt::NoButton;
@@ -1253,10 +1268,7 @@ void ImageView::mouseReleaseEvent(QMouseEvent* event)
         const auto& tile = m_tiles[tileIndex];
         const auto pixel = clampedPixel(tile,
             imagePositionIn(tileIndex, mapToScene(releasePosition)));
-        const auto drag = releasePosition - m_linePressPosition;
-        constexpr int lineDragThreshold = 6;
-        const bool wasDrag = std::abs(drag.x()) > lineDragThreshold
-            || std::abs(drag.y()) > lineDragThreshold;
+        const bool wasDrag = m_lineWasDrag;
         if (m_sliceMoveEnabled && !shiftHeld && !wasDrag) {
             clearLineGuide();
             emit tileSliceMoveRequested(
@@ -1271,10 +1283,8 @@ void ImageView::mouseReleaseEvent(QMouseEvent* event)
         } else if (m_lineToolEnabled && (shiftHeld || wasDrag)) {
             // Leave the guide visible as a temporary preview while the line
             // plot is computed asynchronously.
-            const auto effectiveButton = wasDrag
-                ? (std::abs(drag.x()) > std::abs(drag.y())
-                    ? Qt::MiddleButton : Qt::RightButton)
-                : button;
+            const auto effectiveButton = m_lineHorizontal
+                ? Qt::MiddleButton : Qt::RightButton;
             emit tileLinePlotRequested(static_cast<int>(tileIndex),
                 pixel.x(), pixel.y(), effectiveButton);
             if (tileIndex == 0) {
@@ -1285,9 +1295,10 @@ void ImageView::mouseReleaseEvent(QMouseEvent* event)
         }
         return;
     }
-    if (event->button() != Qt::LeftButton || !hasImage()) {
+    if (event->button() != Qt::LeftButton || !hasImage() || !m_selectionActive) {
         return;
     }
+    m_selectionActive = false;
     const auto releasePosition = event->position().toPoint();
     const auto drag = releasePosition - m_pressPosition;
     constexpr int minimumDrag = 4;
@@ -1313,6 +1324,10 @@ void ImageView::mouseReleaseEvent(QMouseEvent* event)
 
 void ImageView::mouseMoveEvent(QMouseEvent* event)
 {
+    if (event->buttons() & m_canceledButtons) {
+        event->accept();
+        return;
+    }
     if (m_panActive && (event->buttons() & Qt::LeftButton)) {
         const QPoint current = event->position().toPoint();
         const QPoint delta = current - m_lastPanPosition;
@@ -1327,11 +1342,8 @@ void ImageView::mouseMoveEvent(QMouseEvent* event)
         return;
     }
     if (m_lineDragButton != Qt::NoButton) {
-        const auto drag = event->position().toPoint() - m_linePressPosition;
-        constexpr int guideThreshold = 6;
-        if (m_lineDragShiftHeld
-            || std::abs(drag.x()) > guideThreshold
-            || std::abs(drag.y()) > guideThreshold) {
+        latchLineDirection(event->position().toPoint());
+        if (m_lineDragShiftHeld || m_lineWasDrag) {
             updateLineGuide(event->position().toPoint());
         }
     }
@@ -1389,6 +1401,12 @@ void ImageView::scrollContentsBy(int dx, int dy)
 
 void ImageView::keyPressEvent(QKeyEvent* event)
 {
+    if (event->key() == Qt::Key_Escape
+        && (m_selectionActive || m_lineDragButton != Qt::NoButton)) {
+        cancelSelection();
+        event->accept();
+        return;
+    }
     // Only while this view holds focus and has something to pan. Anything else
     // -- including an arrow with a modifier, which belongs to whatever else may
     // want it -- falls through to the base class.
@@ -1455,28 +1473,11 @@ void ImageView::showLineGuide(const QPoint& viewPosition)
     const auto width = static_cast<double>(tile.image.width());
     const auto height = static_cast<double>(tile.image.height());
 
-    const auto drag = viewPosition - m_linePressPosition;
-    constexpr int orientThreshold = 8;
-    const bool significantDrag = std::abs(drag.x()) > orientThreshold
-        || std::abs(drag.y()) > orientThreshold;
     if (!m_lineToolEnabled) {
-        // With the line tool off a right press is a slice move alone, and
-        // a drag plots nothing: no guide at any distance.
         clearLineGuide();
         return;
     }
-
-    // On press (no drag yet), show a slice-move guide (perpendicular).
-    // Once the user drags significantly, the action switches to a line
-    // plot so the guide follows the drag direction instead.
-    bool horizontal;
-    if (m_sliceMoveEnabled && !m_lineDragShiftHeld && !significantDrag) {
-        horizontal = (m_lineDragButton != Qt::MiddleButton);
-    } else if (significantDrag) {
-        horizontal = std::abs(drag.x()) > std::abs(drag.y());
-    } else {
-        horizontal = (m_lineDragButton == Qt::MiddleButton);
-    }
+    const bool horizontal = m_lineHorizontal;
 
     QLineF line;
     if (horizontal) {
@@ -1503,12 +1504,52 @@ void ImageView::showLineGuide(const QPoint& viewPosition)
 
 void ImageView::updateLineGuide(const QPoint& viewPosition)
 {
-    const auto drag = viewPosition - m_linePressPosition;
-    constexpr int minimumDrag = 4;
-    if (std::max(std::abs(drag.x()), std::abs(drag.y())) < minimumDrag) {
-        return;
-    }
     showLineGuide(viewPosition);
+}
+
+void ImageView::latchLineDirection(const QPoint& position)
+{
+    const auto drag = position - m_linePressPosition;
+    constexpr int threshold = 6;
+    if (std::max(std::abs(drag.x()), std::abs(drag.y())) > threshold) {
+        m_lineWasDrag = true;
+        if (!m_lineOrientationLocked) {
+            m_lineHorizontal = std::abs(drag.x()) > std::abs(drag.y());
+            m_lineOrientationLocked = true;
+        }
+    }
+}
+
+void ImageView::cancelSelection()
+{
+    if (m_panActive) {
+        m_panActive = false;
+        m_canceledButtons |= Qt::LeftButton;
+        m_panAccumulated = {};
+        unsetCursor();
+    }
+    if (m_selectionActive) {
+        m_canceledButtons |= Qt::LeftButton;
+        m_selectionActive = false;
+        // Changing drag mode clears QGraphicsView's private rubber band.
+        setDragMode(QGraphicsView::NoDrag);
+        setDragMode(QGraphicsView::RubberBandDrag);
+    }
+    if (m_lineDragButton != Qt::NoButton) {
+        m_canceledButtons |= m_lineDragButton;
+        m_lineDragButton = Qt::NoButton;
+        m_lineDragShiftHeld = false;
+        clearLineGuide();
+    }
+}
+
+void ImageView::focusOutEvent(QFocusEvent* event)
+{
+    if (m_panActive) {
+        emit panDragEnded(m_panAccumulated);
+    }
+    cancelSelection();
+    QGraphicsView::focusOutEvent(event);
 }
 
 void ImageView::setActiveBorder(bool active)

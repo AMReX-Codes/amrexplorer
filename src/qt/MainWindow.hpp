@@ -1705,6 +1705,7 @@ private:
     QAction* m_slicePlanesAction = nullptr;
     QAction* m_resetZoomAction = nullptr;
     QAction* m_syncRubberBandZoomAction = nullptr;
+    QActionGroup* m_lineOrientationGroup = nullptr;
     QAction* m_contoursAction = nullptr;
     QAction* m_datasetAction = nullptr;
     QAction* m_exportAnimationAction = nullptr;

@@ -1088,12 +1088,12 @@ Outcome dispatchZoom(Context& context)
                         }
                         // Two quick right-clicks arrive as a right double
                         // click; it moves the slices, not reset the zoom.
-                        const auto scale = window.scaleTextForTest();
+                        const auto scale = window.scaleUiLabelForTest();
                         QObject::connect(&window,
                             &amrvis::qt::MainWindow::interactiveSlicesSettled,
                             &application, [&window, &application, scale] {
                                 application.exit(window.allViewsRubberBandZoomedForTest()
-                                    && window.scaleTextForTest() == scale ? 0 : 5);
+                                    && window.scaleUiLabelForTest() == scale ? 0 : 5);
                             }, Qt::SingleShotConnection);
                         window.rightDoubleClickActiveViewForTest();
                     }, Qt::SingleShotConnection);

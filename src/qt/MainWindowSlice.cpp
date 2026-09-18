@@ -418,21 +418,12 @@ void MainWindow::publishSlicePositions()
     m_volumeController->slicePositionsChanged();
 }
 
-void MainWindow::setSlicePositionControlsVisible(bool visible)
-{
-    m_slicePositionControls->setVisible(visible);
-    if (m_positionSeparator != nullptr) {
-        m_positionSeparator->setVisible(visible);
-    }
-}
-
 void MainWindow::configureSlicePositionControls()
 {
     if (!primary().session) {
-        setSlicePositionControlsVisible(false);
+        m_slicePositionControls->setEnabled(false);
         return;
     }
-    setSlicePositionControlsVisible(true);
     const auto& md = primary().session->metadata();
 
     if (md.dimension != 3) {
@@ -494,9 +485,16 @@ int MainWindow::sliceIndexLevel() const
 
 void MainWindow::setSlicePosition(int axis, double value)
 {
-    if (axis < 0 || axis >= 3) return;
+    if (axis < 0 || axis >= 3 || !primary().session
+        || primary().session->metadata().dimension != 3) return;
+    const auto ax = static_cast<std::size_t>(axis);
+    const auto domain = m_pair ? m_pair->unionBounds
+                               : datasetSampleBounds(primary().session->metadata());
     auto positions = m_slicePosition3d;
-    positions[static_cast<std::size_t>(axis)] = value;
+    // Clamped as setSlicePositions will, so a request that cannot move the
+    // slice keeps the history.
+    positions[ax] = std::clamp(value, domain.lower[ax],
+        std::nextafter(domain.upper[ax], domain.lower[ax]));
     if (positions != m_slicePosition3d) clearNavigation();
     setSlicePositions(positions);
 }

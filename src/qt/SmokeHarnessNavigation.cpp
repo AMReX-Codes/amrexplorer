@@ -260,6 +260,11 @@ Outcome dispatchNavigation(Context& context)
                 test->guide = window.navigationViewForTest()->crosshairViewportIntersection();
                 window.shiftDragActiveViewForTest(window.navigationViewForTest()->viewport()->width() / 3, 0);
                 if (test->original.size() == 3) {
+                    // Redraw the guides after the drag has ended, as a sibling's
+                    // arrival would before the panned raster lands.
+                    auto* planes = window.findChild<QAction*>(QStringLiteral("slicePlanesAction"));
+                    planes->toggle();
+                    planes->toggle();
                     const auto guide = window.navigationViewForTest()->crosshairViewportIntersection();
                     if (!require(guide && test->guide && QLineF(*guide, *test->guide).length() <= 1.0,
                             "guides moved while the panned raster was still pending")) return;
@@ -372,6 +377,14 @@ Outcome dispatchNavigation(Context& context)
                     const auto after = view->crosshairViewportIntersection();
                     if (!require(before && after && QLineF(*before, *after).length() <= 1.0,
                             "a plain pan moved the guides off the old raster")) return;
+                }
+                if (test->original.size() == 3) {
+                    // A request past the domain edge, once at the edge, moves
+                    // nothing and keeps the history.
+                    window.setSlicePositionForTest(0, 1.e30);
+                    window.navigationZoomForTest();
+                    window.setSlicePositionForTest(0, 2.e30);
+                    if (!require(window.navigationCountForTest() == 1, "a clamped no-op slice move cleared history")) return;
                 }
                 timer->stop(); application.exit(0);
                 break;

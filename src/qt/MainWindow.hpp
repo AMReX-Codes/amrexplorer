@@ -323,7 +323,6 @@ public:
     // Test-only: a plain right click at a viewport position of the active
     // view, as the mouse would deliver it.
     void rightClickActiveViewForTest(const QPoint& viewportPosition);
-    [[nodiscard]] QString scaleTextForTest() const;
     // Press, release, double click, release: Qt's order for two quick clicks.
     void rightDoubleClickActiveViewForTest();
     [[nodiscard]] bool activeViewScrollBarsVisibleForTest() const;
@@ -1502,9 +1501,6 @@ private:
 
     // Shared 3-D slice positions (physical coordinates per axis).
     void configureSlicePositionControls();
-    // Show or hide the Position group together with its trailing toolbar
-    // separator, so the separator never dangles when no dataset is loaded.
-    void setSlicePositionControlsVisible(bool visible);
     void setSlicePosition(int axis, double value);
     // Pushes m_slicePosition3d to everything that draws the planes: the iso
     // quadrant and, when it is open, the volume window. Every writer that
@@ -1660,7 +1656,6 @@ private:
     QDialog* m_axisScalingDialog = nullptr;
     UserGuideDialog* m_userGuideDialog = nullptr;
     QWidget* m_slicePositionControls = nullptr;
-    QAction* m_positionSeparator = nullptr;
     std::array<QSpinBox*, 3> m_sliceSpinboxes{nullptr, nullptr, nullptr};
     QTimer* m_sliceDebounce = nullptr;
     NavigationHistory<NavigationSnapshot> m_navigationHistory;

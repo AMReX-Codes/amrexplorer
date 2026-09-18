@@ -280,8 +280,7 @@ MainWindow::MainWindow(QWidget* parent)
         primary().levelSelector, primary().levelSelector->view()));
     sliceToolbar->addWidget(primary().levelSelector);
     sliceToolbar->addSeparator();
-    // 3-D shared slice positions: one compact spinbox per axis. The whole
-    // group stays hidden for 2-D datasets.
+    // 3-D shared slice positions: one compact spinbox per axis.
     m_slicePositionControls = new QWidget(sliceToolbar);
     auto* positionLayout = new QHBoxLayout(m_slicePositionControls);
     positionLayout->setContentsMargins(0, 0, 0, 0);
@@ -320,12 +319,11 @@ MainWindow::MainWindow(QWidget* parent)
                     primary().session->metadata(), level, axis, index));
             });
     }
+    // Always shown, greyed out without a 3-D dataset, so the toolbar keeps
+    // one layout.
     sliceToolbar->addWidget(m_slicePositionControls);
-    // Separator between the Position group and Scale. It tracks the Position
-    // group's visibility (see setSlicePositionControlsVisible) so it does not
-    // dangle beside the Level separator when no dataset is loaded.
-    m_positionSeparator = sliceToolbar->addSeparator();
-    setSlicePositionControlsVisible(false);
+    sliceToolbar->addSeparator();
+    m_slicePositionControls->setEnabled(false);
 
     // A static "Scale:" label plus a state button, matching the Field:/Level:/
     // Range: label-and-widget pairs elsewhere on this toolbar (and the

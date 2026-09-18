@@ -1158,11 +1158,6 @@ void MainWindow::wheelZoomAndPanActiveViewForTest()
     m_activeView->view->panViewport(QPoint(11, -7));
 }
 
-QString MainWindow::scaleTextForTest() const
-{
-    return m_scaleButton->text();
-}
-
 void MainWindow::rightDoubleClickActiveViewForTest()
 {
     auto* const viewport = m_activeView->view->viewport();

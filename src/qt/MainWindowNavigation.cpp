@@ -186,7 +186,13 @@ void MainWindow::finishNavigation()
             // by an unrelated one, such as a resize's.
             auto& panel = after.panels[i];
             if (sliceExpected(*panel.state)) {
-                m_navigationPending[panel.state] = panel;
+                auto pending = panel;
+                // A scan's guides hold still until its raster lands.
+                if (const auto old = m_navigationPending.find(panel.state);
+                    old != m_navigationPending.end()) {
+                    pending.scan = old->second.scan;
+                }
+                m_navigationPending[panel.state] = pending;
             } else {
                 m_navigationPending.erase(panel.state);
             }

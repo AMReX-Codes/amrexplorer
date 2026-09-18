@@ -54,17 +54,20 @@ void MainWindow::setupNavigation()
     m_navigationTimer->setSingleShot(true);
     m_navigationTimer->setInterval(300);
     connect(m_navigationTimer, &QTimer::timeout, this, &MainWindow::finishNavigation);
-    const auto add = [this](const QString& text, bool forward) {
+    // Back and Forward lead the toolbar, as in browsers and file managers.
+    auto* const first = m_sliceToolbar->actions().value(0);
+    const auto add = [this, first](const QString& text, bool forward) {
         auto* action = new QAction(text, this);
         action->setShortcut(QKeySequence(forward ? QKeySequence::Forward : QKeySequence::Back));
         action->setObjectName(forward ? QStringLiteral("navigationForwardAction")
                                      : QStringLiteral("navigationBackAction"));
         connect(action, &QAction::triggered, this, [this, forward] { navigate(forward); });
-        m_sliceToolbar->addAction(action);
+        m_sliceToolbar->insertAction(first, action);
         return action;
     };
     m_navigationBack = add(tr("Back"), false);
     m_navigationForward = add(tr("Forward"), true);
+    m_sliceToolbar->insertSeparator(first);
     for (auto* state : allViewStates()) {
         if (state->view && state->layer == 0) connectNavigation(state->view);
     }
@@ -73,6 +76,7 @@ void MainWindow::setupNavigation()
     m_fixedCrosshairAction->setCheckable(true);
     connect(m_fixedCrosshairAction, &QAction::toggled, this, [this] { refreshScanAction(); });
     m_fixedCrosshairAction->setIconText(tr("Fixed crosshair"));
+    m_sliceToolbar->addSeparator();
     m_sliceToolbar->addAction(m_fixedCrosshairAction);
     refreshNavigationActions();
     refreshScanAction();

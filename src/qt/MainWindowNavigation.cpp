@@ -71,6 +71,7 @@ void MainWindow::setupNavigation()
     m_fixedCrosshairAction = new QAction(tr("Keep crosshair fixed while panning"), this);
     m_fixedCrosshairAction->setObjectName(QStringLiteral("fixedCrosshairAction"));
     m_fixedCrosshairAction->setCheckable(true);
+    connect(m_fixedCrosshairAction, &QAction::toggled, this, [this] { refreshScanAction(); });
     m_fixedCrosshairAction->setIconText(tr("Fixed crosshair"));
     m_sliceToolbar->addAction(m_fixedCrosshairAction);
     refreshNavigationActions();
@@ -442,7 +443,9 @@ void MainWindow::applyScanStep(PlaneViewState& state, const QPointF& direction)
 void MainWindow::refreshScanAction()
 {
     if (m_fixedCrosshairAction) {
-        m_fixedCrosshairAction->setEnabled(m_activeView && scanAnchor(*m_activeView).has_value());
+        // A checked mode stays enabled so it can always be turned off.
+        m_fixedCrosshairAction->setEnabled(m_fixedCrosshairAction->isChecked()
+            || (m_activeView && scanAnchor(*m_activeView).has_value()));
         m_fixedCrosshairAction->setToolTip(tr(
             "Pan under the crosshair and scan the other two slices. "
             "Requires visible Cartesian 3-D slice guides; Shift+arrow scans temporarily."));

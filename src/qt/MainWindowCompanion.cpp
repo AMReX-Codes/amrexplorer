@@ -945,7 +945,7 @@ RealBox MainWindow::snappedPairRegion(
 {
     // Local slices are one pixel per finest cell, so the region grows out to
     // this layer's cell edges and covers the window whole; a remote raster
-    // is resampled and keeps the exact window (as applyRubberBandZoom does
+    // is resampled and keeps the exact window (as zoomToRegion does
     // for one dataset). The framed window itself is kept apart from the
     // regions (m_pairWindows), so their rounding never feeds back into it.
     const auto& dataset = m_layers[layer];

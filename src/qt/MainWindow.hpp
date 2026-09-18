@@ -662,6 +662,9 @@ private:
         int factor = 1;
         bool virtualCanvas = false;
         std::optional<QRectF> pairWindow;
+        // Pending only: a scan moved this window, so its guides hold still
+        // until the raster arrives. Not part of equality.
+        bool scan = false;
         bool operator==(const NavigationPanel& other) const;
     };
     struct NavigationSnapshot {

@@ -1173,8 +1173,9 @@ void MainWindow::updateCrosshairs(PlaneViewState& state)
             horizontalColor = sliceAxisColor(axes[1]);
         }
     }
-    if (!m_pair && !isWarped(state.warp) && m_navigationPending.contains(&state)
-        && m_viewDimension == 3 && m_slicePlanesAction->isChecked()
+    if (const auto pending = m_navigationPending.find(&state);
+        !m_pair && !isWarped(state.warp) && pending != m_navigationPending.end()
+        && pending->second.scan && m_viewDimension == 3 && m_slicePlanesAction->isChecked()
         && state.view->hasImage()) {
         // During a data pan the requested region moves before its raster
         // arrives. Place the guides through that requested window, so a

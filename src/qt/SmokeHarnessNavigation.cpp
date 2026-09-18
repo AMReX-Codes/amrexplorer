@@ -353,6 +353,26 @@ Outcome dispatchNavigation(Context& context)
                     window.setSlicePositionForTest(2, -0.03125);
                     if (!require(!window.navigationAnchorForTest(), "a crosshair in a companion gap anchored a scan")) return;
                 }
+                break;
+            case 33:
+                window.navigationZoomForTest();
+                break;
+            case 34:
+                if (test->original.size() == 3 && !companion && !window.activeViewIsMappedForTest()) {
+                    // A plain pan (no scan) keeps the guides on the old raster
+                    // until the panned one arrives.
+                    auto* view = window.navigationViewForTest();
+                    const auto before = view->crosshairViewportIntersection();
+                    key(view, Qt::Key_Right);
+                    // Anything that redraws the guides before the arrival
+                    // (another panel's raster, Back/Forward) shows the bug.
+                    auto* planes = window.findChild<QAction*>(QStringLiteral("slicePlanesAction"));
+                    planes->toggle();
+                    planes->toggle();
+                    const auto after = view->crosshairViewportIntersection();
+                    if (!require(before && after && QLineF(*before, *after).length() <= 1.0,
+                            "a plain pan moved the guides off the old raster")) return;
+                }
                 timer->stop(); application.exit(0);
                 break;
             default: application.exit(1);

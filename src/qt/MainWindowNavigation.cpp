@@ -430,7 +430,11 @@ void MainWindow::scanAtAnchor(PlaneViewState& state, const QPointF& anchor)
         if (std::abs(positions[axis] - m_slicePosition3d[axis]) <= tolerance)
             positions[axis] = m_slicePosition3d[axis];
     }
+    if (const auto found = m_navigationPending.find(&state); found != m_navigationPending.end()) {
+        found->second.scan = true;
+    }
     setSlicePositions(positions);
+    updateCrosshairs(state);
 }
 
 void MainWindow::applyScanStep(PlaneViewState& state, const QPointF& direction)

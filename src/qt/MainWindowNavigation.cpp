@@ -164,12 +164,26 @@ void MainWindow::finishNavigation()
             before.panels.erase(before.panels.begin() + static_cast<std::ptrdiff_t>(i));
             after.panels.erase(after.panels.begin() + static_cast<std::ptrdiff_t>(i));
         } else {
+            // Only a slice this gesture asked for may re-frame the view; a
+            // view-only change (a local wheel zoom) would be replayed later
+            // by an unrelated one, such as a resize's.
             auto& panel = after.panels[i];
-            m_navigationPending[panel.state] = panel;
+            if (sliceExpected(*panel.state)) {
+                m_navigationPending[panel.state] = panel;
+            } else {
+                m_navigationPending.erase(panel.state);
+            }
         }
     }
     m_navigationHistory.push(std::move(before), std::move(after));
     refreshNavigationActions();
+}
+
+bool MainWindow::sliceExpected(const PlaneViewState& state) const
+{
+    if (state.pendingRequests > 0) return true;
+    return m_sliceDebounce->isActive() && (m_pendingAllViews
+        || std::find(m_pendingViews.begin(), m_pendingViews.end(), &state) != m_pendingViews.end());
 }
 
 void MainWindow::refreshNavigationActions()

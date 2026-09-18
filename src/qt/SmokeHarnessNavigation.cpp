@@ -255,10 +255,22 @@ Outcome dispatchNavigation(Context& context)
                 break;
             case 25:
                 if (!require(covers(test->zoom, window.navigationWindowsForTest()), "Back's arrival undid a newer wheel zoom")) return;
+                window.wheelActiveViewForTest(1);
+                break;
+            case 26:
+                window.resize(window.width() - 80, window.height() - 50);
+                break;
+            case 27:
+                // An unrelated arrival after a resize must not replay the wheel zoom.
+                test->zoom = window.navigationWindowsForTest();
+                window.navigationRefreshForTest();
+                break;
+            case 28:
+                if (!require(covers(test->zoom, window.navigationWindowsForTest()), "an arrival replayed an old zoom")) return;
                 // Zoomed out enough that the drag below spans raster pixels.
                 window.resetZoomAllViewsForTest();
                 break;
-            case 26:
+            case 29:
                 if (test->original.size() > 1) {
                     // A slice change clears history but not a drag in progress.
                     auto* port = window.navigationViewForTest()->viewport();

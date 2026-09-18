@@ -357,6 +357,13 @@ std::optional<QPointF> MainWindow::scanAnchor(PlaneViewState& state)
             static_cast<std::size_t>(m_pair->perpendicularAxis)]);
         point = {placed->pair->sceneFromPhysical(layer, axes[0], m_slicePosition3d[x]),
             placed->pair->sceneFromPhysical(layer, axes[1], m_slicePosition3d[y])};
+        // A crosshair in a gap between unequal companions has no samples to
+        // scan from: clampScanPath would cancel every pan.
+        const auto others = statesForPanel(state.normal);
+        if (std::none_of(others.begin(), others.end(), [&](const auto* other) {
+                return stateShown(*other)
+                    && toQRectF(placed->pair->tileRect(other->layer)).contains(point);
+            })) return std::nullopt;
     }
     if (!m_pair) {
         const auto& region = state.visibleRegion.value_or(state.plane->physicalRegion);

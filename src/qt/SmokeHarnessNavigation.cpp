@@ -115,7 +115,7 @@ Outcome dispatchNavigation(Context& context)
             });
     }
     QObject::connect(timer, &QTimer::timeout, &window,
-        [&window, &application, timer, test, action] {
+        [&window, &application, timer, test, action, companion] {
             if (test->phase == 18) {
                 if (!window.navigationWorkerWaitingForTest()) return;
             } else if (!window.navigationIdleForTest()) return;
@@ -345,6 +345,13 @@ Outcome dispatchNavigation(Context& context)
                     if (!require(window.navigationCountForTest() == 0, "manual slice change kept history")) return;
                     mouse(port, QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
                     if (!require(window.navigationCountForTest() == 1, "slice change canceled a drag")) return;
+                }
+                if (companion) {
+                    // In the XZ panel this corner lies outside both companions.
+                    window.setActiveViewForTest(1);
+                    window.setSlicePositionForTest(0, -0.125);
+                    window.setSlicePositionForTest(2, -0.03125);
+                    if (!require(!window.navigationAnchorForTest(), "a crosshair in a companion gap anchored a scan")) return;
                 }
                 timer->stop(); application.exit(0);
                 break;

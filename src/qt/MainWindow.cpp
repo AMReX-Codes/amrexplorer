@@ -23,6 +23,17 @@ namespace {
         : QFileDialog::Options{};
 }
 
+// Inset a toolbar's leading label like a tool button's text, so each row
+// starts in line with the menu bar and the Back button.
+void insetLeadingLabel(QLabel* label)
+{
+    QToolButton probe;
+    probe.setText(label->text());
+    const auto inset = (probe.sizeHint().width()
+        - probe.fontMetrics().horizontalAdvance(label->text())) / 2;
+    label->setContentsMargins(std::max(0, inset), 0, 0, 0);
+}
+
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent)
@@ -398,7 +409,9 @@ MainWindow::MainWindow(QWidget* parent)
     m_rangeToolbar = addToolBar(tr("Color and Overlay Controls"));
     auto* rangeToolbar = m_rangeToolbar;
     rangeToolbar->setMovable(false);
-    rangeToolbar->addWidget(new QLabel(tr("Range:"), rangeToolbar));
+    auto* rangeLabel = new QLabel(tr("Range:"), rangeToolbar);
+    insetLeadingLabel(rangeLabel);
+    rangeToolbar->addWidget(rangeLabel);
     // The range mode, User min/max and Log, and the per-field memory behind
     // them; the separator before Log matches the per-group separators on the
     // Slice Controls toolbar, as does the one before Palette below.
@@ -419,6 +432,7 @@ MainWindow::MainWindow(QWidget* parent)
     auto& companion = m_layers[1];
     m_companionLabel = new QLabel(tr("Companion:"), m_companionToolbar);
     m_companionLabel->setObjectName(QStringLiteral("companionLabel"));
+    insetLeadingLabel(m_companionLabel);
     m_companionToolbar->addWidget(m_companionLabel);
     m_companionToolbar->addSeparator();
     m_companionToolbar->addWidget(new QLabel(tr("Field:"), m_companionToolbar));

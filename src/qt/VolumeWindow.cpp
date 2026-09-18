@@ -756,11 +756,14 @@ void VolumeWindow::setSamplingSelectable(bool selectable)
 
 void VolumeWindow::setOrientationSelectable(bool selectable)
 {
-    {
-        const QScopedValueRollback<bool> ignore(m_ignoreCamera, true);
-        m_view->setFreeRotation(selectable);
+    // Called on every sequence frame. Only a snap of a rolled camera to two
+    // angles moves it, and that snap is not a step: record a settling wheel
+    // burst first, then let the snap's own commit re-anchor quietly.
+    if (!selectable && !orthoAnglesOf(m_view->camera()) && !m_view->dragging()) {
+        commitCamera();
     }
-    m_settledCamera = m_view->camera();
+    const QScopedValueRollback<bool> ignore(m_ignoreCamera, true);
+    m_view->setFreeRotation(selectable);
     m_view->setToolTip(selectable
             ? tr("Drag to rotate, wheel to zoom")
             : tr("This server predates free camera orientation (protocol 1.8) "

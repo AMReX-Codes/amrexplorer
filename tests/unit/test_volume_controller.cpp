@@ -2379,6 +2379,21 @@ int main(int argc, char** argv)
         mouse(QEvent::MouseButtonRelease, {90, 70}, Qt::NoButton);
         back->trigger();
         require(view->camera() == rezoomed, "a drag after a wheel burst was split");
+        // Each sequence frame re-pushes the orientation; without a snap that
+        // must leave a settling wheel burst and a drag in progress alone.
+        const auto beforeWheel = view->camera();
+        QApplication::sendEvent(view, &wheel);
+        window->setOrientationSelectable(true);
+        settle(application, 400);
+        back->trigger();
+        require(view->camera() == beforeWheel, "a frame during a wheel burst lost the zoom");
+        mouse(QEvent::MouseButtonPress, {50, 50}, Qt::LeftButton);
+        mouse(QEvent::MouseMove, {70, 60}, Qt::LeftButton);
+        window->setOrientationSelectable(true);
+        mouse(QEvent::MouseMove, {90, 70}, Qt::LeftButton);
+        mouse(QEvent::MouseButtonRelease, {90, 70}, Qt::NoButton);
+        back->trigger();
+        require(view->camera() == beforeWheel, "a frame during a drag moved its start");
         controller.closeWindow();
     }
     return 0;

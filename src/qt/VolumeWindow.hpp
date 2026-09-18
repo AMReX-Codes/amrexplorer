@@ -7,6 +7,8 @@
 #include <amrexplorer/core/Volume.hpp>
 #include <amrexplorer/pipeline/VolumePipeline.hpp>
 
+#include "NavigationHistory.hpp"
+
 #include <QColor>
 #include <QMainWindow>
 #include <QSize>
@@ -17,12 +19,14 @@
 #include <utility>
 #include <vector>
 
+class QAction;
 class QCheckBox;
 class QComboBox;
 class QGroupBox;
 class QLabel;
 class QPushButton;
 class QSlider;
+class QTimer;
 class QVBoxLayout;
 
 namespace amrvis {
@@ -165,6 +169,10 @@ private:
     void setIsosurfaceValueFromSlider(int position);
     void syncIsosurfaceSlider();
     void exportImage();
+    // Back/Forward over settled camera moves: a drag, a wheel burst, a preset.
+    void commitCamera();
+    void navigateCamera(bool forward);
+    void refreshCameraActions();
 
     IsoWidget* m_view = nullptr;
     OpacityCurveWidget* m_curve = nullptr;
@@ -198,6 +206,14 @@ private:
     bool m_volumeWanted = true;
     QLabel* m_status = nullptr;
     QLabel* m_rendering = nullptr;
+    NavigationHistory<OrthoCamera> m_cameraHistory;
+    OrthoCamera m_settledCamera;
+    // A wheel burst has no release to end it: it settles on a pause.
+    QTimer* m_wheelSettle = nullptr;
+    QAction* m_cameraBack = nullptr;
+    QAction* m_cameraForward = nullptr;
+    // Set while a camera change is not the user's (an older server's snap).
+    bool m_ignoreCamera = false;
 };
 
 } // namespace amrvis::qt

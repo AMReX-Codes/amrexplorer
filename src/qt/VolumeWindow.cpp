@@ -25,8 +25,10 @@
 #include <QPixmap>
 #include <QPointer>
 #include <QPushButton>
+#include <QScopedValueRollback>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QTimer>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -68,10 +70,19 @@ VolumeWindow::VolumeWindow(QWidget* parent)
     m_view = new IsoWidget(this);
     m_view->setMinimumSize(320, 240);
     setCentralWidget(m_view);
-    connect(m_view, &IsoWidget::cameraChanged, this,
-        [this] { emit cameraChanged(); });
-    connect(m_view, &IsoWidget::interactionEnded, this,
-        [this] { emit interactionEnded(); });
+    m_settledCamera = m_view->camera();
+    m_wheelSettle = new QTimer(this);
+    m_wheelSettle->setSingleShot(true);
+    m_wheelSettle->setInterval(300);
+    connect(m_wheelSettle, &QTimer::timeout, this, &VolumeWindow::commitCamera);
+    connect(m_view, &IsoWidget::cameraChanged, this, [this] {
+        if (!m_view->dragging()) m_wheelSettle->start();
+        emit cameraChanged();
+    });
+    connect(m_view, &IsoWidget::interactionEnded, this, [this] {
+        commitCamera();
+        emit interactionEnded();
+    });
     connect(m_view, &IsoWidget::viewResized, this,
         [this] { emit viewResized(); });
     connect(m_view, &IsoWidget::viewScaleChanged, this,
@@ -87,6 +98,44 @@ VolumeWindow::VolumeWindow(QWidget* parent)
     auto* closeAction = addCloseWindowAction(*this, tr("&Close"));
     closeAction->setObjectName(QStringLiteral("volumeCloseAction"));
     fileMenu->addAction(closeAction);
+
+    auto* viewMenu = menuBar()->addMenu(tr("&View"));
+    m_cameraBack = viewMenu->addAction(tr("Back"), this, [this] { navigateCamera(false); });
+    m_cameraBack->setObjectName(QStringLiteral("volumeBackAction"));
+    m_cameraBack->setShortcut(QKeySequence::Back);
+    m_cameraForward = viewMenu->addAction(tr("Forward"), this, [this] { navigateCamera(true); });
+    m_cameraForward->setObjectName(QStringLiteral("volumeForwardAction"));
+    m_cameraForward->setShortcut(QKeySequence::Forward);
+    refreshCameraActions();
+}
+
+void VolumeWindow::commitCamera()
+{
+    m_wheelSettle->stop();
+    const auto camera = m_view->camera();
+    if (!m_ignoreCamera) m_cameraHistory.push(m_settledCamera, camera);
+    m_settledCamera = camera;
+    refreshCameraActions();
+}
+
+void VolumeWindow::navigateCamera(bool forward)
+{
+    commitCamera();
+    const auto* entry = forward ? m_cameraHistory.forward() : m_cameraHistory.back();
+    if (!entry) return;
+    m_view->setCamera(forward ? entry->after : entry->before);
+    // Two angles may snap a rolled camera: settle on what the view took.
+    m_settledCamera = m_view->camera();
+    m_wheelSettle->stop();
+    // Like a preset: already over, so render at full quality.
+    emit interactionEnded();
+    refreshCameraActions();
+}
+
+void VolumeWindow::refreshCameraActions()
+{
+    m_cameraBack->setEnabled(m_cameraHistory.canBack());
+    m_cameraForward->setEnabled(m_cameraHistory.canForward());
 }
 
 void VolumeWindow::exportImage()
@@ -705,7 +754,11 @@ void VolumeWindow::setSamplingSelectable(bool selectable)
 
 void VolumeWindow::setOrientationSelectable(bool selectable)
 {
-    m_view->setFreeRotation(selectable);
+    {
+        const QScopedValueRollback<bool> ignore(m_ignoreCamera, true);
+        m_view->setFreeRotation(selectable);
+    }
+    m_settledCamera = m_view->camera();
     m_view->setToolTip(selectable
             ? tr("Drag to rotate, wheel to zoom")
             : tr("This server predates free camera orientation (protocol 1.8) "

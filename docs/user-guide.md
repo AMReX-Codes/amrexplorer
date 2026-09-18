@@ -465,7 +465,9 @@ window has its own copy of the isometric view -- drag to turn it in any
 direction, wheel to zoom, and the **XY**, **XZ**, **YZ** buttons for the
 axis-aligned views --
 with the domain outline drawn over the rendered volume.
-The AMR grid boxes can be drawn too, though they start off here.
+The AMR grid boxes can be drawn too, though they start off here. **View >
+Back** and **Forward** (Alt+Left and Alt+Right, Cmd+[ and Cmd+] on macOS)
+revisit earlier camera positions.
 
 The window follows the main window: the field, the AMR level, the range mode
 and its User min/max, the logarithmic mapping and the palette are the ones

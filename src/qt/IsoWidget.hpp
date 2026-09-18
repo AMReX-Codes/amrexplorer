@@ -73,6 +73,7 @@ public:
     // angles, and says so as a camera change.
     void setFreeRotation(bool free);
     [[nodiscard]] bool freeRotation() const noexcept { return m_freeRotation; }
+    [[nodiscard]] bool dragging() const noexcept { return m_dragging; }
 
     // A rendered volume frame drawn under the wireframe, with the camera it
     // was rendered with: a premultiplied image produced at some viewport size

@@ -33,6 +33,7 @@
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QMouseEvent>
+#include <QWheelEvent>
 #include <QCoreApplication>
 #include <QStringList>
 #include <QTimer>
@@ -2322,6 +2323,51 @@ int main(int argc, char** argv)
             [&] { return session->rangeCancellations > cancellationsBefore; },
             "closing the window did not stop the range fetch");
         session->rangeDelayMs = 0;
+    }
+
+    // --- Back/Forward over the camera ----------------------------------------
+    // A preset, a wheel burst and a drag are one step each.
+    {
+        VolumeController controller(hooks());
+        controller.showWindow(nullptr);
+        auto* window = volumeWindow();
+        auto* view = window->findChild<amrvis::qt::IsoWidget*>();
+        auto* back = window->findChild<QAction*>(QStringLiteral("volumeBackAction"));
+        auto* forward = window->findChild<QAction*>(QStringLiteral("volumeForwardAction"));
+        require(!back->isEnabled() && back->shortcut() == QKeySequence(QKeySequence::Back),
+            "Back is enabled before any move, or lacks its shortcut");
+        const auto start = view->camera();
+        for (auto* button : view->findChildren<QPushButton*>()) {
+            if (button->text() == QStringLiteral("XY")) button->click();
+        }
+        const auto preset = view->camera();
+        for (int notch = 0; notch < 2; ++notch) {
+            QWheelEvent wheel(QPointF(50, 50), view->mapToGlobal(QPointF(50, 50)), {},
+                {0, 120}, Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+            QApplication::sendEvent(view, &wheel);
+        }
+        settle(application, 400);
+        const auto zoomed = view->camera();
+        const auto mouse = [view](QEvent::Type type, QPoint at, Qt::MouseButtons buttons) {
+            QMouseEvent event(type, QPointF(at), view->mapToGlobal(QPointF(at)),
+                Qt::LeftButton, buttons, Qt::NoModifier);
+            QApplication::sendEvent(view, &event);
+        };
+        mouse(QEvent::MouseButtonPress, {50, 50}, Qt::LeftButton);
+        mouse(QEvent::MouseMove, {90, 70}, Qt::LeftButton);
+        mouse(QEvent::MouseButtonRelease, {90, 70}, Qt::NoButton);
+        const auto turned = view->camera();
+        require(start != preset && preset != zoomed && zoomed != turned,
+            "a camera move did not change the camera");
+        back->trigger();
+        require(view->camera() == zoomed, "Back did not undo the drag");
+        back->trigger();
+        require(view->camera() == preset, "Back did not undo the wheel burst in one step");
+        back->trigger();
+        require(view->camera() == start && !back->isEnabled(), "Back did not undo the preset");
+        for (int step = 0; step < 3; ++step) forward->trigger();
+        require(view->camera() == turned && !forward->isEnabled(), "Forward did not redo");
+        controller.closeWindow();
     }
     return 0;
 }

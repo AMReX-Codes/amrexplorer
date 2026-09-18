@@ -1762,8 +1762,8 @@ void MainWindow::applyDisplayStretches()
 
 void MainWindow::setAspectMode(AspectMode mode)
 {
-    clearNavigation();
     if (mode != m_aspectMode) {
+        clearNavigation();
         m_aspectMode = mode;
         saveSettings();
     }

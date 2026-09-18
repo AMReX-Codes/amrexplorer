@@ -386,6 +386,24 @@ Outcome dispatchNavigation(Context& context)
                     window.setSlicePositionForTest(0, 2.e30);
                     if (!require(window.navigationCountForTest() == 1, "a clamped no-op slice move cleared history")) return;
                 }
+                window.setSlicePositionForTest(0, test->positions[0]);
+                window.navigationZoomForTest();
+                break;
+            case 35:
+                if (test->original.size() == 3 && !companion && !window.activeViewIsMappedForTest()) {
+                    // A Shift+arrow scan's guides hold still after the key is
+                    // released, through any redraw before the raster lands.
+                    auto* view = window.navigationViewForTest();
+                    if (!require(window.navigationAnchorForTest().has_value(), "no scan anchor to test from")) return;
+                    const auto before = view->crosshairViewportIntersection();
+                    key(view, Qt::Key_Right, Qt::ShiftModifier);
+                    auto* planes = window.findChild<QAction*>(QStringLiteral("slicePlanesAction"));
+                    planes->toggle();
+                    planes->toggle();
+                    const auto after = view->crosshairViewportIntersection();
+                    if (!require(before && after && QLineF(*before, *after).length() <= 1.0,
+                            "a Shift+arrow scan's guides moved after release")) return;
+                }
                 timer->stop(); application.exit(0);
                 break;
             default: application.exit(1);

@@ -232,12 +232,12 @@ void MainWindow::applyNavigationPanel(const NavigationPanel& panel)
         const auto axes = displayAxes(state.normal);
         const auto x = static_cast<std::size_t>(axes[0]);
         const auto y = static_cast<std::size_t>(axes[1]);
-        const QRectF data(region.lower[x], -region.upper[y],
+        const QRectF footprint(region.lower[x], -region.upper[y],
             region.upper[x] - region.lower[x], region.upper[y] - region.lower[y]);
         // Confine the feedback to the requested raster's footprint now. A
         // transient full-domain canvas would raise scroll bars and size the
         // incoming raster/transform for a viewport about to grow again.
-        canvas = navigationTransform(state).inverted().mapRect(data);
+        canvas = navigationTransform(state).inverted().mapRect(footprint);
     }
     view->restoreNavigation(panel.mode, panel.factor, scene, canvas);
 }

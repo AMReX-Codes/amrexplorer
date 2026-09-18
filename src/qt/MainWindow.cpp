@@ -1051,7 +1051,12 @@ MainWindow::MainWindow(QWidget* parent)
     });
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow()
+{
+    // ~QWidget hides the window after this, and a view losing focus then
+    // signals navigationEnded; keep that out of the half-destroyed window.
+    for (auto* view : findChildren<ImageView*>()) view->disconnect(this);
+}
 
 void MainWindow::wireTileSignals(PlaneViewState& state)
 {

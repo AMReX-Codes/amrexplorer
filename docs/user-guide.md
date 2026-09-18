@@ -281,9 +281,10 @@ The active panel is the one most recently clicked or manipulated.
 | Right drag | Plot a line; Auto locks the initial drag direction |
 | Right click in a 3-D slice | Move the other two slice planes to the clicked point |
 
-**Line > Horizontal / Vertical** chooses the orientation explicitly, including
-for Shift+right-click. On a Mac trackpad, Control-click supplies the right click.
-**Auto** chooses from the first clear drag direction and keeps it until release.
+**View > Line orientation > Horizontal / Vertical** chooses the orientation
+explicitly, including for Shift+right-click. On a Mac trackpad, Control-click
+supplies the right click. **Auto** chooses from the first clear drag direction
+and keeps it until release.
 
 The **Scale** control offers fixed zooms from 1x to 32x, where the factor is
 screen pixels per finest-level cell. A very wide local domain cannot be shown

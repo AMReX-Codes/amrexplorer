@@ -395,17 +395,6 @@ MainWindow::MainWindow(QWidget* parent)
     }
 
     sliceToolbar->addWidget(m_scaleButton);
-    auto* lineButton = new QToolButton(m_sliceToolbar);
-    lineButton->setObjectName(QStringLiteral("lineOrientationButton"));
-    lineButton->setText(tr("Line"));
-    lineButton->setToolTip(tr("Choose the line-plot orientation"));
-    lineButton->setPopupMode(QToolButton::InstantPopup);
-    auto* lineMenu = new QMenu(lineButton);
-    for (auto* action : m_lineOrientationGroup->actions()) {
-        lineMenu->addAction(action);
-    }
-    lineButton->setMenu(lineMenu);
-    m_sliceToolbar->addWidget(lineButton);
 
     addToolBarBreak(Qt::TopToolBarArea);
     m_rangeToolbar = addToolBar(tr("Color and Overlay Controls"));

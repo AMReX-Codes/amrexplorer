@@ -2,7 +2,6 @@
 
 #include <QKeySequence>
 #include <QScopedValueRollback>
-#include <QToolButton>
 
 namespace amrvis::qt {
 namespace {
@@ -60,17 +59,7 @@ void MainWindow::setupNavigation()
         action->setObjectName(forward ? QStringLiteral("navigationForwardAction")
                                      : QStringLiteral("navigationBackAction"));
         connect(action, &QAction::triggered, this, [this, forward] { navigate(forward); });
-        auto* button = new QToolButton(m_sliceToolbar);
-        button->setDefaultAction(action);
-        QAction* before = nullptr;
-        for (auto* item : m_sliceToolbar->actions()) {
-            const auto* widget = m_sliceToolbar->widgetForAction(item);
-            if (widget && widget->objectName() == QStringLiteral("lineOrientationButton")) {
-                before = item;
-                break;
-            }
-        }
-        m_sliceToolbar->insertWidget(before, button);
+        m_sliceToolbar->addAction(action);
         return action;
     };
     m_navigationBack = add(tr("Back"), false);

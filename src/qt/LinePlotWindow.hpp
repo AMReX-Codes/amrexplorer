@@ -1,5 +1,7 @@
 #pragma once
 
+#include "NavigationHistory.hpp"
+
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/core/Result.hpp>
 
@@ -56,6 +58,16 @@ public:
     void setCurves(const std::vector<LinePlotCurve>* curves);
     void setNumberFormat(QString format);
     void resetZoom();
+    void clearNavigation();
+    void navigateBack();
+    void navigateForward();
+    [[nodiscard]] bool canNavigateBack() const { return m_history.canBack(); }
+    [[nodiscard]] bool canNavigateForward() const { return m_history.canForward(); }
+
+signals:
+    void navigationChanged();
+
+public:
     // Toggles per-sample data markers over each curve (legacy Amrvis style).
     void setShowMarkers(bool on);
     // The data area inside the axes. Its insets follow the tick labels of the
@@ -78,6 +90,7 @@ private:
         double xMaximum;
         double yMinimum;
         double yMaximum;
+        friend bool operator==(const PlotRange&, const PlotRange&) = default;
     };
 
     [[nodiscard]] std::optional<PlotRange> automaticRange() const;
@@ -85,6 +98,7 @@ private:
     [[nodiscard]] QString hoverTextAt(const QPointF& position) const;
     void hideHover();
     void cancelSelection();
+    void setZoom(std::optional<PlotRange> range);
 
     const std::vector<LinePlotCurve>* m_curves = nullptr;
     QString m_numberFormat;
@@ -95,6 +109,7 @@ private:
     QRubberBand* m_rubberBand = nullptr;
     bool m_dragging = false;
     bool m_canceled = false;
+    NavigationHistory<std::optional<PlotRange>> m_history;
 };
 
 // Legacy-style XY line plot window: plot area plus a side panel with a

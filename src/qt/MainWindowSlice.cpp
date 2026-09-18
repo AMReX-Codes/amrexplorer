@@ -503,6 +503,7 @@ void MainWindow::setSlicePosition(int axis, double value)
                                : datasetSampleBounds(primary().session->metadata());
     const auto position = std::clamp(value, domain.lower[ax],
         std::nextafter(domain.upper[ax], domain.lower[ax]));
+    if (position != m_slicePosition3d[ax]) clearNavigation();
     m_slicePosition3d[ax] = position;
     {
         const QSignalBlocker blocker(m_sliceSpinboxes[ax]);
@@ -1477,6 +1478,8 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
         display.displayRegion = displayIsSpherical()
             ? state.displayRegion : display.displayPlane().physicalRegion;
     }
+    // Before the view changes: its window is still in the old raster's scene.
+    reconcilePendingNavigation(state);
     // The view changes made while the arrival is installed (a Fit, a
     // stretch) must not ask the warp for a window against the request this
     // arrival replaces; it is asked once below, with the new request cached.
@@ -1715,6 +1718,7 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     updateGridBoxes(state);
     updateOverlay(state);
     updateParticleOverlay(state);
+    restorePendingNavigation(state);
     // This view's region may have changed; refresh every view's guides.
     updateCrosshairs();
     // The Dataset window's marked cell, on the same footing as the overlays
@@ -2461,6 +2465,7 @@ void MainWindow::stepSequence(int direction)
 
 void MainWindow::goToSequenceFrame(int index, bool forceRestart)
 {
+    clearNavigation();
     m_sequenceController->goToFrame(index, forceRestart);
 }
 
@@ -2481,6 +2486,7 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
         m_remoteSequenceConnectionGeneration = result.connectionGeneration;
     }
     const auto previousVectorFields = vectorFieldNames();
+    clearNavigation();
     primary().session = result.dataset;
     ++primary().sessionEpoch;
     restoreVectorFields(previousVectorFields);

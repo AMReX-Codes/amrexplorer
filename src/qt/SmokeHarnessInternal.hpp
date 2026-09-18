@@ -37,6 +37,7 @@ Outcome dispatchLifecycle(Context& context);
 Outcome dispatchRange(Context& context);
 // SmokeHarnessZoom.cpp
 Outcome dispatchZoom(Context& context);
+Outcome dispatchNavigation(Context& context);
 // SmokeHarnessFab.cpp
 Outcome dispatchFab(Context& context);
 // SmokeHarnessShortcuts.cpp

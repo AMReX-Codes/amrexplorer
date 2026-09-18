@@ -395,17 +395,6 @@ MainWindow::MainWindow(QWidget* parent)
     }
 
     sliceToolbar->addWidget(m_scaleButton);
-    auto* lineButton = new QToolButton(m_sliceToolbar);
-    lineButton->setObjectName(QStringLiteral("lineOrientationButton"));
-    lineButton->setText(tr("Line"));
-    lineButton->setToolTip(tr("Choose the line-plot orientation"));
-    lineButton->setPopupMode(QToolButton::InstantPopup);
-    auto* lineMenu = new QMenu(lineButton);
-    for (auto* action : m_lineOrientationGroup->actions()) {
-        lineMenu->addAction(action);
-    }
-    lineButton->setMenu(lineMenu);
-    m_sliceToolbar->addWidget(lineButton);
 
     addToolBarBreak(Qt::TopToolBarArea);
     m_rangeToolbar = addToolBar(tr("Color and Overlay Controls"));
@@ -972,6 +961,7 @@ MainWindow::MainWindow(QWidget* parent)
             saveSettings();
         });
 
+    setupNavigation();
     createMenus();
 
     connect(primary().fieldSelector, qOverload<int>(&QComboBox::currentIndexChanged),
@@ -1050,7 +1040,12 @@ MainWindow::MainWindow(QWidget* parent)
     });
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow()
+{
+    // ~QWidget hides the window after this, and a view losing focus then
+    // signals navigationEnded; keep that out of the half-destroyed window.
+    for (auto* view : findChildren<ImageView*>()) view->disconnect(this);
+}
 
 void MainWindow::wireTileSignals(PlaneViewState& state)
 {
@@ -1768,6 +1763,7 @@ void MainWindow::applyDisplayStretches()
 void MainWindow::setAspectMode(AspectMode mode)
 {
     if (mode != m_aspectMode) {
+        clearNavigation();
         m_aspectMode = mode;
         saveSettings();
     }
@@ -2017,6 +2013,7 @@ void MainWindow::createMenus()
             if (displayMode == m_sphericalDisplay) {
                 return;
             }
+            clearNavigation();
             m_sphericalDisplay = displayMode;
             saveSettings();
             updateSphericalControls();
@@ -2043,6 +2040,7 @@ void MainWindow::createMenus()
         if (on == m_mappedGrid) {
             return;
         }
+        clearNavigation();
         m_mappedGrid = on;
         saveSettings();
         updateMappedGridControls();
@@ -2181,6 +2179,8 @@ void MainWindow::createMenus()
         this, [this] { showNumberFormatDialog(); });
 
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
+    viewMenu->addAction(m_navigationBack);
+    viewMenu->addAction(m_navigationForward);
     viewMenu->addMenu(scaleMenu);
     auto* lineMenu = viewMenu->addMenu(tr("Line orientation"));
     for (auto* action : m_lineOrientationGroup->actions()) {
@@ -2475,6 +2475,7 @@ QString MainWindow::chooseExpressionListPath(QWidget* parent, bool forSaving)
 
 bool MainWindow::reloadCurrentDataset()
 {
+    clearNavigation();
     // Not while closing: another window's Apply reaches every window, and a
     // worker started here would hold the I/O mutex against the quit. The
     // completion handler checks m_closing, but the read still runs.

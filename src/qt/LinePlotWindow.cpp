@@ -5,8 +5,10 @@
 
 #include <amrexplorer/core/ValueMapping.hpp>
 
+#include <QAction>
 #include <QFocusEvent>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QCheckBox>
 #include <QEvent>
 #include <QFontDatabase>
@@ -112,8 +114,44 @@ void LinePlotWidget::setNumberFormat(QString format)
 void LinePlotWidget::resetZoom()
 {
     cancelSelection();
+    setZoom(std::nullopt);
+}
+
+void LinePlotWidget::clearNavigation()
+{
+    cancelSelection();
     m_zoom.reset();
+    m_history.clear();
+    emit navigationChanged();
     update();
+}
+
+void LinePlotWidget::setZoom(std::optional<PlotRange> range)
+{
+    m_history.push(m_zoom, range);
+    m_zoom = range;
+    emit navigationChanged();
+    update();
+}
+
+void LinePlotWidget::navigateBack()
+{
+    cancelSelection();
+    if (const auto* entry = m_history.back()) {
+        m_zoom = entry->before;
+        emit navigationChanged();
+        update();
+    }
+}
+
+void LinePlotWidget::navigateForward()
+{
+    cancelSelection();
+    if (const auto* entry = m_history.forward()) {
+        m_zoom = entry->after;
+        emit navigationChanged();
+        update();
+    }
 }
 
 void LinePlotWidget::cancelSelection()
@@ -587,7 +625,7 @@ void LinePlotWidget::mouseReleaseEvent(QMouseEvent* event)
             const auto yMinimum = std::lerp(base->yMinimum, base->yMaximum,
                 static_cast<double>(plot.bottom() - dragged.bottom()) / (plot.height() - 1));
             if (xMinimum < xMaximum && yMinimum < yMaximum) {
-                m_zoom = PlotRange{xMinimum, xMaximum, yMinimum, yMaximum};
+                setZoom(PlotRange{xMinimum, xMaximum, yMinimum, yMaximum});
             }
             update();
         }
@@ -626,6 +664,31 @@ LinePlotWindow::LinePlotWindow(const QString& datasetName, QWidget* parent)
     sideLayout->addWidget(m_legend);
     sideLayout->addWidget(clearButton);
     sideLayout->addWidget(zoomButton);
+    const auto navigationButton = [this, sideLayout](const QString& text,
+        QKeySequence::StandardKey shortcut, bool back) {
+        auto* action = new QAction(text, m_plot);
+        action->setShortcut(QKeySequence(shortcut));
+        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        action->setObjectName(back ? QStringLiteral("navigationBackAction")
+                                   : QStringLiteral("navigationForwardAction"));
+        m_plot->addAction(action);
+        auto* button = new QPushButton(text, this);
+        sideLayout->addWidget(button);
+        connect(button, &QPushButton::clicked, action, &QAction::trigger);
+        connect(action, &QAction::triggered, m_plot, back
+            ? &LinePlotWidget::navigateBack : &LinePlotWidget::navigateForward);
+        const auto refresh = [this, action, button, back] {
+            const bool enabled = back ? m_plot->canNavigateBack()
+                                      : m_plot->canNavigateForward();
+            action->setEnabled(enabled);
+            button->setEnabled(enabled);
+        };
+        connect(m_plot, &LinePlotWidget::navigationChanged, this, refresh);
+        refresh();
+    };
+    navigationButton(tr("Back"), QKeySequence::Back, true);
+    navigationButton(tr("Forward"), QKeySequence::Forward, false);
+
     sideLayout->addWidget(markersBox);
     sideLayout->addStretch();
     sideLayout->addWidget(closeButton);
@@ -706,7 +769,7 @@ void LinePlotWindow::clearCurves()
 {
     m_curves.clear();
     m_legend->clear();
-    m_plot->resetZoom();
+    m_plot->clearNavigation();
     m_plot->update();
 }
 

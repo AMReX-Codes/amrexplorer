@@ -348,12 +348,15 @@ inline std::atomic<int> waiting{0};        // # of workers currently parked
 namespace slice_worker_test {
 
 inline std::atomic<bool> gateArmed{false};
+inline std::atomic<int> waiting{0};
 
 inline void waitAtGate()
 {
+    ++waiting;
     for (int waited = 0; waited < 10000 && gateArmed.load(); ++waited) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    --waiting;
 }
 
 } // namespace slice_worker_test

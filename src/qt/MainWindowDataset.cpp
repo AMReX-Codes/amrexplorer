@@ -526,6 +526,8 @@ ExportOptions MainWindow::exportOptions(bool includeColorBar, bool includeAxes,
     options.includeColorBar = includeColorBar;
     options.includeAxes = includeAxes;
     options.transparentBackground = transparentBackground;
+    // macOS logs "qt.qpa.fonts: ... missing font family "Sans Serif"" in every
+    // smoke test's output. It is harmless and never why a test failed.
     options.font = QFont(QStringLiteral("Sans Serif"));
     options.font.setStyleHint(QFont::SansSerif);
     // Each panel resolves its spatial axes and field values independently,
@@ -932,6 +934,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     std::optional<FrameSliceSpec> initialSpec,
     std::optional<RemoteOpen> remoteOpen)
 {
+    clearNavigation();
     if (!preserveFabSelector) {
         m_fabNavigator->reset();
     }
@@ -1002,6 +1005,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     primary().session.reset();
     // Nothing is installed now, which is a change of session like any other:
     // a slice still on a worker for the outgoing one must not be displayed.
+    clearNavigation();
     ++primary().sessionEpoch;
     // The dock's edge trigger is per dataset, not per session: an open is a new
     // context, so the next update re-asserts it. Without this the flags could
@@ -1336,6 +1340,7 @@ void MainWindow::requestInitialSlice(
                 if (generation == m_generation) {
                     const auto previousVectorFields = vectorFieldNames();
                     primary().session = result.dataset;
+                    clearNavigation();
                     ++primary().sessionEpoch;
                     // Which views a newer request has already claimed. Worked
                     // out before anything below restores control state,

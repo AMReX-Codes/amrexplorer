@@ -6,6 +6,44 @@
 
 namespace amrvis::qt {
 
+std::vector<QRectF> MainWindow::navigationWindowsForTest()
+{
+    std::vector<QRectF> windows;
+    for (auto* state : currentViews()) {
+        const auto scene = state->view->mapToScene(state->view->viewport()->rect()).boundingRect();
+        windows.push_back(navigationTransform(*state).mapRect(scene));
+    }
+    return windows;
+}
+
+bool MainWindow::navigationIdleForTest() const
+{
+    return slicesInFlight() == 0 && !m_sliceDebounce->isActive()
+        && !m_panDebounce->isActive() && !m_navigationTimer->isActive();
+}
+
+bool MainWindow::navigationWorkerWaitingForTest() const
+{
+    return slice_worker_test::waiting.load() > 0;
+}
+
+void MainWindow::navigationZoomForTest()
+{
+    if (m_pair) {
+        const auto canvas = toQRectF(pairCanvasRect(m_activeView->normal));
+        pairRubberBandZoom(m_activeView->normal, QRectF(
+            canvas.x() + canvas.width() * 0.25, canvas.y() + canvas.height() * 0.25,
+            canvas.width() * 0.5, canvas.height() * 0.5));
+    } else {
+        rubberBandZoomActiveViewForTest();
+    }
+}
+
+void MainWindow::navigationRefreshForTest()
+{
+    scheduleSliceRequest(false);
+}
+
 bool MainWindow::adaptivePrecisionForTest()
 {
     constexpr double low = 1.25663706212e-6;

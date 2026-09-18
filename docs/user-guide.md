@@ -256,6 +256,13 @@ sample locations recorded by the FAB or MultiFab.
 Double-click a view, press **0**, or select **Reset Zoom** to return to the
 full domain.
 
+Use **Back** and **Forward** on the toolbar or View menu, or press Alt+Left and
+Alt+Right (Cmd+[ and Cmd+] on macOS), to revisit pan and zoom positions,
+including before Reset Zoom. A synchronized zoom returns all affected
+panels together. Line-plot windows have their own Back/Forward buttons. Opening
+or reloading data, changing the display layout, or moving a slice directly
+starts fresh history.
+
 ## Navigating and inspecting data
 
 The active panel is the one most recently clicked or manipulated.
@@ -274,9 +281,10 @@ The active panel is the one most recently clicked or manipulated.
 | Right drag | Plot a line; Auto locks the initial drag direction |
 | Right click in a 3-D slice | Move the other two slice planes to the clicked point |
 
-**Line > Horizontal / Vertical** chooses the orientation explicitly, including
-for Shift+right-click. On a Mac trackpad, Control-click supplies the right click.
-**Auto** chooses from the first clear drag direction and keeps it until release.
+**View > Line orientation > Horizontal / Vertical** chooses the orientation
+explicitly, including for Shift+right-click. On a Mac trackpad, Control-click
+supplies the right click. **Auto** chooses from the first clear drag direction
+and keeps it until release.
 
 The **Scale** control offers fixed zooms from 1x to 32x, where the factor is
 screen pixels per finest-level cell. A very wide local domain cannot be shown
@@ -457,7 +465,9 @@ window has its own copy of the isometric view -- drag to turn it in any
 direction, wheel to zoom, and the **XY**, **XZ**, **YZ** buttons for the
 axis-aligned views --
 with the domain outline drawn over the rendered volume.
-The AMR grid boxes can be drawn too, though they start off here.
+The AMR grid boxes can be drawn too, though they start off here. **View >
+Back** and **Forward** (Alt+Left and Alt+Right, Cmd+[ and Cmd+] on macOS)
+revisit earlier camera positions.
 
 The window follows the main window: the field, the AMR level, the range mode
 and its User min/max, the logarithmic mapping and the palette are the ones

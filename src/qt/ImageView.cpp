@@ -1219,6 +1219,12 @@ void ImageView::panViewport(const QPoint& delta)
 
 void ImageView::mouseDoubleClickEvent(QMouseEvent* event)
 {
+    // Only a left double click resets the zoom; a quick second right click
+    // (moving the slices again) is another press.
+    if (event->button() != Qt::LeftButton) {
+        mousePressEvent(event);
+        return;
+    }
     if (hasImage()) {
         emit navigationBegan(NavigationKind::Action);
         fitToWindow();

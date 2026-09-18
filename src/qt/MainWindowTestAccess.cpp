@@ -1158,6 +1158,24 @@ void MainWindow::wheelZoomAndPanActiveViewForTest()
     m_activeView->view->panViewport(QPoint(11, -7));
 }
 
+QString MainWindow::scaleTextForTest() const
+{
+    return m_scaleButton->text();
+}
+
+void MainWindow::rightDoubleClickActiveViewForTest()
+{
+    auto* const viewport = m_activeView->view->viewport();
+    const QPointF at(viewport->width() / 3, viewport->height() / 3);
+    for (const auto type : {QEvent::MouseButtonPress, QEvent::MouseButtonRelease,
+             QEvent::MouseButtonDblClick, QEvent::MouseButtonRelease}) {
+        const bool down = type != QEvent::MouseButtonRelease;
+        QMouseEvent event(type, at, viewport->mapToGlobal(at), Qt::RightButton,
+            down ? Qt::RightButton : Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(viewport, &event);
+    }
+}
+
 void MainWindow::rightClickActiveViewForTest(const QPoint& viewportPosition)
 {
     if (m_activeView == nullptr || !m_activeView->view->hasImage()) {

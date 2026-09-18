@@ -323,6 +323,9 @@ public:
     // Test-only: a plain right click at a viewport position of the active
     // view, as the mouse would deliver it.
     void rightClickActiveViewForTest(const QPoint& viewportPosition);
+    [[nodiscard]] QString scaleTextForTest() const;
+    // Press, release, double click, release: Qt's order for two quick clicks.
+    void rightDoubleClickActiveViewForTest();
     [[nodiscard]] bool activeViewScrollBarsVisibleForTest() const;
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;

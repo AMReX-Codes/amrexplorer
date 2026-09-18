@@ -10,6 +10,7 @@
 #include <QTimer>
 #include <QWheelEvent>
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <string_view>
@@ -40,7 +41,8 @@ bool same(const std::vector<QRectF>& a, const std::vector<QRectF>& b)
     }
     return true;
 }
-// Covers the expected window, give or take a scroll bar appearing or going.
+// Covers the expected window at the same zoom: a scroll bar appearing or going
+// changes one axis only, so the other must match.
 bool covers(const std::vector<QRectF>& expected, const std::vector<QRectF>& actual)
 {
     if (expected.size() != actual.size()) return false;
@@ -49,7 +51,7 @@ bool covers(const std::vector<QRectF>& expected, const std::vector<QRectF>& actu
         const auto& a = actual[i];
         const double epsilon = 0.01 * std::max(e.width(), e.height());
         if (!a.adjusted(-epsilon, -epsilon, epsilon, epsilon).contains(e)
-            || a.width() > 1.05 * e.width() || a.height() > 1.05 * e.height()) {
+            || std::min(a.width() / e.width(), a.height() / e.height()) > 1.02) {
             qCritical("panel %zu expected about (%g,%g,%g,%g), got (%g,%g,%g,%g)", i,
                 e.x(), e.y(), e.width(), e.height(), a.x(), a.y(), a.width(), a.height());
             return false;

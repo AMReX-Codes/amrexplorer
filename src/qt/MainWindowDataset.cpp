@@ -526,6 +526,8 @@ ExportOptions MainWindow::exportOptions(bool includeColorBar, bool includeAxes,
     options.includeColorBar = includeColorBar;
     options.includeAxes = includeAxes;
     options.transparentBackground = transparentBackground;
+    // macOS logs "qt.qpa.fonts: ... missing font family "Sans Serif"" in every
+    // smoke test's output. It is harmless and never why a test failed.
     options.font = QFont(QStringLiteral("Sans Serif"));
     options.font.setStyleHint(QFont::SansSerif);
     // Each panel resolves its spatial axes and field values independently,

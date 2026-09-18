@@ -395,17 +395,6 @@ MainWindow::MainWindow(QWidget* parent)
     }
 
     sliceToolbar->addWidget(m_scaleButton);
-    auto* lineButton = new QToolButton(m_sliceToolbar);
-    lineButton->setObjectName(QStringLiteral("lineOrientationButton"));
-    lineButton->setText(tr("Line"));
-    lineButton->setToolTip(tr("Choose the line-plot orientation"));
-    lineButton->setPopupMode(QToolButton::InstantPopup);
-    auto* lineMenu = new QMenu(lineButton);
-    for (auto* action : m_lineOrientationGroup->actions()) {
-        lineMenu->addAction(action);
-    }
-    lineButton->setMenu(lineMenu);
-    m_sliceToolbar->addWidget(lineButton);
 
     addToolBarBreak(Qt::TopToolBarArea);
     m_rangeToolbar = addToolBar(tr("Color and Overlay Controls"));
@@ -1051,7 +1040,12 @@ MainWindow::MainWindow(QWidget* parent)
     });
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow()
+{
+    // ~QWidget hides the window after this, and a view losing focus then
+    // signals navigationEnded; keep that out of the half-destroyed window.
+    for (auto* view : findChildren<ImageView*>()) view->disconnect(this);
+}
 
 void MainWindow::wireTileSignals(PlaneViewState& state)
 {
@@ -1773,8 +1767,8 @@ void MainWindow::applyDisplayStretches()
 
 void MainWindow::setAspectMode(AspectMode mode)
 {
-    clearNavigation();
     if (mode != m_aspectMode) {
+        clearNavigation();
         m_aspectMode = mode;
         saveSettings();
     }

@@ -361,6 +361,7 @@ void IsoWidget::mousePressEvent(QMouseEvent* event)
         m_lastMousePos = event->pos();
         m_dragging = true;
         setCursor(Qt::ClosedHandCursor);
+        emit dragBegan();
         event->accept();
         return;
     }

@@ -2,6 +2,8 @@
 
 #include <amrexplorer/core/Version.hpp>
 
+#include <QKeySequence>
+
 namespace amrvis::qt {
 
 void MainWindow::focusActiveViewForPanning()
@@ -716,6 +718,9 @@ void MainWindow::showKeyboardMouseReference()
     add(tr("Ctrl+1-9"), tr("Composite levels 0 through N (Levs 0-N)"));
     add(tr("Alt+0-9"), tr("Show one exact AMR level"));
     add(tr("Ctrl+D"), tr("Open the Dataset window (raw cell values per level)"));
+    add(QKeySequence(QKeySequence::Back).toString(QKeySequence::NativeText) + QStringLiteral(" / ")
+            + QKeySequence(QKeySequence::Forward).toString(QKeySequence::NativeText),
+        tr("Back / Forward in pan and zoom history"));
     add(tr("Ctrl+W"),
         tr("Close the window in front -- this one, Volume, Dataset or Line "
            "Plot; closing the last window quits"));

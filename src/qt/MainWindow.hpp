@@ -696,10 +696,13 @@ private:
     void clearNavigation();
     void navigate(bool forward);
     void refreshNavigationActions();
+    // A slice for this view is scheduled or on a worker.
+    [[nodiscard]] bool sliceExpected(const PlaneViewState& state) const;
     [[nodiscard]] QTransform navigationTransform(const PlaneViewState& state) const;
     [[nodiscard]] NavigationPanel captureNavigationPanel(PlaneViewState& state) const;
     [[nodiscard]] NavigationSnapshot captureNavigation();
     void applyNavigationPanel(const NavigationPanel& panel);
+    void reconcilePendingNavigation(PlaneViewState& state);
     void restorePendingNavigation(PlaneViewState& state);
     void shiftNavigationWindow(PlaneViewState& state,
         const RealBox& before, const RealBox& after);

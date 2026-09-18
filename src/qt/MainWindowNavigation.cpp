@@ -3,7 +3,6 @@
 
 #include <QKeySequence>
 #include <QScopedValueRollback>
-#include <QToolButton>
 
 namespace amrvis::qt {
 namespace {
@@ -57,20 +56,11 @@ void MainWindow::setupNavigation()
     connect(m_navigationTimer, &QTimer::timeout, this, &MainWindow::finishNavigation);
     const auto add = [this](const QString& text, bool forward) {
         auto* action = new QAction(text, this);
+        action->setShortcut(QKeySequence(forward ? QKeySequence::Forward : QKeySequence::Back));
         action->setObjectName(forward ? QStringLiteral("navigationForwardAction")
                                      : QStringLiteral("navigationBackAction"));
         connect(action, &QAction::triggered, this, [this, forward] { navigate(forward); });
-        auto* button = new QToolButton(m_sliceToolbar);
-        button->setDefaultAction(action);
-        QAction* before = nullptr;
-        for (auto* item : m_sliceToolbar->actions()) {
-            const auto* widget = m_sliceToolbar->widgetForAction(item);
-            if (widget && widget->objectName() == QStringLiteral("lineOrientationButton")) {
-                before = item;
-                break;
-            }
-        }
-        m_sliceToolbar->insertWidget(before, button);
+        m_sliceToolbar->addAction(action);
         return action;
     };
     m_navigationBack = add(tr("Back"), false);
@@ -82,22 +72,13 @@ void MainWindow::setupNavigation()
     m_fixedCrosshairAction->setObjectName(QStringLiteral("fixedCrosshairAction"));
     m_fixedCrosshairAction->setCheckable(true);
     m_fixedCrosshairAction->setIconText(tr("Fixed crosshair"));
-    auto* scanButton = new QToolButton(m_sliceToolbar);
-    scanButton->setDefaultAction(m_fixedCrosshairAction);
-    m_sliceToolbar->addWidget(scanButton);
+    m_sliceToolbar->addAction(m_fixedCrosshairAction);
     refreshNavigationActions();
     refreshScanAction();
 }
 
 void MainWindow::connectNavigation(ImageView* view)
 {
-    for (bool forward : {false, true}) {
-        auto* shortcut = new QAction(view);
-        shortcut->setShortcut(QKeySequence(forward ? QKeySequence::Forward : QKeySequence::Back));
-        shortcut->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-        view->addAction(shortcut);
-        connect(shortcut, &QAction::triggered, this, [this, forward] { navigate(forward); });
-    }
     connect(view, &ImageView::navigationBegan, this,
         [this, view](ImageView::NavigationKind kind) { beginNavigation(kind, view); });
     connect(view, &ImageView::navigationEnded, this, [this, view](bool wheelBurst) {
@@ -195,12 +176,26 @@ void MainWindow::finishNavigation()
             before.panels.erase(before.panels.begin() + static_cast<std::ptrdiff_t>(i));
             after.panels.erase(after.panels.begin() + static_cast<std::ptrdiff_t>(i));
         } else {
+            // Only a slice this gesture asked for may re-frame the view; a
+            // view-only change (a local wheel zoom) would be replayed later
+            // by an unrelated one, such as a resize's.
             auto& panel = after.panels[i];
-            m_navigationPending[panel.state] = panel;
+            if (sliceExpected(*panel.state)) {
+                m_navigationPending[panel.state] = panel;
+            } else {
+                m_navigationPending.erase(panel.state);
+            }
         }
     }
     m_navigationHistory.push(std::move(before), std::move(after));
     refreshNavigationActions();
+}
+
+bool MainWindow::sliceExpected(const PlaneViewState& state) const
+{
+    if (state.pendingRequests > 0) return true;
+    return m_sliceDebounce->isActive() && (m_pendingAllViews
+        || std::find(m_pendingViews.begin(), m_pendingViews.end(), &state) != m_pendingViews.end());
 }
 
 void MainWindow::refreshNavigationActions()
@@ -213,18 +208,12 @@ void MainWindow::refreshNavigationActions()
 void MainWindow::clearNavigation()
 {
     if (m_restoringNavigation) return;
+    // History only: a drag in progress (e.g. across a playback frame) goes on.
     if (m_navigationTimer) m_navigationTimer->stop();
-    if (m_panDebounce) m_panDebounce->stop();
-    m_panView = nullptr;
-    m_panDataRefresh = false;
     m_navigationBefore.reset();
     m_navigationPending.clear();
     m_navigationHistory.clear();
     m_navigationView = nullptr;
-    m_scanDragAnchor.reset();
-    for (auto* state : allViewStates()) {
-        if (state->view) state->view->cancelSelection();
-    }
     refreshNavigationActions();
 }
 
@@ -247,14 +236,30 @@ void MainWindow::applyNavigationPanel(const NavigationPanel& panel)
         const auto axes = displayAxes(state.normal);
         const auto x = static_cast<std::size_t>(axes[0]);
         const auto y = static_cast<std::size_t>(axes[1]);
-        const QRectF data(region.lower[x], -region.upper[y],
+        const QRectF footprint(region.lower[x], -region.upper[y],
             region.upper[x] - region.lower[x], region.upper[y] - region.lower[y]);
         // Confine the feedback to the requested raster's footprint now. A
         // transient full-domain canvas would raise scroll bars and size the
         // incoming raster/transform for a viewport about to grow again.
-        canvas = navigationTransform(state).inverted().mapRect(data);
+        canvas = navigationTransform(state).inverted().mapRect(footprint);
     }
     view->restoreNavigation(panel.mode, panel.factor, scene, canvas);
+}
+
+void MainWindow::reconcilePendingNavigation(PlaneViewState& state)
+{
+    // A gesture still open when the arrival lands (a wheel zoom right after
+    // Back) supersedes the saved window: carry the current one instead.
+    if (!m_navigationBefore || m_restoringNavigation) return;
+    if (m_panView == &state && m_panDataRefresh) return;
+    const auto found = m_navigationPending.find(&state);
+    if (found == m_navigationPending.end()) return;
+    // A pair or mapped canvas keeps its scene across the arrival: leave it be.
+    if (m_pair || isWarped(state.warp)) {
+        m_navigationPending.erase(found);
+    } else {
+        found->second = captureNavigationPanel(state);
+    }
 }
 
 void MainWindow::restorePendingNavigation(PlaneViewState& state)

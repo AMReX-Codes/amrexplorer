@@ -122,10 +122,15 @@ Outcome dispatchNavigation(Context& context)
                 return condition;
             };
             switch (test->phase++) {
-            case 0:
+            case 0: {
+                // Window-wide shortcuts, not ones that need a focused panel.
+                auto* back = window.findChild<QAction*>(QStringLiteral("navigationBackAction"));
+                if (!require(back->shortcut() == QKeySequence(QKeySequence::Back)
+                        && back->shortcutContext() == Qt::WindowShortcut, "Back is not a window shortcut")) return;
                 test->original = window.navigationWindowsForTest();
                 window.navigationZoomForTest();
                 break;
+            }
             case 1:
                 test->zoom = window.navigationWindowsForTest();
                 if (!require(window.navigationCountForTest() == 1, "zoom was not one action")) return;
@@ -133,7 +138,9 @@ Outcome dispatchNavigation(Context& context)
                 break;
             case 2:
                 if (!require(same(test->original, window.navigationWindowsForTest()), "Back did not restore initial view")) return;
-                action(true);
+                // The mouse's forward button, as a quick double click reports it.
+                mouse(window.navigationViewForTest()->viewport(), QEvent::MouseButtonDblClick,
+                    {10, 10}, Qt::ForwardButton, Qt::ForwardButton);
                 break;
             case 3:
                 if (!require(same(test->zoom, window.navigationWindowsForTest()), "Forward did not restore zoom")) return;

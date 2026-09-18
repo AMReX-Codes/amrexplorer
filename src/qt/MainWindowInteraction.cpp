@@ -2,6 +2,8 @@
 
 #include <amrexplorer/core/Version.hpp>
 
+#include <QKeySequence>
+
 namespace amrvis::qt {
 
 void MainWindow::focusActiveViewForPanning()
@@ -708,6 +710,7 @@ void MainWindow::showKeyboardMouseReference()
         tr("Move both slice planes to intersect at the clicked point"));
     add(tr("Wheel / double click"),
         tr("Zoom this panel in or out / reset the zoom"));
+    add(tr("Mouse back / forward"), tr("Go back or forward in pan and zoom history"));
     add(tr("B"), tr("Toggle AMR grid boxes"));
     add(tr("I"), tr("Toggle the slice planes (panel lines and isometric view)"));
     add(tr("0"), tr("Reset the zoom to the whole domain"));
@@ -716,6 +719,9 @@ void MainWindow::showKeyboardMouseReference()
     add(tr("Ctrl+1-9"), tr("Composite levels 0 through N (Levs 0-N)"));
     add(tr("Alt+0-9"), tr("Show one exact AMR level"));
     add(tr("Ctrl+D"), tr("Open the Dataset window (raw cell values per level)"));
+    add(QKeySequence(QKeySequence::Back).toString(QKeySequence::NativeText) + QStringLiteral(" / ")
+            + QKeySequence(QKeySequence::Forward).toString(QKeySequence::NativeText),
+        tr("Back / Forward in pan and zoom history"));
     add(tr("Ctrl+W"),
         tr("Close the window in front -- this one, Volume, Dataset or Line "
            "Plot; closing the last window quits"));

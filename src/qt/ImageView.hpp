@@ -336,8 +336,6 @@ signals:
     void viewportMoved();
     void navigationBegan(NavigationKind kind);
     void navigationEnded(bool wheelBurst = false);
-    // The mouse's back (false) or forward (true) side button.
-    void historyRequested(bool forward);
     void panDragBegan();
     // Total scene-coordinate offset since the drag began, plus the latest
     // viewport-pixel step (for view-only panning).

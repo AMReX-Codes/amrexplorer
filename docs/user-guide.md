@@ -256,9 +256,9 @@ sample locations recorded by the FAB or MultiFab.
 Double-click a view, press **0**, or select **Reset Zoom** to return to the
 full domain.
 
-Use **Back** and **Forward** on the toolbar or View menu, Alt+Left and
-Alt+Right (Cmd+[ and Cmd+] on macOS), or the mouse's back and forward buttons
-over a panel to revisit pan and zoom positions, including before Reset Zoom. A synchronized zoom returns all affected
+Use **Back** and **Forward** on the toolbar or View menu, or press Alt+Left and
+Alt+Right (Cmd+[ and Cmd+] on macOS), to revisit pan and zoom positions,
+including before Reset Zoom. A synchronized zoom returns all affected
 panels together. Line-plot windows have their own Back/Forward buttons. Opening
 or reloading data, changing the display layout, or moving a slice directly
 starts fresh history.
@@ -276,7 +276,6 @@ The active panel is the one most recently clicked or manipulated.
 | Arrow keys | Pan the focused panel by 5 percent (click a panel to focus it) |
 | Mouse wheel | Zoom only the panel under the pointer |
 | Double click | Reset the zoom to the whole domain |
-| Mouse back / forward button | Go back or forward in pan and zoom history |
 | Shift+middle click | Plot a horizontal line through the selected sample |
 | Shift+right click | Plot a vertical line through the selected sample |
 | Right drag | Plot a line; Auto locks the initial drag direction |

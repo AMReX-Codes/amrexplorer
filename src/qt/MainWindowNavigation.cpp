@@ -57,8 +57,6 @@ void MainWindow::setupNavigation()
     const auto add = [this](const QString& text, bool forward) {
         auto* action = new QAction(text, this);
         action->setShortcut(QKeySequence(forward ? QKeySequence::Forward : QKeySequence::Back));
-        action->setShortcutContext(Qt::WindowShortcut);
-        addAction(action);
         action->setObjectName(forward ? QStringLiteral("navigationForwardAction")
                                      : QStringLiteral("navigationBackAction"));
         connect(action, &QAction::triggered, this, [this, forward] { navigate(forward); });
@@ -85,10 +83,6 @@ void MainWindow::setupNavigation()
 
 void MainWindow::connectNavigation(ImageView* view)
 {
-    // A disabled action ignores trigger(), as it ignores its shortcut.
-    connect(view, &ImageView::historyRequested, this, [this](bool forward) {
-        (forward ? m_navigationForward : m_navigationBack)->trigger();
-    });
     connect(view, &ImageView::navigationBegan, this,
         [this, view](ImageView::NavigationKind kind) { beginNavigation(kind, view); });
     connect(view, &ImageView::navigationEnded, this, [this, view](bool wheelBurst) {

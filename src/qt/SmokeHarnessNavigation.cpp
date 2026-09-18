@@ -138,9 +138,7 @@ Outcome dispatchNavigation(Context& context)
                 break;
             case 2:
                 if (!require(same(test->original, window.navigationWindowsForTest()), "Back did not restore initial view")) return;
-                // The mouse's forward button, as a quick double click reports it.
-                mouse(window.navigationViewForTest()->viewport(), QEvent::MouseButtonDblClick,
-                    {10, 10}, Qt::ForwardButton, Qt::ForwardButton);
+                action(true);
                 break;
             case 3:
                 if (!require(same(test->zoom, window.navigationWindowsForTest()), "Forward did not restore zoom")) return;

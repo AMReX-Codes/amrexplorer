@@ -1210,11 +1210,6 @@ void ImageView::panViewport(const QPoint& delta)
 
 void ImageView::mouseDoubleClickEvent(QMouseEvent* event)
 {
-    // A quick second side-button click is another step, not a reset.
-    if (event->button() == Qt::BackButton || event->button() == Qt::ForwardButton) {
-        mousePressEvent(event);
-        return;
-    }
     if (hasImage()) {
         emit navigationBegan(NavigationKind::Action);
         fitToWindow();
@@ -1229,11 +1224,6 @@ void ImageView::mouseDoubleClickEvent(QMouseEvent* event)
 void ImageView::mousePressEvent(QMouseEvent* event)
 {
     m_canceledButtons &= ~event->button();
-    if (event->button() == Qt::BackButton || event->button() == Qt::ForwardButton) {
-        emit historyRequested(event->button() == Qt::ForwardButton);
-        event->accept();
-        return;
-    }
     if (event->button() == Qt::LeftButton) {
         m_pressPosition = event->position().toPoint();
         if (hasImage() && (event->modifiers() & Qt::ShiftModifier)) {

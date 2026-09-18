@@ -710,7 +710,6 @@ void MainWindow::showKeyboardMouseReference()
         tr("Move both slice planes to intersect at the clicked point"));
     add(tr("Wheel / double click"),
         tr("Zoom this panel in or out / reset the zoom"));
-    add(tr("Mouse back / forward"), tr("Go back or forward in pan and zoom history"));
     add(tr("B"), tr("Toggle AMR grid boxes"));
     add(tr("I"), tr("Toggle the slice planes (panel lines and isometric view)"));
     add(tr("0"), tr("Reset the zoom to the whole domain"));

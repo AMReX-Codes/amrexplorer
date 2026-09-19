@@ -257,6 +257,7 @@ public:
     [[nodiscard]] std::size_t gridBoxCount() const noexcept;
     // The crosshair guides drawn, over every tile (at most two per tile).
     [[nodiscard]] std::size_t crosshairCount() const noexcept;
+    [[nodiscard]] std::optional<QPointF> crosshairViewportIntersection(std::size_t tile = 0) const;
     [[nodiscard]] std::size_t pointOverlayCount() const noexcept;
     // The points across those batches: a filter that thins a batch without
     // emptying it leaves pointOverlayCount unchanged.
@@ -336,6 +337,7 @@ signals:
     void viewportMoved();
     void navigationBegan(NavigationKind kind);
     void navigationEnded(bool wheelBurst = false);
+    void scanStepRequested(const QPointF& direction);
     void panDragBegan();
     // Total scene-coordinate offset since the drag began, plus the latest
     // viewport-pixel step (for view-only panning).

@@ -22,6 +22,10 @@ struct NavigationTest {
     std::vector<QRectF> original;
     std::vector<QRectF> zoom;
     std::vector<QRectF> pan;
+    std::array<double, 3> positions{};
+    int plane = 0;
+    std::optional<QPointF> anchor;
+    std::optional<QPointF> guide;
 };
 bool same(const std::vector<QRectF>& a, const std::vector<QRectF>& b)
 {
@@ -111,8 +115,8 @@ Outcome dispatchNavigation(Context& context)
             });
     }
     QObject::connect(timer, &QTimer::timeout, &window,
-        [&window, &application, timer, test, action] {
-            if (test->phase == 15) {
+        [&window, &application, timer, test, action, companion] {
+            if (test->phase == 18) {
                 if (!window.navigationWorkerWaitingForTest()) return;
             } else if (!window.navigationIdleForTest()) return;
             const auto require = [&](bool condition, const char* message) {
@@ -187,13 +191,51 @@ Outcome dispatchNavigation(Context& context)
                 break;
             case 12:
                 if (!require(same(test->pan, window.navigationWindowsForTest()), "wheel burst required multiple Back actions")) return;
-                // Reset and let its raster arrive before zooming again.
+                // Reset and zoom back to the center so both crosshairs are visible.
                 window.resetZoomAllViewsForTest();
                 break;
             case 13:
                 window.navigationZoomForTest();
                 break;
             case 14:
+                if (test->original.size() == 1 || window.activeViewIsMappedForTest()) {
+                    test->phase = 17;
+                    break;
+                }
+                window.setActiveViewForTest(test->plane);
+                test->anchor = window.navigationAnchorForTest();
+                test->zoom = window.navigationWindowsForTest();
+                for (int axis = 0; axis < 3; ++axis)
+                    test->positions[static_cast<std::size_t>(axis)] = window.slicePositionForTest(axis);
+                key(window.navigationViewForTest(), test->plane == 0 ? Qt::Key_Down : Qt::Key_Right, Qt::ShiftModifier);
+                break;
+            case 15: {
+                bool moved = false;
+                for (int axis = 0; axis < 3; ++axis) {
+                    const double position = window.slicePositionForTest(axis);
+                    if (axis == test->plane && !require(position == test->positions[static_cast<std::size_t>(axis)], "scan changed the active normal")) return;
+                    moved = moved || position != test->positions[static_cast<std::size_t>(axis)];
+                }
+                if (!moved) {
+                    qCritical("scan plane %d enabled=%d positions=%g,%g,%g", test->plane,
+                        window.findChild<QAction*>(QStringLiteral("fixedCrosshairAction"))->isEnabled(),
+                        test->positions[0], test->positions[1], test->positions[2]);
+                }
+                if (!require(moved, "scan did not move the sibling slices")) return;
+                const auto anchor = window.navigationAnchorForTest();
+                if (!require(anchor && test->anchor && QLineF(*anchor, *test->anchor).length() < 0.005,
+                        "scan moved the crosshair on screen")) return;
+                action(false);
+                break;
+            }
+            case 16:
+                if (!require(same(test->zoom, window.navigationWindowsForTest()), "scan Back lost view")) return;
+                for (int axis = 0; axis < 3; ++axis)
+                    if (!require(window.slicePositionForTest(axis) == test->positions[static_cast<std::size_t>(axis)], "scan Back lost slice coordinates")) return;
+                if (++test->plane < 3) test->phase = 14;
+                else test->phase = 17;
+                break;
+            case 17:
                 test->zoom = window.navigationWindowsForTest();
                 // A cached refresh is parked inside the real worker while
                 // navigation supersedes it. This must test arrival rejection,
@@ -201,29 +243,55 @@ Outcome dispatchNavigation(Context& context)
                 window.armSliceGateForTest();
                 window.navigationRefreshForTest();
                 break;
-            case 15:
+            case 18:
                 action(false); action(true);
                 window.releaseSliceGateForTest();
                 break;
-            case 16:
+            case 19:
                 if (!require(same(test->zoom, window.navigationWindowsForTest()), "late render overwrote navigation")) return;
                 if (test->original.size() == 1 || window.activeViewIsMappedForTest()) {
-                    test->phase = 19;
+                    test->phase = 22;
                     break;
                 }
+                test->anchor = window.navigationAnchorForTest();
+                for (int axis = 0; axis < 3; ++axis)
+                    test->positions[static_cast<std::size_t>(axis)] = window.slicePositionForTest(axis);
+                window.findChild<QAction*>(QStringLiteral("fixedCrosshairAction"))->setChecked(true);
+                test->guide = window.navigationViewForTest()->crosshairViewportIntersection();
                 window.shiftDragActiveViewForTest(window.navigationViewForTest()->viewport()->width() / 3, 0);
+                if (test->original.size() == 3) {
+                    // Redraw the guides after the drag has ended, as a sibling's
+                    // arrival would before the panned raster lands.
+                    auto* planes = window.findChild<QAction*>(QStringLiteral("slicePlanesAction"));
+                    planes->toggle();
+                    planes->toggle();
+                    const auto guide = window.navigationViewForTest()->crosshairViewportIntersection();
+                    if (!require(guide && test->guide && QLineF(*guide, *test->guide).length() <= 1.0,
+                            "guides moved while the panned raster was still pending")) return;
+                }
                 break;
-            case 17:
+            case 20: {
+                const auto anchor = window.navigationAnchorForTest();
+                if (!require(anchor && test->anchor && QLineF(*anchor, *test->anchor).length() < 0.005,
+                        "drag moved the crosshair on screen")) return;
+                bool moved = false;
+                for (int axis = 0; axis < 3; ++axis)
+                    moved = moved || window.slicePositionForTest(axis) != test->positions[static_cast<std::size_t>(axis)];
+                if (!require(moved, "drag did not scan the sibling slices")) return;
                 action(false);
                 break;
-            case 18:
+            }
+            case 21:
                 if (!require(same(test->zoom, window.navigationWindowsForTest()), "drag Back lost framing")) return;
+                for (int axis = 0; axis < 3; ++axis)
+                    if (!require(window.slicePositionForTest(axis) == test->positions[static_cast<std::size_t>(axis)], "drag Back lost slice coordinates")) return;
+                window.findChild<QAction*>(QStringLiteral("fixedCrosshairAction"))->setChecked(false);
                 break;
-            case 19:
+            case 22:
                 if (test->original.size() > 1) window.setActiveViewForTest(0);
                 for (int notch = 0; notch < 8; ++notch) window.wheelActiveViewForTest(1);
                 break;
-            case 20: {
+            case 23: {
                 test->zoom = window.navigationWindowsForTest();
                 auto* bar = window.navigationViewForTest()->horizontalScrollBar();
                 if (!require(bar->maximum() > bar->minimum(), "scroll test has no scroll range")) return;
@@ -231,15 +299,15 @@ Outcome dispatchNavigation(Context& context)
                     ? QAbstractSlider::SliderSingleStepAdd : QAbstractSlider::SliderSingleStepSub);
                 break;
             }
-            case 21:
+            case 24:
                 action(false);
                 break;
-            case 22:
+            case 25:
                 if (!require(same(test->zoom, window.navigationWindowsForTest()), "scrollbar Back lost framing")) return;
                 window.resize(window.width() + 100, window.height() + 60);
                 action(true); action(false);
                 break;
-            case 23: {
+            case 26: {
                 const auto actual = window.navigationWindowsForTest().front();
                 const auto expected = test->zoom.front();
                 const double epsilon = 0.01 * std::max(expected.width(), expected.height());
@@ -247,30 +315,30 @@ Outcome dispatchNavigation(Context& context)
                         "restore after resize lost part of the saved window")) return;
                 break;
             }
-            case 24:
+            case 27:
                 // Wheel before Back's raster arrives: the arrival keeps the wheel zoom.
                 action(false);
                 window.wheelActiveViewForTest(1);
                 test->zoom = window.navigationWindowsForTest();
                 break;
-            case 25:
+            case 28:
                 if (!require(covers(test->zoom, window.navigationWindowsForTest()), "Back's arrival undid a newer wheel zoom")) return;
                 window.wheelActiveViewForTest(1);
                 break;
-            case 26:
+            case 29:
                 window.resize(window.width() - 80, window.height() - 50);
                 break;
-            case 27:
+            case 30:
                 // An unrelated arrival after a resize must not replay the wheel zoom.
                 test->zoom = window.navigationWindowsForTest();
                 window.navigationRefreshForTest();
                 break;
-            case 28:
+            case 31:
                 if (!require(covers(test->zoom, window.navigationWindowsForTest()), "an arrival replayed an old zoom")) return;
                 // Zoomed out enough that the drag below spans raster pixels.
                 window.resetZoomAllViewsForTest();
                 break;
-            case 29:
+            case 32:
                 if (test->original.size() > 1) {
                     // A slice change clears history but not a drag in progress.
                     auto* port = window.navigationViewForTest()->viewport();
@@ -282,6 +350,59 @@ Outcome dispatchNavigation(Context& context)
                     if (!require(window.navigationCountForTest() == 0, "manual slice change kept history")) return;
                     mouse(port, QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
                     if (!require(window.navigationCountForTest() == 1, "slice change canceled a drag")) return;
+                }
+                if (companion) {
+                    // In the XZ panel this corner lies outside both companions.
+                    window.setActiveViewForTest(1);
+                    window.setSlicePositionForTest(0, -0.125);
+                    window.setSlicePositionForTest(2, -0.03125);
+                    if (!require(!window.navigationAnchorForTest(), "a crosshair in a companion gap anchored a scan")) return;
+                }
+                break;
+            case 33:
+                window.navigationZoomForTest();
+                break;
+            case 34:
+                if (test->original.size() == 3 && !companion && !window.activeViewIsMappedForTest()) {
+                    // A plain pan (no scan) keeps the guides on the old raster
+                    // until the panned one arrives.
+                    auto* view = window.navigationViewForTest();
+                    const auto before = view->crosshairViewportIntersection();
+                    key(view, Qt::Key_Right);
+                    // Anything that redraws the guides before the arrival
+                    // (another panel's raster, Back/Forward) shows the bug.
+                    auto* planes = window.findChild<QAction*>(QStringLiteral("slicePlanesAction"));
+                    planes->toggle();
+                    planes->toggle();
+                    const auto after = view->crosshairViewportIntersection();
+                    if (!require(before && after && QLineF(*before, *after).length() <= 1.0,
+                            "a plain pan moved the guides off the old raster")) return;
+                }
+                if (test->original.size() == 3) {
+                    // A request past the domain edge, once at the edge, moves
+                    // nothing and keeps the history.
+                    window.setSlicePositionForTest(0, 1.e30);
+                    window.navigationZoomForTest();
+                    window.setSlicePositionForTest(0, 2.e30);
+                    if (!require(window.navigationCountForTest() == 1, "a clamped no-op slice move cleared history")) return;
+                }
+                window.setSlicePositionForTest(0, test->positions[0]);
+                window.navigationZoomForTest();
+                break;
+            case 35:
+                if (test->original.size() == 3 && !companion && !window.activeViewIsMappedForTest()) {
+                    // A Shift+arrow scan's guides hold still after the key is
+                    // released, through any redraw before the raster lands.
+                    auto* view = window.navigationViewForTest();
+                    if (!require(window.navigationAnchorForTest().has_value(), "no scan anchor to test from")) return;
+                    const auto before = view->crosshairViewportIntersection();
+                    key(view, Qt::Key_Right, Qt::ShiftModifier);
+                    auto* planes = window.findChild<QAction*>(QStringLiteral("slicePlanesAction"));
+                    planes->toggle();
+                    planes->toggle();
+                    const auto after = view->crosshairViewportIntersection();
+                    if (!require(before && after && QLineF(*before, *after).length() <= 1.0,
+                            "a Shift+arrow scan's guides moved after release")) return;
                 }
                 timer->stop(); application.exit(0);
                 break;

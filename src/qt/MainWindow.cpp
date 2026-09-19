@@ -23,6 +23,17 @@ namespace {
         : QFileDialog::Options{};
 }
 
+// Inset a toolbar's leading label like a tool button's text, so each row
+// starts in line with the menu bar and the Back button.
+void insetLeadingLabel(QLabel* label)
+{
+    QToolButton probe;
+    probe.setText(label->text());
+    const auto inset = (probe.sizeHint().width()
+        - probe.fontMetrics().horizontalAdvance(label->text())) / 2;
+    label->setContentsMargins(std::max(0, inset), 0, 0, 0);
+}
+
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent)
@@ -280,8 +291,7 @@ MainWindow::MainWindow(QWidget* parent)
         primary().levelSelector, primary().levelSelector->view()));
     sliceToolbar->addWidget(primary().levelSelector);
     sliceToolbar->addSeparator();
-    // 3-D shared slice positions: one compact spinbox per axis. The whole
-    // group stays hidden for 2-D datasets.
+    // 3-D shared slice positions: one compact spinbox per axis.
     m_slicePositionControls = new QWidget(sliceToolbar);
     auto* positionLayout = new QHBoxLayout(m_slicePositionControls);
     positionLayout->setContentsMargins(0, 0, 0, 0);
@@ -320,12 +330,11 @@ MainWindow::MainWindow(QWidget* parent)
                     primary().session->metadata(), level, axis, index));
             });
     }
+    // Always shown, greyed out without a 3-D dataset, so the toolbar keeps
+    // one layout.
     sliceToolbar->addWidget(m_slicePositionControls);
-    // Separator between the Position group and Scale. It tracks the Position
-    // group's visibility (see setSlicePositionControlsVisible) so it does not
-    // dangle beside the Level separator when no dataset is loaded.
-    m_positionSeparator = sliceToolbar->addSeparator();
-    setSlicePositionControlsVisible(false);
+    sliceToolbar->addSeparator();
+    m_slicePositionControls->setEnabled(false);
 
     // A static "Scale:" label plus a state button, matching the Field:/Level:/
     // Range: label-and-widget pairs elsewhere on this toolbar (and the
@@ -400,7 +409,9 @@ MainWindow::MainWindow(QWidget* parent)
     m_rangeToolbar = addToolBar(tr("Color and Overlay Controls"));
     auto* rangeToolbar = m_rangeToolbar;
     rangeToolbar->setMovable(false);
-    rangeToolbar->addWidget(new QLabel(tr("Range:"), rangeToolbar));
+    auto* rangeLabel = new QLabel(tr("Range:"), rangeToolbar);
+    insetLeadingLabel(rangeLabel);
+    rangeToolbar->addWidget(rangeLabel);
     // The range mode, User min/max and Log, and the per-field memory behind
     // them; the separator before Log matches the per-group separators on the
     // Slice Controls toolbar, as does the one before Palette below.
@@ -421,6 +432,7 @@ MainWindow::MainWindow(QWidget* parent)
     auto& companion = m_layers[1];
     m_companionLabel = new QLabel(tr("Companion:"), m_companionToolbar);
     m_companionLabel->setObjectName(QStringLiteral("companionLabel"));
+    insetLeadingLabel(m_companionLabel);
     m_companionToolbar->addWidget(m_companionLabel);
     m_companionToolbar->addSeparator();
     m_companionToolbar->addWidget(new QLabel(tr("Field:"), m_companionToolbar));
@@ -1193,7 +1205,7 @@ void MainWindow::wirePanelSignals(ImageView* view, int normal)
     // raster. canvasScrolled cannot carry this: it fires only over a virtual
     // canvas, so a local fixed-scale scroll emitted nothing at all.
     connect(view, &ImageView::viewportMoved, this,
-        [this] { m_volumeController->regionChanged(); });
+        [this] { m_volumeController->regionChanged(); refreshScanAction(); });
     // Whatever moved the scene under the screen -- zoom, fit, scale, stretch,
     // scroll, resize -- a mapped view's warp is drawn for the screen, so it
     // is asked for again (a no-op for every other view).
@@ -1202,6 +1214,10 @@ void MainWindow::wirePanelSignals(ImageView* view, int normal)
             for (auto* state : states()) {
                 updateMappedDemand(*state);
             }
+        });
+    connect(view, &ImageView::scanStepRequested, this,
+        [this, leading](const QPointF& direction) {
+            if (auto* state = leading()) applyScanStep(*state, direction);
         });
     connect(view, &ImageView::panStepRequested, this,
         [this, leading](const QPointF& direction) {
@@ -1295,6 +1311,7 @@ void MainWindow::setActiveView(PlaneViewState& state)
         m_activeView->view->setActiveBorder(false);
     }
     m_activeView = &state;
+    refreshScanAction();
     updateLineToolAvailability(state);
     if (m_viewDimension == 3 && !sameView) {
         state.view->setActiveBorder(true);
@@ -2181,6 +2198,7 @@ void MainWindow::createMenus()
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
     viewMenu->addAction(m_navigationBack);
     viewMenu->addAction(m_navigationForward);
+    viewMenu->addAction(m_fixedCrosshairAction);
     viewMenu->addMenu(scaleMenu);
     auto* lineMenu = viewMenu->addMenu(tr("Line orientation"));
     for (auto* action : m_lineOrientationGroup->actions()) {

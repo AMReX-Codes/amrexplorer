@@ -1082,8 +1082,20 @@ Outcome dispatchZoom(Context& context)
                 QObject::connect(&window,
                     &amrvis::qt::MainWindow::interactiveSlicesSettled,
                     &application, [&window, &application] {
-                        application.exit(
-                            window.allViewsRubberBandZoomedForTest() ? 0 : 1);
+                        if (!window.allViewsRubberBandZoomedForTest()) {
+                            application.exit(1);
+                            return;
+                        }
+                        // Two quick right-clicks arrive as a right double
+                        // click; it moves the slices, not reset the zoom.
+                        const auto scale = window.scaleUiLabelForTest();
+                        QObject::connect(&window,
+                            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                            &application, [&window, &application, scale] {
+                                application.exit(window.allViewsRubberBandZoomedForTest()
+                                    && window.scaleUiLabelForTest() == scale ? 0 : 5);
+                            }, Qt::SingleShotConnection);
+                        window.rightDoubleClickActiveViewForTest();
                     }, Qt::SingleShotConnection);
                 window.rubberBandZoomActiveViewForTest();
             });

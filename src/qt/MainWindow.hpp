@@ -258,6 +258,7 @@ public:
     [[nodiscard]] ImageView* navigationViewForTest() const { return m_activeView->view; }
     void navigationRefreshForTest();
     void navigationZoomForTest();
+    [[nodiscard]] std::optional<QPointF> navigationAnchorForTest() { return scanAnchor(*m_activeView); }
     [[nodiscard]] bool navigationWorkerWaitingForTest() const;
     void armSliceGateForTest();
     void releaseSliceGateForTest();
@@ -322,6 +323,8 @@ public:
     // Test-only: a plain right click at a viewport position of the active
     // view, as the mouse would deliver it.
     void rightClickActiveViewForTest(const QPoint& viewportPosition);
+    // Press, release, double click, release: Qt's order for two quick clicks.
+    void rightDoubleClickActiveViewForTest();
     [[nodiscard]] bool activeViewScrollBarsVisibleForTest() const;
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;
@@ -658,10 +661,14 @@ private:
         int factor = 1;
         bool virtualCanvas = false;
         std::optional<QRectF> pairWindow;
+        // Pending only: a scan moved this window, so its guides hold still
+        // until the raster arrives. Not part of equality.
+        bool scan = false;
         bool operator==(const NavigationPanel& other) const;
     };
     struct NavigationSnapshot {
         std::vector<NavigationPanel> panels;
+        std::optional<std::array<double, 3>> slicePositions;
         bool operator==(const NavigationSnapshot&) const = default;
     };
     class NavigationScope {
@@ -672,6 +679,21 @@ private:
         MainWindow& m_window;
         bool m_owner;
     };
+    class ScanScope {
+    public:
+        ScanScope(MainWindow& window, PlaneViewState& state);
+        ~ScanScope();
+        [[nodiscard]] bool active() const { return m_anchor.has_value(); }
+    private:
+        MainWindow& m_window;
+        PlaneViewState& m_state;
+        std::optional<QPointF> m_anchor;
+    };
+    [[nodiscard]] std::optional<QPointF> scanAnchor(PlaneViewState& state);
+    void scanAtAnchor(PlaneViewState& state, const QPointF& anchor);
+    void setSlicePositions(const std::array<double, 3>& positions);
+    void applyScanStep(PlaneViewState& state, const QPointF& direction);
+    void refreshScanAction();
     void setupNavigation();
     void connectNavigation(ImageView* view);
     void beginNavigation(ImageView::NavigationKind kind, ImageView* view);
@@ -1479,9 +1501,6 @@ private:
 
     // Shared 3-D slice positions (physical coordinates per axis).
     void configureSlicePositionControls();
-    // Show or hide the Position group together with its trailing toolbar
-    // separator, so the separator never dangles when no dataset is loaded.
-    void setSlicePositionControlsVisible(bool visible);
     void setSlicePosition(int axis, double value);
     // Pushes m_slicePosition3d to everything that draws the planes: the iso
     // quadrant and, when it is open, the volume window. Every writer that
@@ -1637,7 +1656,6 @@ private:
     QDialog* m_axisScalingDialog = nullptr;
     UserGuideDialog* m_userGuideDialog = nullptr;
     QWidget* m_slicePositionControls = nullptr;
-    QAction* m_positionSeparator = nullptr;
     std::array<QSpinBox*, 3> m_sliceSpinboxes{nullptr, nullptr, nullptr};
     QTimer* m_sliceDebounce = nullptr;
     NavigationHistory<NavigationSnapshot> m_navigationHistory;
@@ -1646,6 +1664,9 @@ private:
     ImageView::NavigationKind m_navigationKind = ImageView::NavigationKind::Action;
     ImageView* m_navigationView = nullptr;
     QTimer* m_navigationTimer = nullptr;
+    QAction* m_fixedCrosshairAction = nullptr;
+    bool m_temporaryScan = false;
+    std::optional<QPointF> m_scanDragAnchor;
     QAction* m_navigationBack = nullptr;
     QAction* m_navigationForward = nullptr;
     bool m_restoringNavigation = false;

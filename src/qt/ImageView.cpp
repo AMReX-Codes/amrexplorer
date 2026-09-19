@@ -727,6 +727,15 @@ std::size_t ImageView::crosshairCount() const noexcept
     return count;
 }
 
+std::optional<QPointF> ImageView::crosshairViewportIntersection(std::size_t index) const
+{
+    const auto* tile = tileIfPresent(index);
+    if (!tile || !tile->item || !tile->crosshairVertical || !tile->crosshairHorizontal)
+        return std::nullopt;
+    const QPointF point(tile->crosshairVertical->x1(), tile->crosshairHorizontal->y1());
+    return viewportTransform().map(tile->item->mapToScene(point));
+}
+
 std::size_t ImageView::pointOverlayCount() const noexcept
 {
     std::size_t count = 0;
@@ -1210,6 +1219,12 @@ void ImageView::panViewport(const QPoint& delta)
 
 void ImageView::mouseDoubleClickEvent(QMouseEvent* event)
 {
+    // Only a left double click resets the zoom; a quick second right click
+    // (moving the slices again) is another press.
+    if (event->button() != Qt::LeftButton) {
+        mousePressEvent(event);
+        return;
+    }
     if (hasImage()) {
         emit navigationBegan(NavigationKind::Action);
         fitToWindow();
@@ -1466,28 +1481,35 @@ void ImageView::keyPressEvent(QKeyEvent* event)
     // would leave arrow panning dead there. The QShortcut binding this
     // replaced normalized that away for us.
     const auto modifiers = event->modifiers() & ~Qt::KeypadModifier;
-    if (hasImage() && modifiers == Qt::NoModifier
+    if (hasImage() && (modifiers == Qt::NoModifier || modifiers == Qt::ShiftModifier)
         && event->key() >= Qt::Key_Left && event->key() <= Qt::Key_Down) {
         if (m_navigationKey != 0 && m_navigationKey != event->key()) {
             emit navigationEnded();
         }
         m_navigationKey = event->key();
         emit navigationBegan(NavigationKind::Key);
+        const auto step = [this, modifiers](const QPointF& direction) {
+            if (modifiers == Qt::ShiftModifier) {
+                emit scanStepRequested(direction);
+            } else {
+                emit panStepRequested(direction);
+            }
+        };
         switch (event->key()) {
         case Qt::Key_Left:
-            emit panStepRequested(QPointF(1.0, 0.0));
+            step(QPointF(1.0, 0.0));
             event->accept();
             return;
         case Qt::Key_Right:
-            emit panStepRequested(QPointF(-1.0, 0.0));
+            step(QPointF(-1.0, 0.0));
             event->accept();
             return;
         case Qt::Key_Up:
-            emit panStepRequested(QPointF(0.0, 1.0));
+            step(QPointF(0.0, 1.0));
             event->accept();
             return;
         case Qt::Key_Down:
-            emit panStepRequested(QPointF(0.0, -1.0));
+            step(QPointF(0.0, -1.0));
             event->accept();
             return;
         default:

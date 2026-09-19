@@ -418,21 +418,12 @@ void MainWindow::publishSlicePositions()
     m_volumeController->slicePositionsChanged();
 }
 
-void MainWindow::setSlicePositionControlsVisible(bool visible)
-{
-    m_slicePositionControls->setVisible(visible);
-    if (m_positionSeparator != nullptr) {
-        m_positionSeparator->setVisible(visible);
-    }
-}
-
 void MainWindow::configureSlicePositionControls()
 {
     if (!primary().session) {
-        setSlicePositionControlsVisible(false);
+        m_slicePositionControls->setEnabled(false);
         return;
     }
-    setSlicePositionControlsVisible(true);
     const auto& md = primary().session->metadata();
 
     if (md.dimension != 3) {
@@ -494,49 +485,59 @@ int MainWindow::sliceIndexLevel() const
 
 void MainWindow::setSlicePosition(int axis, double value)
 {
-    if (!primary().session || primary().session->metadata().dimension != 3) {
-        return;
-    }
+    if (axis < 0 || axis >= 3 || !primary().session
+        || primary().session->metadata().dimension != 3) return;
     const auto ax = static_cast<std::size_t>(axis);
-    // With a companion the position ranges over both domains together.
     const auto domain = m_pair ? m_pair->unionBounds
                                : datasetSampleBounds(primary().session->metadata());
-    const auto position = std::clamp(value, domain.lower[ax],
+    auto positions = m_slicePosition3d;
+    // Clamped as setSlicePositions will, so a request that cannot move the
+    // slice keeps the history.
+    positions[ax] = std::clamp(value, domain.lower[ax],
         std::nextafter(domain.upper[ax], domain.lower[ax]));
-    if (position != m_slicePosition3d[ax]) clearNavigation();
-    m_slicePosition3d[ax] = position;
-    {
+    if (positions != m_slicePosition3d) clearNavigation();
+    setSlicePositions(positions);
+}
+
+void MainWindow::setSlicePositions(const std::array<double, 3>& positions)
+{
+    if (!primary().session || primary().session->metadata().dimension != 3) return;
+    const auto domain = m_pair ? m_pair->unionBounds
+                               : datasetSampleBounds(primary().session->metadata());
+    std::array<bool, 3> changed{};
+    for (std::size_t ax = 0; ax < 3; ++ax) {
+        if (!std::isfinite(positions[ax])) continue;
+        const double position = std::clamp(positions[ax], domain.lower[ax],
+            std::nextafter(domain.upper[ax], domain.lower[ax]));
+        changed[ax] = position != m_slicePosition3d[ax];
+        m_slicePosition3d[ax] = position;
+    }
+    if (std::none_of(changed.begin(), changed.end(), [](bool value) { return value; })) return;
+    const auto level = sliceIndexLevel();
+    for (std::size_t ax = 0; ax < 3; ++ax) {
+        if (!changed[ax]) continue;
+        const int axis = static_cast<int>(ax);
         const QSignalBlocker blocker(m_sliceSpinboxes[ax]);
-        const auto level = sliceIndexLevel();
         if (m_pair) {
             m_sliceSpinboxes[ax]->setValue(axis == m_pair->perpendicularAxis
-                ? m_pair->stackedIndexForPosition(position)
-                : m_pair->unionIndexForPosition(axis, position));
+                ? m_pair->stackedIndexForPosition(m_slicePosition3d[ax])
+                : m_pair->unionIndexForPosition(axis, m_slicePosition3d[ax]));
         } else if (level >= 0 && static_cast<std::size_t>(level)
             < primary().session->metadata().levels.size()) {
             m_sliceSpinboxes[ax]->setValue(sliceIndexForPosition(
-                primary().session->metadata(), level, axis, position));
+                primary().session->metadata(), level, axis, m_slicePosition3d[ax]));
         }
     }
     publishSlicePositions();
-    // The cached full-domain Visible range is now stale — and so is any
-    // pending deferred store, whose union was computed from pre-move planes.
     m_displayCoordinator.invalidateRangeCache();
-    for (auto& layer : m_layers) {
-        layer.pendingRangeStore.reset();
-    }
-    // The other two views only need their crosshair guides redrawn; the view
-    // normal to the moved axis gets a fresh (debounced) slice.
+    for (auto& layer : m_layers) layer.pendingRangeStore.reset();
     updateCrosshairs();
-    // The layer the position just left keeps the slice it shows: hidden
-    // now, a slice at its face would only replace the tile held on show
-    // until the incoming layer's lands (updateShownLayers). It slices again
-    // when the position comes back into it.
-    for (auto* state : statesForPanel(axis)) {
-        if (m_pair && !stateShown(*state)) {
-            continue;
+    for (std::size_t ax = 0; ax < 3; ++ax) {
+        if (!changed[ax]) continue;
+        for (auto* state : statesForPanel(static_cast<int>(ax))) {
+            if (m_pair && !stateShown(*state)) continue;
+            scheduleSliceRequest(*state);
         }
-        scheduleSliceRequest(*state);
     }
     updateShownLayers();
 }
@@ -1170,12 +1171,47 @@ void MainWindow::updateCrosshairs(PlaneViewState& state)
             horizontalColor = sliceAxisColor(axes[1]);
         }
     }
+    if (const auto pending = m_navigationPending.find(&state);
+        !m_pair && !isWarped(state.warp) && pending != m_navigationPending.end()
+        && pending->second.scan && m_viewDimension == 3 && m_slicePlanesAction->isChecked()
+        && state.view->hasImage()) {
+        // During a data pan the requested region moves before its raster
+        // arrives. Place the guides through that requested window, so a
+        // fixed-crosshair scan does not flash moving guides on the old frame.
+        const auto window = captureNavigationPanel(state).window;
+        const auto axes = displayAxes(state.normal);
+        const auto x = static_cast<std::size_t>(axes[0]);
+        const auto y = static_cast<std::size_t>(axes[1]);
+        const auto region = state.visibleRegion.value_or(state.plane->physicalRegion);
+        if (!window.isEmpty()) {
+            const QPointF screen(
+                (m_slicePosition3d[x] - window.x()) / window.width() * state.view->viewport()->width(),
+                (-m_slicePosition3d[y] - window.y()) / window.height() * state.view->viewport()->height());
+            const auto scene = state.view->viewportTransform().inverted().map(screen);
+            const auto tile = state.view->tileSceneRect(state.tile);
+            if (!tile.isEmpty()) {
+                const auto width = static_cast<double>(state.view->image(state.tile).width());
+                const auto height = static_cast<double>(state.view->image(state.tile).height());
+                const auto px = (scene.x() - tile.x()) / tile.width() * width;
+                const auto py = (scene.y() - tile.y()) / tile.height() * height;
+                if (m_slicePosition3d[x] >= region.lower[x] && m_slicePosition3d[x] < region.upper[x]) {
+                    vertical = QLineF(px, 0, px, height);
+                    verticalColor = sliceAxisColor(axes[0]);
+                } else vertical.reset();
+                if (m_slicePosition3d[y] >= region.lower[y] && m_slicePosition3d[y] < region.upper[y]) {
+                    horizontal = QLineF(0, py, width, py);
+                    horizontalColor = sliceAxisColor(axes[1]);
+                } else horizontal.reset();
+            }
+        }
+    }
     state.view->setCrosshairs(vertical, horizontal, verticalColor,
         horizontalColor, state.tile);
 }
 
 void MainWindow::updateCrosshairs()
 {
+    refreshScanAction();
     for (auto* state : currentViews()) {
         updateCrosshairs(*state);
     }

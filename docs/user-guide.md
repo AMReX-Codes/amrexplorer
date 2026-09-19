@@ -274,6 +274,7 @@ The active panel is the one most recently clicked or manipulated.
 | Escape | Cancel a rectangle or line selection before releasing the mouse |
 | Shift+left drag | Pan the view |
 | Arrow keys | Pan the focused panel by 5 percent (click a panel to focus it) |
+| Shift+arrow keys | Pan with the crosshair fixed and scan the other two slices |
 | Mouse wheel | Zoom only the panel under the pointer |
 | Double click | Reset the zoom to the whole domain |
 | Shift+middle click | Plot a horizontal line through the selected sample |
@@ -285,6 +286,12 @@ The active panel is the one most recently clicked or manipulated.
 explicitly, including for Shift+right-click. On a Mac trackpad, Control-click
 supplies the right click. **Auto** chooses from the first clear drag direction
 and keeps it until release.
+
+Enable **Keep crosshair fixed while panning** in the View menu (the **Fixed
+crosshair** toolbar button) to move the image beneath the guides and scan the
+other two slices. Shift+arrow does this temporarily. It requires Cartesian 3-D
+views with both slice guides visible and their intersection on screen. The mode
+also works with Cartesian companion datasets; warped views do not offer it.
 
 The **Scale** control offers fixed zooms from 1x to 32x, where the factor is
 screen pixels per finest-level cell. A very wide local domain cannot be shown

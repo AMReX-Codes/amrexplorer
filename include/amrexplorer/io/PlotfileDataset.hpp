@@ -106,6 +106,7 @@ public:
     [[nodiscard]] CacheMetrics cacheMetrics() const;
     [[nodiscard]] bool setCacheBudget(std::uint64_t bytes);
     void clearUnpinnedCache();
+    void setSharedCacheBudget(std::shared_ptr<SharedCacheBudget> budget);
 
 private:
     struct MappedGridTag {};

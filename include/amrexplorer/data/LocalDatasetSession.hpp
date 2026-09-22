@@ -150,6 +150,8 @@ public:
     // which is what a user setting one number wants -- but a server applying
     // a *client's* requested budget must not let it raise the sampled-grid
     // cache past the limit the operator set with --volume-cache-mib.
+    void setSharedCacheBudget(std::shared_ptr<SharedCacheBudget> budget);
+
     [[nodiscard]] bool setBlockCacheBudget(std::uint64_t bytes);
 
     // The sampled-grid pool on its own. cacheMetrics() reports the block

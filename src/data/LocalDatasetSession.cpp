@@ -554,6 +554,11 @@ bool LocalDatasetSession::setVolumeGridCacheBudget(std::uint64_t bytes)
     return m_volumeGrids.setBudget(bytes);
 }
 
+void LocalDatasetSession::setSharedCacheBudget(std::shared_ptr<SharedCacheBudget> budget) {
+    requireDataset()->setSharedCacheBudget(budget);
+    m_volumeGrids.setSharedBudget(std::move(budget));
+}
+
 bool LocalDatasetSession::setBlockCacheBudget(std::uint64_t bytes)
 {
     return requireDataset()->setCacheBudget(bytes);

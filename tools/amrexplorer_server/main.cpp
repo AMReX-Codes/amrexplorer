@@ -1,5 +1,6 @@
 #include <amrexplorer/core/StopToken.hpp>
 #include <amrexplorer/core/Version.hpp>
+#include <amrexplorer/remote/MemoryLimit.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
 #include <cerrno>
@@ -9,6 +10,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -46,6 +48,10 @@ void printUsage(std::ostream& output)
         << "                       defaults to the 512^3 ceiling, so this is\n"
         << "                       only for tightening. A request asking for\n"
         << "                       more is clamped, not refused\n"
+        << "  --cache-memory-fraction FRACTION\n"
+        << "                       auto-size a shared block/grid cache allowance\n"
+        << "                       from the process memory limit (0 < value <= 1);\n"
+        << "                       for example 0.5; fails if detection is unavailable\n"
         << "  --volume-cache-mib MIB\n"
         << "                       per-dataset cache of sampled volume grids\n"
         << "  --write-stall-timeout-seconds SECONDS\n"
@@ -188,6 +194,7 @@ int main(int argc, char* argv[])
         amrvis::remote::ServerOptions options;
         // Whether either volume limit was given, for the warning below.
         bool volumeLimitsChosen = false;
+        std::optional<double> cacheMemoryFraction;
         // The same string --version prints, git description and all: it
         // reaches the client in the handshake, which is the one place where
         // "which build is running over there" is otherwise unanswerable.
@@ -214,7 +221,9 @@ int main(int argc, char* argv[])
                     "missing value after " + option);
             }
             const auto* value = argv[++index];
-            if (option == "--port") {
+            if (option == "--cache-memory-fraction") {
+                cacheMemoryFraction = amrvis::remote::parseCacheMemoryFraction(value);
+            } else if (option == "--port") {
                 options.port
                     = parseUnsigned<std::uint16_t>(value, "--port");
                 portGiven = true;
@@ -323,6 +332,21 @@ int main(int argc, char* argv[])
                          "--max-volume-voxels voxels, so a request asking for "
                          "that many will render uncached every time; smaller "
                          "requests still cache normally\n";
+        }
+
+        if (cacheMemoryFraction) {
+            const auto memory = amrvis::remote::detectMemoryLimit();
+            if (!memory) {
+                throw std::runtime_error("cannot detect the job/process memory limit; "
+                                         "check cgroup visibility or Slurm memory variables");
+            }
+            options.totalCacheBytes =
+                amrvis::remote::cacheBytesForFraction(memory->bytes, *cacheMemoryFraction);
+            if (!options.totalCacheBytes) {
+                throw std::runtime_error("cache memory fraction produces a zero-byte allowance");
+            }
+            std::cerr << "memory limit: " << memory->bytes << " bytes (" << memory->source
+                      << "); shared cache allowance: " << options.totalCacheBytes << " bytes\n";
         }
 
         std::signal(SIGINT, handleSignal);

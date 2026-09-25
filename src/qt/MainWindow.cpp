@@ -43,7 +43,7 @@ MainWindow::MainWindow(QWidget* parent)
     resize(960, 720);
 
     // The palette selection lives in its controller. Consumers keep a pointer
-    // to its palette(), the toolbar shows its selector, the View menu its
+    // to its palette(), the toolbar shows its selector, the Data menu its
     // menu, and paletteChanged (wired at the end of construction, once the
     // widgets its handler touches exist) drives the color bar and a re-render.
     m_paletteController = new PaletteController(this);
@@ -239,6 +239,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     auto* gridPage = new QWidget(m_stack);
     auto* gridLayout = new QGridLayout(gridPage);
+    m_panelGrid = gridLayout;
     gridLayout->setSpacing(2);
     gridLayout->setContentsMargins(2, 2, 2, 2);
     constexpr std::array<const char*, 3> viewLabels{"YZ", "XZ", "XY"};
@@ -1328,6 +1329,67 @@ void MainWindow::setActiveView(PlaneViewState& state)
     syncActiveViewColorControls(state);
 }
 
+void MainWindow::setMaximizedPanel(int panel)
+{
+    m_maximizedPanel = panel;
+    for (auto* action : m_panelGroup->actions()) {
+        if (action->data().toInt() == panel) {
+            action->setChecked(true);
+        }
+    }
+    m_maximizePanelAction->setChecked(panel != -1);
+    // Hiding the focused panel would hand the keyboard to a toolbar control,
+    // where the arrow keys change the field. Keep it on the panels instead,
+    // unless the user had it in a control.
+    const auto* focused = QApplication::focusWidget();
+    bool panelsHadFocus = focused == nullptr || focused == this || focused == m_isoWidget;
+    for (const auto& state : primary().planeViews) {
+        panelsHadFocus = panelsHadFocus || focused == state.view;
+    }
+    // A zoomed panel that stays on screen keeps showing the same region, only
+    // bigger or smaller; Fit and fixed scales refit on the resize themselves.
+    std::array<std::optional<QRectF>, 3> zoomedWindows;
+    for (int normal = 0; normal < 3; ++normal) {
+        auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+        if (view->isVisible() && view->transformMode() == ImageView::TransformMode::Custom) {
+            zoomedWindows[static_cast<std::size_t>(normal)]
+                = view->mapToScene(view->viewport()->rect()).boundingRect();
+        }
+    }
+    // Hidden panels keep rendering, so restoring the grid is instant.
+    for (int normal = 0; normal < 3; ++normal) {
+        primary().planeViews[static_cast<std::size_t>(normal)].view->setVisible(
+            panel == -1 || panel == normal);
+    }
+    m_isoWidget->setVisible(panel == -1 || panel == 3);
+    // Grid {row, column} by panel: YZ, XZ, XY, isometric. An empty row or
+    // column keeps its share of the page unless its stretch goes too.
+    constexpr std::array<std::array<int, 2>, 4> cells{{{1, 0}, {0, 1}, {0, 0}, {1, 1}}};
+    for (int index = 0; index < 2; ++index) {
+        const auto* cell = panel == -1 ? nullptr : &cells[static_cast<std::size_t>(panel)];
+        m_panelGrid->setRowStretch(index, cell == nullptr || (*cell)[0] == index ? 1 : 0);
+        m_panelGrid->setColumnStretch(index, cell == nullptr || (*cell)[1] == index ? 1 : 0);
+    }
+    m_panelGrid->activate();
+    for (int normal = 0; normal < 3; ++normal) {
+        auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+        if (const auto& window = zoomedWindows[static_cast<std::size_t>(normal)];
+            window && view->isVisible()) {
+            view->refitCustomWindow(*window);
+        }
+    }
+    if (panel >= 0 && panel < 3) {
+        setActiveView(primary().planeViews[static_cast<std::size_t>(panel)]);
+    }
+    if (panelsHadFocus) {
+        if (panel == 3) {
+            m_isoWidget->setFocus(::Qt::OtherFocusReason);
+        } else if (m_activeView != nullptr) {
+            m_activeView->view->setFocus(::Qt::OtherFocusReason);
+        }
+    }
+}
+
 void MainWindow::syncActiveViewColorControls(const PlaneViewState& state)
 {
     // The color scale and range boxes track the active view. Precision first,
@@ -2172,6 +2234,41 @@ void MainWindow::createMenus()
     }
     m_isoWidget->setSlicePlanesVisible(true);
 
+    // One 3-D panel can fill the grid: F toggles the active slice panel, the
+    // submenu picks any of the four.
+    m_panelMenu = new QMenu(tr("Panel L&ayout"), this);
+    m_panelMenu->setEnabled(false);
+    m_panelGroup = new QActionGroup(this);
+    struct PanelChoice {
+        int panel;
+        QString text;
+        const char* name;
+    };
+    const std::array<PanelChoice, 5> panelChoices{{
+        {-1, tr("&All Panels"), "panelAllAction"}, {2, tr("&XY"), "panelXyAction"},
+        {1, tr("X&Z"), "panelXzAction"}, {0, tr("&YZ"), "panelYzAction"},
+        {3, tr("&Isometric"), "panelIsometricAction"}}};
+    for (const auto& [panel, text, name] : panelChoices) {
+        auto* action = m_panelMenu->addAction(text);
+        action->setObjectName(QString::fromLatin1(name));
+        action->setCheckable(true);
+        action->setActionGroup(m_panelGroup);
+        action->setData(panel);
+        action->setChecked(panel == -1);
+        connect(action, &QAction::triggered,
+            this, [this, panel = panel] { setMaximizedPanel(panel); });
+    }
+    m_panelMenu->addSeparator();
+    m_maximizePanelAction = m_panelMenu->addAction(tr("&Maximize Active Panel"));
+    m_maximizePanelAction->setObjectName(QStringLiteral("maximizePanelAction"));
+    m_maximizePanelAction->setCheckable(true);
+    m_maximizePanelAction->setShortcut(QKeySequence(Qt::Key_F));
+    m_maximizePanelAction->setEnabled(false);
+    connect(m_maximizePanelAction, &QAction::triggered, this, [this] {
+        setMaximizedPanel(m_maximizedPanel == -1 && m_activeView != nullptr
+            ? m_activeView->normal : -1);
+    });
+
     m_contoursAction = new QAction(tr("&Contours..."), this);
     m_contoursAction->setObjectName(QStringLiteral("contoursAction"));
     m_contoursAction->setEnabled(false);
@@ -2189,69 +2286,67 @@ void MainWindow::createMenus()
     connect(m_datasetAction, &QAction::triggered,
         this, [this] { showDatasetWindow(); });
 
-    // Legacy View menu order: Contours..., Range..., Dataset..., Number
-    // Format... (the range lives in the toolbar here, not in a dialog).
-    auto* numberFormatAction = new QAction(tr("&Number Format..."), this);
-    connect(numberFormatAction, &QAction::triggered,
+    m_numberFormatAction = new QAction(tr("&Number Format..."), this);
+    connect(m_numberFormatAction, &QAction::triggered,
         this, [this] { showNumberFormatDialog(); });
 
+    // View: how the slice is looked at -- navigation, panels and geometry.
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
     viewMenu->addAction(m_navigationBack);
     viewMenu->addAction(m_navigationForward);
-    viewMenu->addAction(m_fixedCrosshairAction);
     viewMenu->addMenu(scaleMenu);
+    viewMenu->addAction(m_fixedCrosshairAction);
     auto* lineMenu = viewMenu->addMenu(tr("Line orientation"));
     for (auto* action : m_lineOrientationGroup->actions()) {
         lineMenu->addAction(action);
     }
-
-    viewMenu->addMenu(m_levelMenu);
-    viewMenu->addAction(m_boxesAction);
-    viewMenu->addAction(m_scaleBarAction);
-    viewMenu->addAction(lengthUnitsAction);
-    viewMenu->addAction(m_slicePlanesAction);
-    m_volumeAction = m_volumeController->createAction(this);
-    viewMenu->addAction(m_volumeAction);
-    viewMenu->addMenu(paletteMenu);
     viewMenu->addSeparator();
+    viewMenu->addMenu(m_panelMenu);
     viewMenu->addMenu(m_aspectMenu);
     viewMenu->addMenu(m_sphericalMenu);
     viewMenu->addMenu(m_mappedGridMenu);
     viewMenu->addSeparator();
-    viewMenu->addAction(m_contoursAction);
-    viewMenu->addAction(particlesAction);
-    viewMenu->addAction(m_datasetAction);
-    viewMenu->addAction(numberFormatAction);
-    viewMenu->addSeparator();
-    // Toolbar visibility toggles.
-    viewMenu->addAction(m_sliceToolbar->toggleViewAction());
-    viewMenu->addAction(m_rangeToolbar->toggleViewAction());
-    viewMenu->addSeparator();
-    // Panel visibility toggles. Color Scale is visible by default; Dataset
-    // Metadata and Diagnostics start hidden, and Animation is auto-shown for
-    // 3-D datasets and plotfile sequences.
-    viewMenu->addAction(m_metadataDock->toggleViewAction());
-    viewMenu->addAction(m_colorBarDock->toggleViewAction());
-    viewMenu->addAction(m_diagnosticsDock->toggleViewAction());
-    viewMenu->addAction(m_animationDock->toggleViewAction());
-    viewMenu->addAction(m_fabSelectorDock->toggleViewAction());
-    viewMenu->addSeparator();
-    // Application-wide rather than per-view, hence its own group at the end.
-    viewMenu->addMenu(m_themeController->createMenu(this));
+    m_volumeAction = m_volumeController->createAction(this);
+    viewMenu->addAction(m_volumeAction);
 
-    // Variable menu: lists all fields with a bullet on the active one.
-    m_variableMenu = menuBar()->addMenu(tr("Va&riable"));
+    // Data: the field shown, its level and colors, and its raw values.
+    // rebuildDataMenu fills it.
+    m_paletteMenu = paletteMenu;
+    m_dataMenu = menuBar()->addMenu(tr("&Data"));
     // Menus hide action tooltips unless asked: the derived fields carry their
     // expressions there, and the Expression Editor entry carries the reason it
     // is unavailable, neither of which reaches anyone otherwise.
-    m_variableMenu->setToolTipsVisible(true);
+    m_dataMenu->setToolTipsVisible(true);
     m_variableGroup = new QActionGroup(this);
-    // Owned by the window, not the menu, so rebuildVariableMenu's clear()
-    // leaves it alive to be re-added. The menu itself stays enabled with no
-    // dataset open so the editor's own (disabled) entry is discoverable.
+    // Owned by the window, not the menu, so rebuildDataMenu's clear()
+    // leaves it alive to be re-added.
     m_expressionEditorAction = m_derivedFields->createAction(this);
-    m_variableMenu->addAction(m_expressionEditorAction);
-    m_variableMenu->setEnabled(true);
+    rebuildDataMenu({});
+
+    // Overlays: what is drawn on top of the slice.
+    auto* overlaysMenu = menuBar()->addMenu(tr("&Overlays"));
+    overlaysMenu->addAction(m_boxesAction);
+    overlaysMenu->addAction(m_slicePlanesAction);
+    overlaysMenu->addAction(m_scaleBarAction);
+    overlaysMenu->addAction(lengthUnitsAction);
+    overlaysMenu->addSeparator();
+    overlaysMenu->addAction(m_contoursAction);
+    overlaysMenu->addAction(particlesAction);
+
+    // Window: toolbars, dock panels and the skin. Color Scale is visible by
+    // default; Dataset Metadata and Diagnostics start hidden, and Animation
+    // is auto-shown for 3-D datasets and plotfile sequences.
+    auto* windowMenu = menuBar()->addMenu(tr("&Window"));
+    windowMenu->addAction(m_sliceToolbar->toggleViewAction());
+    windowMenu->addAction(m_rangeToolbar->toggleViewAction());
+    windowMenu->addSeparator();
+    windowMenu->addAction(m_metadataDock->toggleViewAction());
+    windowMenu->addAction(m_colorBarDock->toggleViewAction());
+    windowMenu->addAction(m_diagnosticsDock->toggleViewAction());
+    windowMenu->addAction(m_animationDock->toggleViewAction());
+    windowMenu->addAction(m_fabSelectorDock->toggleViewAction());
+    windowMenu->addSeparator();
+    windowMenu->addMenu(m_themeController->createMenu(this));
 
     auto* helpMenu = menuBar()->addMenu(tr("&Help"));
     auto* guideAction = new QAction(tr("&User Guide..."), this);
@@ -2349,25 +2444,33 @@ void MainWindow::syncMenuChecks()
     }
 }
 
-void MainWindow::rebuildVariableMenu(const std::vector<DerivedFieldRow>& rows)
+void MainWindow::rebuildDataMenu(const std::vector<DerivedFieldRow>& rows)
 {
-    m_variableMenu->clear();
-    // The menu stays enabled with nothing open: it then holds the Expression
-    // Editor entry alone, greyed out with the reason on its tooltip, which is
-    // more discoverable than a menu that cannot be opened at all.
-    m_variableMenu->setEnabled(true);
-    if (!primary().session) {
-        m_variableMenu->addAction(m_expressionEditorAction);
+    // clear() only removes: the submenus and actions belong to the window.
+    // With nothing open the fields are absent and the rest stays reachable,
+    // disabled entries carrying their reasons.
+    m_dataMenu->clear();
+    m_dataMenu->addMenu(m_levelMenu);
+    m_dataMenu->addMenu(m_paletteMenu);
+    const auto addTail = [this] {
+        m_dataMenu->addSeparator();
+        m_dataMenu->addAction(m_expressionEditorAction);
+        m_dataMenu->addAction(m_datasetAction);
+        m_dataMenu->addAction(m_numberFormatAction);
         m_derivedFields->refreshAvailability();
+    };
+    if (!primary().session) {
+        addTail();
         return;
     }
+    m_dataMenu->addSeparator();
     const auto& metadata = primary().session->metadata();
     const auto currentField = primary().fieldSelector->currentIndex() >= 0
         ? primary().fieldSelector->currentData().toUInt() : 0;
     const auto stored = storedFieldCount();
     const auto addField = [this, currentField](
                               const QString& name, std::size_t field) {
-        auto* action = m_variableMenu->addAction(name);
+        auto* action = m_dataMenu->addAction(name);
         // Returned rather than looked up again: QMenu::actions() copies the
         // whole list, and "the one just added is last" stops being true the
         // moment addField grows a separator or a submenu.
@@ -2394,21 +2497,17 @@ void MainWindow::rebuildVariableMenu(const std::vector<DerivedFieldRow>& rows)
 
     // The same rows the field selector was given, dimmed the same way.
     if (!rows.empty()) {
-        m_variableMenu->addSeparator();
+        m_dataMenu->addSeparator();
     }
     for (const auto& row : rows) {
         auto* action = row.field
             ? addField(row.name, static_cast<std::size_t>(*row.field))
-            : m_variableMenu->addAction(row.name);
+            : m_dataMenu->addAction(row.name);
         action->setEnabled(row.field.has_value());
         action->setToolTip(row.tooltip);
     }
 
-    // Re-added after every rebuild: clear() above only *removes* it, because
-    // the action belongs to the window rather than to the menu.
-    m_variableMenu->addSeparator();
-    m_variableMenu->addAction(m_expressionEditorAction);
-    m_derivedFields->refreshAvailability();
+    addTail();
 }
 
 void MainWindow::syncVariableMenu()

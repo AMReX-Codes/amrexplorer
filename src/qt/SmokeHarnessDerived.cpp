@@ -29,13 +29,13 @@
 #include <string_view>
 #include <vector>
 
-// Derived fields: the Variable menu's Expression Editor over a local
+// Derived fields: the Data menu's Expression Editor over a local
 // plotfile, driven through the real action, the real dialog widgets and the
 // real Apply, which reopens the dataset with the definition installed. What
 // this covers and the data-layer tests cannot: that the action is reachable
 // and enabled, that a refused definition is reported in the dialog and
 // changes nothing, and that an accepted one reaches the field selector and
-// the Variable menu and renders when selected. The values themselves are
+// the Data menu and renders when selected. The values themselves are
 // test_derived_field_query's business.
 
 namespace amrvis::qt::smoke {
@@ -773,31 +773,31 @@ void armDerivedChecks(amrvis::qt::MainWindow& window, QApplication& application)
                     finish(9);
                     return;
                 }
-                // And the Variable menu, which is the same selection shown
+                // And the Data menu, which is the same selection shown
                 // twice and has its own rebuild. That menu alone: scanning
                 // every menu would pass on the name turning up anywhere at
                 // all, which is not what the failure below claims.
-                const QMenu* variableMenu = nullptr;
+                const QMenu* dataMenu = nullptr;
                 for (const auto* menuAction : window.menuBar()->actions()) {
                     auto* menu = menuAction->menu();
                     if (menu != nullptr
                         && menuAction->text().remove(QLatin1Char('&'))
-                            == QStringLiteral("Variable")) {
-                        variableMenu = menu;
+                            == QStringLiteral("Data")) {
+                        dataMenu = menu;
                     }
                 }
-                if (variableMenu == nullptr) {
-                    qCritical("there is no Variable menu to look in");
+                if (dataMenu == nullptr) {
+                    qCritical("there is no Data menu to look in");
                     finish(10);
                     return;
                 }
                 bool inVariableMenu = false;
-                for (const auto* entry : variableMenu->actions()) {
+                for (const auto* entry : dataMenu->actions()) {
                     inVariableMenu = inVariableMenu
                         || entry->text() == QStringLiteral("product");
                 }
                 if (!inVariableMenu) {
-                    qCritical("the derived field did not reach the Variable "
+                    qCritical("the derived field did not reach the Data "
                               "menu");
                     finish(10);
                     return;

@@ -205,13 +205,24 @@ Outcome dispatchShortcuts(Context& context)
                 // actual menus, so an early signal cannot silently erase the
                 // populated-state coverage again.
                 const auto menus = window.findChildren<QMenu*>();
-                for (const auto* name : {"Variable", "Level"}) {
+                // The Data menu's fixed entries are there even with nothing
+                // open; its fields are the checkable ones.
+                const auto entries = [](const QMenu* menu, bool fieldsOnly) {
+                    const auto actions = menu->actions();
+                    return fieldsOnly ? std::count_if(actions.begin(), actions.end(),
+                                            [](const QAction* action) {
+                                                return action->isCheckable();
+                                            })
+                                      : static_cast<std::ptrdiff_t>(actions.size());
+                };
+                for (const auto* name : {"Data", "Level"}) {
                     const auto found = std::find_if(menus.begin(), menus.end(),
                         [name](const QMenu* menu) {
                             return QString(menu->title()).remove('&')
                                 == QString::fromLatin1(name);
                         });
-                    if (found == menus.end() || (*found)->actions().size() < 3) {
+                    const bool data = std::string_view(name) == "Data";
+                    if (found == menus.end() || entries(*found, data) < (data ? 2 : 3)) {
                         qCritical("Menu shortcut test: %s menu was not populated",
                             name);
                         application.exit(1);

@@ -188,7 +188,7 @@ void DerivedFieldController::refreshAvailability()
     const auto usable = reason.isEmpty();
     if (m_action) {
         m_action->setEnabled(usable);
-        // Never empty: the Variable menu shows tooltips (for the derived
+        // Never empty: the Data menu shows tooltips (for the derived
         // rows), and QAction falls back to its own text, so an empty one pops
         // a tooltip repeating the entry's label.
         m_action->setToolTip(usable

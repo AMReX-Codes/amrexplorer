@@ -3,15 +3,18 @@
 #include "MainWindow.hpp"
 
 #include <QAction>
+#include <QApplication>
 #include <QComboBox>
 #include <QDir>
 #include <QFileInfo>
 #include <QKeySequence>
+#include <QRectF>
 #include <QRunnable>
 #include <QThreadPool>
 #include <QTreeWidget>
 #include <QTimer>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -211,12 +214,170 @@ Outcome dispatchLifecycle(Context& context)
             });
         QTimer::singleShot(15000, &application, [&application] { application.exit(4); });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 5
+        && std::string_view(argv[1]) == "--panel-layout-smoke-test") {
+        // View > Panel Layout on a 3-D plotfile: F maximizes the active slice
+        // panel and restores the grid, a zoomed panel keeps its framing, and
+        // the submenu picks any panel. A maximized slice panel stays the
+        // active one across a reopen and a 2-D -> 3-D sequence; a 2-D
+        // plotfile offers neither control.
+        const std::filesystem::path path3d(argv[2]);
+        const std::filesystem::path second3d(argv[3]);
+        const std::filesystem::path path2d(argv[4]);
+        auto opened = std::make_shared<int>(0);
+        const auto fail = [&application](const char* message) {
+            qCritical("%s", message);
+            application.exit(1);
+        };
+        const auto only = [&window](int panel) {
+            for (int other = 0; other < 4; ++other) {
+                if (window.panelWidgetForTest(other)->isVisibleTo(&window)
+                    != (other == panel || panel == -1)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        // Still the region shown before the resize: contained in what is shown
+        // now, and filling it along at least one axis.
+        const auto sameFraming = [](const QRectF& before, const QRectF& after) {
+            const auto slack = 0.02 * std::max(before.width(), before.height());
+            return after.adjusted(-slack, -slack, slack, slack).contains(before)
+                && std::min(after.width() / before.width(),
+                       after.height() / before.height()) < 1.05;
+        };
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, opened, fail, only, sameFraming, path3d,
+                              second3d, path2d](bool success) {
+                if (!success) {
+                    fail("a plotfile did not open");
+                    return;
+                }
+                auto* maximize = window.findChild<QAction*>(
+                    QStringLiteral("maximizePanelAction"));
+                if (maximize == nullptr) {
+                    fail("Maximize Active Panel is missing");
+                    return;
+                }
+                const auto stage = ++*opened;
+                if (stage == 2) {
+                    if (window.maximizedPanelForTest() != 0 || !only(0)
+                        || window.navigationViewForTest() != window.panelWidgetForTest(0)) {
+                        fail("reopening lost the maximized YZ panel as the active one");
+                        return;
+                    }
+                    QTimer::singleShot(0, &window, [&window, path2d] { window.openDataset(path2d); });
+                    return;
+                }
+                if (stage == 3) {
+                    if (maximize->isEnabled()) {
+                        fail("Maximize Active Panel is offered on a 2-D plotfile");
+                        return;
+                    }
+                    QTimer::singleShot(0, &window, [&window, path3d, second3d] {
+                        window.openSequence({path3d, second3d});
+                    });
+                    return;
+                }
+                if (!maximize->isEnabled()
+                    || !maximize->shortcuts().contains(QKeySequence(Qt::Key_F))) {
+                    fail("Maximize Active Panel is not offered on 3-D with F as its key");
+                    return;
+                }
+                // Qt appends the display name; the title must not repeat it.
+                if (window.windowTitle().contains(QGuiApplication::applicationDisplayName())) {
+                    fail("the window title repeats the application name");
+                    return;
+                }
+                window.activateWindow();
+                window.setActiveViewForTest(1);
+                window.navigationViewForTest()->setFocus();
+                // Switching panels must leave the keyboard on the one shown:
+                // on a toolbar control the arrow keys change the field.
+                const auto focusOn = [&window](int panel) {
+                    return QApplication::focusWidget() == window.panelWidgetForTest(panel);
+                };
+                auto* xz = window.panelWidgetForTest(1);
+                const auto gridSize = xz->size();
+                maximize->trigger();
+                if (window.maximizedPanelForTest() != 1 || !only(1)
+                    || xz->width() < gridSize.width() * 3 / 2
+                    || xz->height() < gridSize.height() * 3 / 2) {
+                    fail("F did not let the active XZ panel fill the grid");
+                    return;
+                }
+                maximize->trigger();
+                if (window.maximizedPanelForTest() != -1 || !only(-1)
+                    || xz->size() != gridSize) {
+                    fail("F again did not restore the grid");
+                    return;
+                }
+                // Wheel zoom leaves the panel in a custom zoom, which a resize
+                // alone would show at the same scale over more of the plane.
+                const auto shown = [&window] {
+                    const auto* view = window.navigationViewForTest();
+                    return view->mapToScene(view->viewport()->rect()).boundingRect();
+                };
+                window.wheelActiveViewForTest(4);
+                const auto zoomed = shown();
+                maximize->trigger();
+                if (!sameFraming(zoomed, shown())) {
+                    fail("maximizing a zoomed panel changed the region it shows");
+                    return;
+                }
+                maximize->trigger();
+                if (!sameFraming(zoomed, shown())) {
+                    fail("restoring a zoomed panel changed the region it shows");
+                    return;
+                }
+                auto* isometric = window.findChild<QAction*>(
+                    QStringLiteral("panelIsometricAction"));
+                auto* xzChoice = window.findChild<QAction*>(QStringLiteral("panelXzAction"));
+                auto* yz = window.findChild<QAction*>(QStringLiteral("panelYzAction"));
+                if (isometric == nullptr || xzChoice == nullptr || yz == nullptr) {
+                    fail("Panel Layout lacks the Isometric, XZ or YZ choice");
+                    return;
+                }
+                isometric->trigger();
+                if (!only(3) || !maximize->isChecked() || !focusOn(3)) {
+                    fail("Isometric did not show and focus the isometric view alone");
+                    return;
+                }
+                xzChoice->trigger();
+                if (!only(1) || !focusOn(1)) {
+                    fail("XZ after Isometric did not show and focus the XZ panel");
+                    return;
+                }
+                yz->trigger();
+                if (!only(0) || window.navigationViewForTest()
+                        != window.panelWidgetForTest(0) || !focusOn(0)) {
+                    fail("YZ after XZ did not show, activate and focus the YZ panel");
+                    return;
+                }
+                window.setActiveViewForTest(2);  // reopening must not keep this
+                QTimer::singleShot(0, &window, [&window, path3d] { window.openDataset(path3d); });
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, &application, fail, only](int index) {
+                if (index != 0) {
+                    return;
+                }
+                if (!only(0) || window.navigationViewForTest() != window.panelWidgetForTest(0)) {
+                    fail("a 2-D -> 3-D sequence lost the maximized YZ panel");
+                    return;
+                }
+                application.exit(0);
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [fail] { fail("a sequence frame failed"); });
+        QTimer::singleShot(20000, &application, [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window, [&window, path3d] { window.openDataset(path3d); });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--idle-ui-state-smoke-test") {
         // Two controls that are reachable before any dataset is, and used to
         // strand state there.
         //
-        // The Animation panel: shown from the View menu with nothing open, it
+        // The Animation panel: shown from the Window menu with nothing open, it
         // holds no controls at all, and an edge trigger on "does it apply"
         // never fired on the following open because the answer stayed false --
         // so an empty dock stayed parked for the session.

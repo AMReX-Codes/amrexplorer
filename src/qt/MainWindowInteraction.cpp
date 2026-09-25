@@ -712,6 +712,7 @@ void MainWindow::showKeyboardMouseReference()
         tr("Zoom this panel in or out / reset the zoom"));
     add(tr("B"), tr("Toggle AMR grid boxes"));
     add(tr("I"), tr("Toggle the slice planes (panel lines and isometric view)"));
+    add(tr("F"), tr("Maximize the active 3-D panel, or restore all four"));
     add(tr("0"), tr("Reset the zoom to the whole domain"));
     add(tr("1-6"), tr("Fixed zoom scales (1x-32x)"));
     add(tr("Ctrl+0"), tr("Composite the finest available level"));
@@ -730,8 +731,8 @@ void MainWindow::showKeyboardMouseReference()
     box.setTextFormat(Qt::RichText);
     box.setText(QStringLiteral("<table>%1</table>").arg(rows));
     box.setInformativeText(
-        tr("View \xE2\x86\x92 Number Format... sets the readout format; "
-           "the View menu shows or hides the panels."));
+        tr("Data \xE2\x86\x92 Number Format... sets the readout format; "
+           "the Window menu shows or hides the toolbars and docks."));
     box.setIcon(QMessageBox::NoIcon);
     box.exec();
 }

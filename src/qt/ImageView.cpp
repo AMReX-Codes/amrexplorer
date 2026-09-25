@@ -1121,16 +1121,32 @@ void ImageView::restoreNavigation(TransformMode mode, int factor,
         centerOn(window.center());
     } else {
         m_transformMode = TransformMode::Custom;
-        // The snapshot is the whole viewport, including its margins.
-        // fitSceneRect would add another margin on every Back/Forward.
-        for (int pass = 0; pass < 2; ++pass) {
-            const double scale = std::min(
-                viewport()->width() / (window.width() * m_stretch.x()),
-                viewport()->height() / (window.height() * m_stretch.y()));
-            setTransform(QTransform::fromScale(scale * m_stretch.x(), scale * m_stretch.y()));
-            centerOn(window.center());
-        }
+        applyCustomWindow(window);
     }
+    noteViewChanged();
+}
+
+void ImageView::applyCustomWindow(const QRectF& window)
+{
+    // The window is the whole viewport, including its margins; fitSceneRect
+    // would add another margin each time. Two passes, as the first rescale
+    // can add or remove scroll bars.
+    for (int pass = 0; pass < 2; ++pass) {
+        const double scale = std::min(
+            viewport()->width() / (window.width() * m_stretch.x()),
+            viewport()->height() / (window.height() * m_stretch.y()));
+        setTransform(QTransform::fromScale(scale * m_stretch.x(), scale * m_stretch.y()));
+        centerOn(window.center());
+    }
+}
+
+void ImageView::refitCustomWindow(const QRectF& window)
+{
+    if (!hasImage() || window.isEmpty() || m_transformMode != TransformMode::Custom) {
+        return;
+    }
+    applyCustomWindow(window);
+    emit viewportMoved();
     noteViewChanged();
 }
 

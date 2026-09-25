@@ -66,7 +66,7 @@ public:
 
     ParticleController(Hooks hooks, QObject* parent = nullptr);
 
-    // The View menu's Particles... action (opens the dialog; enabled while
+    // The Overlays menu's Particles... action (opens the dialog; enabled while
     // the dataset has species and no load is in flight) and the status-bar
     // progress indicator shown during a load. Owned by their parents.
     QAction* createAction(QObject* parent);

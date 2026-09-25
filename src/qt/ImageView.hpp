@@ -274,6 +274,9 @@ public:
                                        bool omitOuterGridEdges = false) const;
     void restoreNavigation(TransformMode mode, int factor,
         const QRectF& window, const QRectF& canvas);
+    // Custom zoom only: rescale so this scene window (a viewport captured
+    // before a resize) fills the viewport again. Other modes refit themselves.
+    void refitCustomWindow(const QRectF& window);
     void fitToWindow();
     void setFixedScale(int factor);
     void zoomBy(qreal factor);
@@ -448,6 +451,7 @@ private:
     // alpha-ramp palette, the spherical R-Z warp outside its sector) now
     // fits its whole rect, consistent with fixed scale and export.
     void fitSceneRect(const QRectF& rect);
+    void applyCustomWindow(const QRectF& window);
     void applyFixedScale();
     void applyPlacement();
     // Compare the view's scene-to-screen state with the last emission of

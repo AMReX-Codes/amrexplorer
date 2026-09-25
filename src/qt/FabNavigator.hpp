@@ -73,7 +73,7 @@ public:
 
     // The selector dock (hidden until a source has entries), wired to
     // viewEntry/backToMultiFab. Owned by `parent`; the host adds it to a
-    // dock area and its View menu.
+    // dock area and its Window menu.
     FabSelectorDock* createDock(QWidget* parent);
 
     // Reads FAB/MultiFab record headers and builds the selector entries. Runs

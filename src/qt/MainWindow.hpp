@@ -48,6 +48,7 @@ class QActionGroup;
 class QCloseEvent;
 class QComboBox;
 class QDockWidget;
+class QGridLayout;
 class QCheckBox;
 class QLabel;
 class QToolBar;
@@ -549,6 +550,10 @@ public:
     [[nodiscard]] QRectF activeViewPlaneRegionForTest() const;
     // Test-only: make the 3-D panel with this normal the active view.
     void setActiveViewForTest(int normal);
+    // Test-only: the widget of a 3-D panel (a plane normal, or 3 for the
+    // isometric view), and which one is maximized (-1 for none).
+    [[nodiscard]] QWidget* panelWidgetForTest(int panel) const;
+    [[nodiscard]] int maximizedPanelForTest() const { return m_maximizedPanel; }
     // Test-only: the probe readout for a pixmap pixel of the active view
     // (x from the left, y from the top), as the status bar would show it.
     [[nodiscard]] QString probeReadoutActiveViewForTest(int x, int y) const;
@@ -1089,7 +1094,7 @@ private:
         // some of the escapes it needs make it decide that.
         QString tooltip;
     };
-    void rebuildVariableMenu(const std::vector<DerivedFieldRow>& rows);
+    void rebuildDataMenu(const std::vector<DerivedFieldRow>& rows);
     // Reopens what is on screen with the current frame spec -- the derived
     // field list included -- without the teardown a fresh open performs: the
     // sequence, the zoom and the open windows all stay. A sequence goes
@@ -1122,7 +1127,7 @@ private:
     // nothing that reads item data can take the separator -- or a definition
     // this dataset could not install -- for a field.
     // `rows` is derivedFieldRows(), which the caller shares with
-    // rebuildVariableMenu: the two views are the same list, and building it
+    // rebuildDataMenu: the two views are the same list, and building it
     // twice per load means twice the work per sequence frame.
     void populateFieldSelector(
         DatasetLayer& layer, const std::vector<DerivedFieldRow>& rows);
@@ -1135,11 +1140,11 @@ private:
     void selectFieldItem(DatasetLayer& layer, int index);
     void selectFieldItem(int index) { selectFieldItem(primary(), index); }
     // The session's definitions as rows to list, in the order they were
-    // written. The field selector and the Variable menu are the same list
+    // written. The field selector and the Data menu are the same list
     // shown twice, and the comment saying so kept them in step by hand.
     // Where the stored fields end and the derived tail begins, clamped to what
     // the metadata actually holds. Five places used to decide this
-    // independently -- the field selector, the Variable menu, the derived rows,
+    // independently -- the field selector, the Data menu, the derived rows,
     // and both editor hooks -- and the clamp is what guards a session whose
     // count outruns the field list it carries.
     // Per layer: a companion has a session and a field list of its own.
@@ -1351,6 +1356,9 @@ private:
     // The states drawn on one 3-D panel, one per active layer.
     [[nodiscard]] std::vector<PlaneViewState*> statesForPanel(int normal);
     void setActiveView(PlaneViewState& state);
+    // Show one 3-D panel alone (a plane normal, or 3 for the isometric view),
+    // or all four with -1.
+    void setMaximizedPanel(int panel);
     // Give the active view keyboard focus so the arrow-key pan works on a
     // freshly opened dataset without a click first -- unless the user is
     // already typing somewhere, in which case their place is theirs to keep.
@@ -1753,7 +1761,10 @@ private:
     QToolBar* m_rangeToolbar = nullptr;
     QPushButton* m_scaleButton = nullptr;
     QMenu* m_levelMenu = nullptr;
-    QMenu* m_variableMenu = nullptr;
+    // Level, palette, the field list (see rebuildDataMenu) and raw-value tools.
+    QMenu* m_dataMenu = nullptr;
+    QMenu* m_paletteMenu = nullptr;
+    QAction* m_numberFormatAction = nullptr;
     // "2-D Spherical" View section grouping the warped-display options; the
     // whole submenu is enabled only while a 2-D spherical dataset is shown.
     QMenu* m_sphericalMenu = nullptr;
@@ -1772,7 +1783,7 @@ private:
     QActionGroup* m_scaleGroup = nullptr;
     QActionGroup* m_levelGroup = nullptr;
     QActionGroup* m_variableGroup = nullptr;
-    // Window-owned so rebuildVariableMenu's clear() does not delete it.
+    // Window-owned so rebuildDataMenu's clear() does not delete it.
     QAction* m_expressionEditorAction = nullptr;
     QAction* m_boxesAction = nullptr;
     QAction* m_scaleBarAction = nullptr;
@@ -1784,6 +1795,12 @@ private:
     // one of ScaleBar.hpp's stable length-unit ids (cm, AU, pc, ...).
     QString m_lengthUnitId;
     QAction* m_slicePlanesAction = nullptr;
+    QGridLayout* m_panelGrid = nullptr;
+    QMenu* m_panelMenu = nullptr;
+    QActionGroup* m_panelGroup = nullptr;
+    QAction* m_maximizePanelAction = nullptr;
+    // The 3-D panel filling the grid (see setMaximizedPanel); -1 for all.
+    int m_maximizedPanel = -1;
     QAction* m_resetZoomAction = nullptr;
     QAction* m_syncRubberBandZoomAction = nullptr;
     QActionGroup* m_lineOrientationGroup = nullptr;

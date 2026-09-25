@@ -402,7 +402,8 @@ directly comparable.
 To enlarge a panel, press **F** or choose **View > Panel Layout > Maximize
 Active Panel**: the active slice panel fills the plot area, and **F** again
 restores all four. **View > Panel Layout** can also show the isometric view
-alone.
+alone. A zoomed panel keeps showing the same region, larger or smaller,
+whenever it changes size, including when the window is resized.
 
 The **Plane Sweep** controls in the Animation dock select an axis and step or
 play through its sample indices. The speed slider controls the delay between

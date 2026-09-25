@@ -10,6 +10,7 @@
 #include <QKeySequence>
 #include <QRectF>
 #include <QRunnable>
+#include <QScrollBar>
 #include <QThreadPool>
 #include <QTreeWidget>
 #include <QTimer>
@@ -338,7 +339,18 @@ Outcome dispatchLifecycle(Context& context)
                     fail(what);
                     return false;
                 };
-                window.wheelActiveViewForTest(4);
+                // One 1.15x step per call; deep enough to scroll both ways.
+                for (int step = 0; step < 6; ++step) {
+                    window.wheelActiveViewForTest(1);
+                }
+                const auto scrolls = [](const QScrollBar* bar) {
+                    return bar->maximum() > bar->minimum();
+                };
+                if (!scrolls(window.navigationViewForTest()->horizontalScrollBar())
+                    || !scrolls(window.navigationViewForTest()->verticalScrollBar())) {
+                    fail("the wheel zoom did not reach scrolling in both directions");
+                    return;
+                }
                 const auto zoomed = shown();
                 maximize->trigger();
                 if (!framingKept("maximizing a zoomed panel changed the region it shows", zoomed)) {

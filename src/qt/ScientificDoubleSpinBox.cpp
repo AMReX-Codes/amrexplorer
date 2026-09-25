@@ -131,7 +131,13 @@ void ScientificDoubleSpinBox::fixup(QString& input) const
         QDoubleSpinBox::fixup(input);
         return;
     }
-    input = prefix() + textFromValue(std::clamp(value, minimum(), maximum())) + suffix();
+    // Full precision, not the display format: the text is parsed again, and a
+    // short format can round the bound past itself (DBL_MAX to 1.8e+308). The
+    // committed value is then shown in the display format.
+    input = prefix()
+        + cNumberLocale().toString(std::clamp(value, minimum(), maximum()), 'g',
+            std::numeric_limits<double>::max_digits10)
+        + suffix();
 }
 
 QValidator::State ScientificDoubleSpinBox::validate(

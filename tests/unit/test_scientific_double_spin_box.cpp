@@ -185,4 +185,19 @@ int main(int argc, char* argv[])
     commit(QStringLiteral("1e"), true);
     require(bounded.value() == 1.0,
         "an unfinished number did not keep the previous value");
+
+    // The clamped value is parsed again, so a short display format must not
+    // round it past the bound: %.3g shows DBL_MAX as 1.8e+308, an overflow,
+    // and 1.2356 as 1.24.
+    bounded.setNumberFormat(QStringLiteral("%.3g"));
+    bounded.setRange(-std::numeric_limits<double>::max(), std::numeric_limits<double>::max());
+    bounded.setValue(1.0);
+    commit(QStringLiteral("1e400"), true);
+    require(bounded.value() == std::numeric_limits<double>::max(),
+        "a short format rounded the clamped maximum into an overflow");
+    bounded.setRange(0.0, 1.2356);
+    bounded.setValue(1.0);
+    commit(QStringLiteral("5"), false);
+    require(bounded.value() == 1.2356 && bounded.cleanText() == QStringLiteral("1.24"),
+        "a short format rounded the clamped maximum past the bound");
 }

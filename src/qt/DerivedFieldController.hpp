@@ -51,7 +51,7 @@ struct ExpressionListFile {
     const std::vector<DerivedFieldDefinition>& definitions);
 
 // The derived-field definitions this window carries: the committed list, the
-// Variable menu's Expression Editor action and its modeless dialog, and the
+// Data menu's Expression Editor action and its modeless dialog, and the
 // import/export of an expression list.
 //
 // The list lives in the session's DerivedFieldStore, shared by every window,
@@ -123,7 +123,7 @@ public:
     DerivedFieldController(
         Hooks hooks, DerivedFieldStore& store, QObject* parent = nullptr);
 
-    // The Variable menu's "Expression Editor..." action, enabled while the
+    // The Data menu's "Expression Editor..." action, enabled while the
     // open dataset can take derived fields. Owned by `parent`.
     QAction* createAction(QWidget* parent);
     // Re-derives the action's enablement from the hooks; the host calls it

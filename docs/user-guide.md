@@ -200,8 +200,8 @@ The main controls are:
 4. **Range, Log, and Palette** control the mapping from values to colors.
 5. **Slice panels** display the XY, XZ, and YZ planes for a 3-D dataset.
    A lower-right scale bar uses native plotfile coordinates by default and
-   labels them as code units in scientific notation. Use **View > Length
-   Units...** to identify the plotfile coordinate unit, or **View > Scale Bar**
+   labels them as code units in scientific notation. Use **Overlays > Length
+   Units...** to identify the plotfile coordinate unit, or **Overlays > Scale Bar**
    to show or hide the annotation. It is omitted when the horizontal coordinate
    is an angle (the spherical theta-r view), and the option is disabled when
    the screen does not show the same length per pixel along both axes (see
@@ -212,10 +212,16 @@ The main controls are:
 7. **Color Scale** reports the active value-to-color mapping.
 8. **Animation** controls a 3-D plane sweep or an open plotfile sequence.
 
-Use **View** to show or hide toolbars and dock panels. Docks can be moved,
-detached, resized, and placed on another side of the main window. **View** also
-holds the overlays drawn on top of the slice: grid boxes, contours and vectors,
-and particles.
+The menus group the controls by purpose:
+
+- **View** -- navigation, zoom, panel layout, and aspect ratio.
+- **Data** -- the field, AMR level, palette, and raw values.
+- **Overlays** -- what is drawn on top of the slice: grid boxes, slice planes,
+  the scale bar, contours and vectors, and particles.
+- **Window** -- toolbars, docks, and the skin. Docks can be moved,
+  detached, resized, and placed on another side of the main window. The slice
+  panels are not docks; see [Working with 3-D data](#working-with-3-d-data) to
+  enlarge one.
 
 ## Inspecting standalone FABs and MultiFabs
 
@@ -241,7 +247,7 @@ sample locations recorded by the FAB or MultiFab.
 ## A basic 2-D workflow
 
 1. Open a plotfile and choose a field from the **Field** control or
-   **Variable** menu.
+   **Data** menu.
 2. Choose **Finest available** to composite AMR levels, or choose an exact
    level when you need to inspect that level alone.
 3. Left-drag around a region to zoom into it. **Scale > Sync Rubber-band
@@ -308,7 +314,7 @@ The line-plot window can accumulate curves, which is useful when comparing
 variables, levels, or positions. Its horizontal axis uses physical coordinates
 for plotfiles and integer indices for standalone FABs and MultiFabs.
 
-Choose **View > Dataset...** or press **Ctrl+D** to inspect raw values for
+Choose **Data > Dataset...** or press **Ctrl+D** to inspect raw values for
 the visible physical region. Values are grouped by AMR level. Clicking a
 value highlights the corresponding sample in the main view, and dragging
 across a block of values highlights the region they cover. Only values a grid
@@ -327,7 +333,7 @@ are left blank on a darker background.
 The Dataset and line-plot windows close with their **Close** button or with
 Ctrl+W (Cmd+W on macOS), the same key that closes the main and volume windows.
 
-Choose **View > Number Format...** to set the `printf`-style format used for
+Choose **Data > Number Format...** to set the `printf`-style format used for
 numeric readouts. The default is `%g`.
 
 A `%g` or `%G` format with no explicit precision adapts its digits to the
@@ -385,7 +391,7 @@ A 3-D dataset is shown as three orthogonal slices:
 Change a plane with the X, Y, and Z index controls in **3D Position**. A right
 click in any slice moves the other two planes so that all three intersect at
 the selected point. Each panel draws two lines where the other planes cut it,
-and the isometric view draws the planes; press **I** or choose **View > Slice
+and the isometric view draws the planes; press **I** or choose **Overlays > Slice
 Planes** to show or hide both. They are shown by default, and the choice
 persists across sessions.
 
@@ -393,7 +399,13 @@ Each slice panel can be navigated independently. Field, level, range,
 logarithmic mapping, and palette are shared so the three panels remain
 directly comparable.
 
-The **Plane Sweep** controls in the Animation panel select an axis and step or
+To enlarge a panel, press **F** or choose **View > Panel Layout > Maximize
+Active Panel**: the active slice panel fills the plot area, and **F** again
+restores all four. **View > Panel Layout** can also show the isometric view
+alone. A zoomed panel keeps showing the same region, larger or smaller,
+whenever it changes size, including when the window is resized.
+
+The **Plane Sweep** controls in the Animation dock select an axis and step or
 play through its sample indices. The speed slider controls the delay between
 frames.
 
@@ -424,7 +436,7 @@ perpendicular axis counts the lower dataset's rows then the upper's, and the
 shared axes count cells over the union of the two domains.
 
 A second toolbar row, named after the companion's directory, holds its own
-**Field**, **Level**, and **Range** controls, and the Color Scale panel shows
+**Field**, **Level**, and **Range** controls, and the Color Scale dock shows
 one bar per dataset; the palette and **Log** are shared. Tick **Same as
 primary** to colour the companion with the primary's displayed range instead;
 its own range controls and colour bar are then withheld and one scale serves
@@ -456,7 +468,7 @@ against its own stored fields: its **Field** list shows the ones it resolves,
 and greys the rest with the reason. Applying a change reloads both datasets,
 and the companion keeps its selected field by name.
 
-While a companion is open the Dataset Metadata panel lists both plotfiles,
+While a companion is open the Dataset Metadata dock lists both plotfiles,
 the isometric view outlines both domains in the panels' proportions (so a
 shallow ocean under a tall atmosphere stays visible), and image export composes the
 stacked panels without axes (their two vertical scales differ). Volume
@@ -600,7 +612,7 @@ actually be saved under.
 
 ## Selecting fields and AMR levels
 
-Select a field from the toolbar or the **Variable** menu.
+Select a field from the toolbar or the **Data** menu.
 
 The level controls offer:
 
@@ -622,14 +634,14 @@ Useful shortcuts are:
 
 ## Derived fields
 
-**Variable > Expression Editor...** defines fields computed from the ones the
+**Data > Expression Editor...** defines fields computed from the ones the
 plotfile stores. Give each a name and an expression, which may run over
 several lines if that reads better; **Apply**
 checks the whole list and, if it holds, reopens the dataset with the new
 fields, which then behave like any other field -- slices, line plots, the
 volume view, the probe and export all work on them.
 
-They appear in the field selector and the **Variable** menu below the fields
+They appear in the field selector and the **Data** menu below the fields
 the plotfile stores, separated from them by a line, and each shows its own
 expression as a tooltip.
 
@@ -678,7 +690,7 @@ Other notes:
   own list.
 - A definition the data in front of you cannot provide -- it reads a field this
   plotfile does not have, or this frame of a sequence does not -- is greyed out
-  in the field selector and the **Variable** menu, with the reason on its
+  in the field selector and the **Data** menu, with the reason on its
   tooltip. It is still yours, and still applies wherever it can: in another
   window on other data, or on a frame that does carry the field.
 - **Import...** and **Export...** read and write the list as a JSON expression
@@ -715,33 +727,33 @@ positive minimum. If it does not, AMReXplorer falls back to linear mapping and
 turns **Log** off; use a positive user minimum when necessary.
 
 Built-in palettes include rainbow, turbo, viridis, plasma, parula, coolwarm,
-and blackbody. Use **View > Palette > Load Palette File...** to load a custom
+and blackbody. Use **Data > Palette > Load Palette File...** to load a custom
 `.pal` file: a legacy Amrvis sequential palette of 256 red, green and blue
 bytes, optionally followed by 256 alpha bytes. AMReXplorer keeps the alpha
 plane as the palette's opacity ramp for volume rendering and ignores it for
 2-D slices. Each byte is a percentage, as Amrvis wrote it; if any of the
 253 data slots (the first three slots are reserved) holds a byte above 100
 the plane is read as 0-255 instead, and a plane whose data slots are all
-zero is treated as absent. **View > Palette > Reverse Colormap** flips the selected palette's
+zero is treated as absent. **Data > Palette > Reverse Colormap** flips the selected palette's
 color ramp (the "_r" variant, e.g. plasma_r) and stays applied as you switch
 between palettes.
 
 ## Grid boxes, contours, and vectors
 
-Press **B** or choose **View > Boxes** to show AMR grid boundaries.
+Press **B** or choose **Overlays > Boxes** to show AMR grid boundaries.
 
-Choose **View > Scale Bar** to show or hide the length annotation. The option
+Choose **Overlays > Scale Bar** to show or hide the length annotation. The option
 is unavailable when the screen does not show the same length per pixel along
 both axes, as with non-square cells in Cell Counts mode. Plotfiles do not declare their
 length unit, so AMReXplorer leaves it unset by default and displays native
-coordinate values in scientific notation. Choose **View > Length Units...** to
+coordinate values in scientific notation. Choose **Overlays > Length Units...** to
 identify the unit used by the plotfile; AMReXplorer can then label the bar in a
 natural physical unit. This setting changes only the annotation, not dataset
 coordinates or geometry. The selection resets to unset whenever you open a new
 dataset or sequence, and is not saved between app sessions. Stepping through
 frames within a sequence keeps the selection.
 
-Choose **View > Contours...** to select one of three display modes:
+Choose **Overlays > Contours...** to select one of three display modes:
 
 - **Raster** shows the color-mapped slice only.
 - **Raster & Contours** overlays contour lines on the raster.
@@ -754,7 +766,7 @@ component selections for your dataset.
 
 ## Particles
 
-Plotfiles that carry particle data can draw it over the slice. Choose **View >
+Plotfiles that carry particle data can draw it over the slice. Choose **Overlays >
 Particles...** — the item is enabled only while the open dataset has at least
 one particle species.
 
@@ -839,7 +851,7 @@ corners are the average of node layers c and c+1. The cells are drawn at the
 screen's resolution with smoothed edges and redrawn shortly after each zoom
 or pan, so slanted edges stay straight at any zoom. The menu is available
 only when the open plotfile carries the node positions; the Dataset Metadata
-panel lists them under **Mapped grid**.
+dock lists them under **Mapped grid**.
 
 While the mapped grid is shown the display is physical: **View > Aspect
 Ratio** shows Physical Size in effect (the persisted proportion is left as it
@@ -865,7 +877,7 @@ plotfile is drawn on its own grid too (see
 ## Plotfile sequences and animation
 
 Open two or more plotfile directories with **File > Open Plotfile
-Sequence...** or pass them on the command line. The Animation panel then
+Sequence...** or pass them on the command line. The Animation dock then
 provides:
 
 - a frame slider and frame number,
@@ -888,9 +900,9 @@ For an open plotfile sequence, use **File > Export Animation...** to save PNG
 frames with the same options. Install FFmpeg to also create an MP4 movie.
 Transparency is available only for PNG, not MP4.
 
-## Panels, preferences, and diagnostics
+## Docks, preferences, and diagnostics
 
-The **View** menu controls these optional panels:
+The **Window** menu shows or hides these docks:
 
 - **Dataset Metadata** shows the plotfile's format, time, coordinate system,
   physical domain, fields, whether it carries a [mapped grid](#mapped-grids),
@@ -902,7 +914,7 @@ The **View** menu controls these optional panels:
 - **FAB Selector** lists raw FAB records or the FABs belonging to an open
   standalone MultiFab.
 
-**View > Skin** chooses the application's appearance. **System** (the default)
+**Window > Skin** chooses the application's appearance. **System** (the default)
 keeps whatever the desktop provides; **Light** and **Dark** apply
 AMReXplorer's own; and **Blue**, **Green** and **Maroon** are Dark in a tint,
 Blue being the application icon's own colors. The change takes effect at once
@@ -935,6 +947,7 @@ Independent windows have independent datasets, caches, and view state.
 | --- | --- |
 | B | Toggle AMR grid boxes |
 | I | Toggle the slice planes (panel lines and isometric view) |
+| F | Maximize the active 3-D panel, or restore all four |
 | 0 | Reset the zoom to the whole domain |
 | 1 through 6 | Use fixed scales from 1x through 32x |
 | Ctrl+0 | Composite the finest available level |
@@ -967,5 +980,5 @@ minimum and verify that the field contains positive values.
 **MP4 export is skipped.** Install `ffmpeg` and make sure the executable is on
 `PATH`. The PNG frames are still written.
 
-**Controls or panels are missing.** Use the **View** menu to restore hidden
-toolbars and dock panels.
+**Controls or docks are missing.** Use the **Window** menu to restore hidden
+toolbars and docks.

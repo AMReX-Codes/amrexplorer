@@ -2375,6 +2375,19 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_slice_planes_smoke PROPERTIES TIMEOUT 30)
+    # View > Panel Layout (F) lets one 3-D panel fill the grid.
+    add_test(
+        NAME qt_panel_layout_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DSOURCE2=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_panel_layout"
+            -DMODE=panel-layout
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_panel_layout_smoke PROPERTIES TIMEOUT 30)
     # Hiding the Animation panel while it holds the 3-D sweep controls must not
     # keep it hidden when a sequence arrives and it holds the transport.
     add_test(

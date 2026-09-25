@@ -131,7 +131,7 @@ public:
     }
 
     // The fields the open dataset stores, in its own order, listed beside the
-    // expression so they need not be hunted for in the Variable menu. Double
+    // expression so they need not be hunted for in the Data menu. Double
     // -clicking one writes it into the expression at the cursor. Empty hides
     // the list, which is what no open dataset looks like.
     //

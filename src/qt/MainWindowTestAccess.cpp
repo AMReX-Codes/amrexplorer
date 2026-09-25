@@ -650,6 +650,15 @@ void MainWindow::setActiveViewForTest(int normal)
     setActiveView(primary().planeViews[static_cast<std::size_t>(normal)]);
 }
 
+QWidget* MainWindow::panelWidgetForTest(int panel) const
+{
+    if (panel == 3) {
+        return m_isoWidget;
+    }
+    return panel >= 0 && panel < 3
+        ? primary().planeViews[static_cast<std::size_t>(panel)].view : nullptr;
+}
+
 QString MainWindow::probeReadoutPanelForTest(int normal, int layer, int x, int y) const
 {
     if (m_viewDimension != 3 || normal < 0 || normal > 2 || layer < 0 || layer > 1

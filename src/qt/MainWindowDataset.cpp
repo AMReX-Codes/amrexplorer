@@ -279,19 +279,21 @@ void MainWindow::updateWindowTitle()
     }
     const auto& metadata = *primary().openMetadata;
     const auto name = datasetDisplayName(m_datasetPath);
-    // Standalone FABs and MultiFabs carry neither a simulation time nor an
-    // AMR hierarchy, so their titles show just the format name.
+    // No "AMReXplorer" here: Qt appends the application display name itself
+    // where the platform expects it. Standalone FABs and MultiFabs carry
+    // neither a simulation time nor an AMR hierarchy, so their titles show
+    // just the format name.
     if (m_fabNavigator->fabMode()) {
-        setWindowTitle(tr("AMReXplorer — %1 — FAB").arg(name));
+        setWindowTitle(tr("%1 — FAB").arg(name));
     } else if (!metadata.hasPhysicalGeometry) {
-        setWindowTitle(tr("AMReXplorer — %1 — MultiFab").arg(name));
+        setWindowTitle(tr("%1 — MultiFab").arg(name));
     } else if (companionOpen()) {
-        setWindowTitle(tr("AMReXplorer — %1 + %2  T = %3")
+        setWindowTitle(tr("%1 + %2  T = %3")
                 .arg(name, m_layers[1].name)
                 .arg(metadata.time, 0, 'g', 12));
     } else {
         setWindowTitle(
-            tr("AMReXplorer — %1  T = %2  Levels: 0..%3  Finest Level: %3")
+            tr("%1  T = %2  Levels: 0..%3  Finest Level: %3")
                 .arg(name)
                 .arg(metadata.time, 0, 'g', 12)
                 .arg(metadata.finestLevel));
@@ -1044,6 +1046,8 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_boxesAction->setEnabled(false);
     m_scaleBarAction->setEnabled(false);
     m_slicePlanesAction->setEnabled(false);
+    m_panelMenu->setEnabled(false);
+    m_maximizePanelAction->setEnabled(false);
     if (m_openCompanionAction != nullptr) {
         m_openCompanionAction->setEnabled(false);
     }
@@ -1055,11 +1059,11 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_levelMenu->setEnabled(false);
     m_contoursAction->setEnabled(false);
     m_particleController->suspendAction();
-    // The dataset is gone as of the reset above, so the Variable menu's field
+    // The dataset is gone as of the reset above, so the Data menu's field
     // entries name a session that no longer exists: triggering one would drive
     // a combo that is merely disabled, not emptied. This is the caller the
     // menu's no-dataset branch was written for.
-    rebuildVariableMenu({});
+    rebuildDataMenu({});
     m_derivedFields->refreshAvailability();
     m_datasetAction->setEnabled(false);
     m_exportAnimationAction->setEnabled(false);
@@ -1236,9 +1240,12 @@ void MainWindow::requestInitialSlice(
         page->layout()->activate();
     }
     const auto views = primaryViews();
-    // The XY view starts out as the active one in 3-D.
+    // The XY view starts out as the active one in 3-D, unless another slice
+    // panel is maximized.
+    const bool slicePanelMaximized = m_maximizedPanel >= 0 && m_maximizedPanel < 3;
     setActiveView(m_viewDimension == 3
-        ? primary().planeViews[2] : m_view2d);
+        ? primary().planeViews[static_cast<std::size_t>(slicePanelMaximized ? m_maximizedPanel : 2)]
+        : m_view2d);
     // ...and takes keyboard focus, so the arrow-key pan works on a freshly
     // opened dataset rather than only after the view has been clicked. The
     // other setActiveView callers run mid-session, where focus belongs to
@@ -1486,7 +1493,7 @@ void MainWindow::requestInitialSlice(
                         // session skipped is listed under the same name,
                         // greyed and carrying no id, and setCurrentIndex takes
                         // one as readily as any other -- leaving the combo,
-                        // the Variable menu and the range on that name while
+                        // the Data menu and the range on that name while
                         // every reader of currentData() renders field 0. Where
                         // the user's field did not survive the reload there is
                         // nothing of theirs to restore, and the field the load

@@ -30,6 +30,8 @@ void MainWindow::enableDatasetControls(const DatasetMetadata& metadata)
     updateScaleBarAvailability();
     updatePairedModeControls();
     m_slicePlanesAction->setEnabled(metadata.dimension == 3);
+    m_panelMenu->setEnabled(metadata.dimension == 3);
+    m_maximizePanelAction->setEnabled(metadata.dimension == 3);
     rebuildLevelMenu();
     m_levelMenu->setEnabled(true);
     m_contoursAction->setEnabled(true);
@@ -45,7 +47,7 @@ void MainWindow::configureSliceControls()
     const QSignalBlocker levelBlocker(primary().levelSelector);
     const auto& metadata = primary().session->metadata();
 
-    // Built once and shared: the field selector and the Variable menu list
+    // Built once and shared: the field selector and the Data menu list
     // the same definitions.
     const auto derivedRows = derivedFieldRows();
     populateFieldSelector(derivedRows);
@@ -61,7 +63,7 @@ void MainWindow::configureSliceControls()
 
     enableDatasetControls(metadata);
 
-    rebuildVariableMenu(derivedRows);
+    rebuildDataMenu(derivedRows);
     updateRangeModeAvailability();
 
     // Switch the stacked page to match the dataset dimension and, for 3-D,
@@ -2469,7 +2471,7 @@ void MainWindow::updateAnimationDockVisibility()
     // An empty panel is hidden unconditionally, never on a transition. Both
     // control groups are hidden when neither reason holds, so an edge trigger
     // parked dead space for the session in the false -> false direction: open
-    // the panel from the View menu with no dataset (or after a failed open),
+    // the panel from the Window menu with no dataset (or after a failed open),
     // then open a 2-D plotfile, and nothing moved the flags, so an empty dock
     // stayed. Deciding whether the panel applies at all is ours.
     if (!applies) {
@@ -2650,13 +2652,16 @@ void MainWindow::configureSequenceControls(
     // dead until the user clicked a panel.
     const auto views = currentViews();
     if (std::find(views.begin(), views.end(), m_activeView) == views.end()) {
-        setActiveView(isThreeDimensional ? primary().planeViews[2] : m_view2d);
+        const bool slicePanelMaximized = m_maximizedPanel >= 0 && m_maximizedPanel < 3;
+        setActiveView(isThreeDimensional
+            ? primary().planeViews[static_cast<std::size_t>(slicePanelMaximized ? m_maximizedPanel : 2)]
+            : m_view2d);
         focusActiveViewForPanning();
     }
 
     enableDatasetControls(metadata);
     m_exportAnimationAction->setEnabled(true);
-    rebuildVariableMenu(derivedRows);
+    rebuildDataMenu(derivedRows);
     ensureVectorFieldDefaults();
     updateRangeModeAvailability();
 }

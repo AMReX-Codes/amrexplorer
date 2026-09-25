@@ -1464,14 +1464,14 @@ void ImageView::mouseMoveEvent(QMouseEvent* event)
 
 void ImageView::resizeEvent(QResizeEvent* event)
 {
-    // When the view itself is resized, a custom zoom keeps framing the region
-    // it last showed, bigger or smaller, and the refit is not recorded: its
-    // margins would add up. A viewport-only resize (a scroll bar coming or
-    // going) keeps the scale, as before.
+    // When the view itself is resized, a custom zoom fits the region it last
+    // showed again, bigger or smaller. A viewport-only resize (a scroll bar
+    // coming or going, often on a later layout pass) keeps the scale. No
+    // resize records the region: the refit's margins, or a departed scroll
+    // bar's width, would add up.
     const bool viewResized = size() != m_lastViewSize;
     m_lastViewSize = size();
-    const QScopedValueRollback refitting(
-        m_refittingCustomWindow, m_refittingCustomWindow || viewResized);
+    const QScopedValueRollback refitting(m_refittingCustomWindow, true);
     QGraphicsView::resizeEvent(event);
     if (m_transformMode == TransformMode::Fit) {
         fitImage();

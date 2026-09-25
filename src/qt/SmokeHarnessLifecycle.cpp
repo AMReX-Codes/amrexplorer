@@ -396,6 +396,22 @@ Outcome dispatchLifecycle(Context& context)
                         zoomed)) {
                     return;
                 }
+                // A shallow zoom through a window resize that changes the
+                // aspect: scroll bars leave on a later layout pass, and that
+                // viewport resize must not become the saved region.
+                window.resetZoomAllViewsForTest();
+                window.wheelActiveViewForTest(1);
+                const auto shallow = shown();
+                const auto windowSize = window.size();
+                // Taller: the tall XZ panel's vertical bar goes away.
+                window.resize(windowSize.width() * 11 / 10, windowSize.height() * 9 / 5);
+                QCoreApplication::processEvents();
+                window.resize(windowSize);
+                QCoreApplication::processEvents();
+                if (!framingKept("a window resize round trip changed a zoomed panel's region",
+                        shallow)) {
+                    return;
+                }
                 yz->trigger();
                 if (!only(0) || window.navigationViewForTest()
                         != window.panelWidgetForTest(0) || !focusOn(0)) {

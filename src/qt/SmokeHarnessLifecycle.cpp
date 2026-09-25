@@ -305,8 +305,8 @@ Outcome dispatchLifecycle(Context& context)
                     fail("F again did not restore the grid");
                     return;
                 }
-                // Wheel zoom leaves the panel in a custom zoom, which a resize
-                // alone would show at the same scale over more of the plane.
+                // Wheel zoom leaves the panel in a custom zoom, whose region
+                // must survive the panel being resized.
                 const auto shown = [&window] {
                     const auto* view = window.navigationViewForTest();
                     return view->mapToScene(view->viewport()->rect()).boundingRect();
@@ -315,8 +315,7 @@ Outcome dispatchLifecycle(Context& context)
                 // inside the viewport and filling it along one axis. Measured
                 // in pixels with a scroll bar's slack, since a bar coming or
                 // going recentres a scene narrower than the viewport. On
-                // failure, say what was compared: CI has failed where local
-                // runs pass.
+                // failure, say what was compared.
                 const auto framingKept = [&window, &shown, &fail](
                                              const char* what, const QRectF& before) {
                     const auto* view = window.navigationViewForTest();

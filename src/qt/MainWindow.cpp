@@ -1346,12 +1346,13 @@ void MainWindow::setMaximizedPanel(int panel)
     for (const auto& state : primary().planeViews) {
         panelsHadFocus = panelsHadFocus || focused == state.view;
     }
-    // A zoomed panel that stays on screen keeps showing the same region, only
-    // bigger or smaller; Fit and fixed scales refit on the resize themselves.
+    // A zoomed panel keeps showing the same region, only bigger or smaller;
+    // Fit and fixed scales refit on the resize themselves. A hidden panel
+    // keeps its last size, so its window is still the one it showed.
     std::array<std::optional<QRectF>, 3> zoomedWindows;
     for (int normal = 0; normal < 3; ++normal) {
         auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
-        if (view->isVisible() && view->transformMode() == ImageView::TransformMode::Custom) {
+        if (view->transformMode() == ImageView::TransformMode::Custom) {
             zoomedWindows[static_cast<std::size_t>(normal)]
                 = view->mapToScene(view->viewport()->rect()).boundingRect();
         }
@@ -2248,15 +2249,15 @@ void MainWindow::createMenus()
         {-1, tr("&All Panels"), "panelAllAction"}, {2, tr("&XY"), "panelXyAction"},
         {1, tr("X&Z"), "panelXzAction"}, {0, tr("&YZ"), "panelYzAction"},
         {3, tr("&Isometric"), "panelIsometricAction"}}};
-    for (const auto& [panel, text, name] : panelChoices) {
-        auto* action = m_panelMenu->addAction(text);
-        action->setObjectName(QString::fromLatin1(name));
+    for (const auto& choice : panelChoices) {
+        auto* action = m_panelMenu->addAction(choice.text);
+        action->setObjectName(QString::fromLatin1(choice.name));
         action->setCheckable(true);
         action->setActionGroup(m_panelGroup);
-        action->setData(panel);
-        action->setChecked(panel == -1);
+        action->setData(choice.panel);
+        action->setChecked(choice.panel == -1);
         connect(action, &QAction::triggered,
-            this, [this, panel = panel] { setMaximizedPanel(panel); });
+            this, [this, panel = choice.panel] { setMaximizedPanel(panel); });
     }
     m_panelMenu->addSeparator();
     m_maximizePanelAction = m_panelMenu->addAction(tr("&Maximize Active Panel"));

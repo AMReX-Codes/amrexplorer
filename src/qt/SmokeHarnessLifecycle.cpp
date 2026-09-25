@@ -348,6 +348,11 @@ Outcome dispatchLifecycle(Context& context)
                     fail("XZ after Isometric did not show and focus the XZ panel");
                     return;
                 }
+                // XZ was hidden behind the isometric view, still zoomed.
+                if (!sameFraming(zoomed, shown())) {
+                    fail("a zoomed panel shown again from hiding changed its region");
+                    return;
+                }
                 yz->trigger();
                 if (!only(0) || window.navigationViewForTest()
                         != window.panelWidgetForTest(0) || !focusOn(0)) {

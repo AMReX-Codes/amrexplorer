@@ -10,6 +10,13 @@ namespace amrvis::qt {
 
 namespace {
 
+QString axisScaleKey(std::size_t axis)
+{
+    constexpr std::array<const char*, 3> keys{
+        "aspect/axisScaleX", "aspect/axisScaleY", "aspect/axisScaleZ"};
+    return QString::fromLatin1(keys[axis]);
+}
+
 struct ExportChoices {
     bool colorBar;
     bool axes;
@@ -231,6 +238,12 @@ void MainWindow::restoreSettings()
             }
         }
     }
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        bool ok = false;
+        const auto value = settings.value(axisScaleKey(axis), 1.0).toDouble(&ok);
+        m_axisScale[axis] = ok && std::isfinite(value) && value > 0.0
+            ? std::clamp(value, minimumAxisScale, maximumAxisScale) : 1.0;
+    }
     applySpeed();
 
     const auto geometry = settings.value(QStringLiteral("geometry")).toByteArray();
@@ -269,6 +282,16 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("aspect/mode"),
         static_cast<int>(m_aspectMode));
     settings.setValue(QStringLiteral("mappedGrid/enabled"), m_mappedGrid);
+}
+
+void MainWindow::saveAxisScale()
+{
+    // Written only when the factors change, not by saveSettings: another
+    // window's unrelated save would put back its own factors.
+    auto settings = makeSettings();
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        settings.setValue(axisScaleKey(axis), m_axisScale[axis]);
+    }
 }
 
 void MainWindow::updateWindowTitle()
@@ -948,7 +971,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     closeSequence();
     resetRangeState();
     resetLengthUnit();
-    resetAxisScale();
+    closeAxisScalingDialog();
     closeCompanion();
     // The new dataset arrives fitted -- setPlaceholder below puts every view
     // back to Fit -- so the scale report has to come back with it. Without

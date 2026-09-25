@@ -1296,6 +1296,20 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_physical_aspect_smoke PROPERTIES TIMEOUT 30)
+    # Axis Scaling factors are saved, kept across opens and restored by the
+    # next process.
+    add_test(
+        NAME qt_axis_scale_settings_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DSOURCE2=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_spherical"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_axis_scale_settings"
+            -DMODE=axis-scale-settings
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_axis_scale_settings_smoke PROPERTIES TIMEOUT 60)
 
     # In Physical Size a fixed scale is the same pixels per length on every
     # 3-D panel: x is as wide on the XY panel as on the XZ panel beside it.

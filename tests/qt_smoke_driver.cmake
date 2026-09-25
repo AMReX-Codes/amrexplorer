@@ -36,7 +36,7 @@
 #                 scale-state | effective-scale |
 #                 arrow-key-routing | animation-dock-role | open-failure |
 #                 idle-ui-state | menu-shortcuts | sequence-scale-report |
-#                 slice-planes | panel-layout |
+#                 slice-planes | panel-layout | axis-scale-settings |
 #                 spherical-scale-report |
 #                 fixed-scale-centre | fab-overlap-failure |
 #                 fab-direct-open-failure
@@ -259,6 +259,13 @@ elseif(MODE STREQUAL "remote-cell-aspect")
 elseif(MODE STREQUAL "physical-aspect")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --physical-aspect-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "axis-scale-settings")
+    # Two processes on the one config directory cleared above.
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${MATERIALIZER}" "${SOURCE2}" "${WORK}/spherical")
+    run_or_die("${AMREXPLORER_QT}" --axis-scale-settings-smoke-test save "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --axis-scale-settings-smoke-test load "${WORK}/plt"
+        "${WORK}/spherical")
 elseif(MODE STREQUAL "physical-fixed-scale")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --physical-fixed-scale-smoke-test "${WORK}/plt")

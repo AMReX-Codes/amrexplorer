@@ -2349,7 +2349,7 @@ void MainWindow::prepareSequence(std::size_t frameCount)
     closeSequence();
     resetRangeState();
     resetLengthUnit();
-    resetAxisScale();
+    closeAxisScalingDialog();
     closeCompanion();
     m_fabNavigator->reset();
     m_particleController->cancel();

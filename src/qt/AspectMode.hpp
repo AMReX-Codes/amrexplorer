@@ -21,6 +21,10 @@ enum class AspectMode : int {
     PhysicalSize = 1,
 };
 
+// The range an Axis Scaling factor may take, in the dialog and from settings.
+inline constexpr double minimumAxisScale = 0.01;
+inline constexpr double maximumAxisScale = 10000.0;
+
 // The display stretch of each dataset axis: the user's factor times, in
 // PhysicalSize mode, the finest level's cell size. The result is normalized
 // so the smallest factor over the dataset's dimensions is one, which makes a

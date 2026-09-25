@@ -5,6 +5,7 @@
 #include <QFocusEvent>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QLocale>
 #include <QString>
 
 #include <cstdlib>
@@ -151,4 +152,66 @@ int main(int argc, char* argv[])
         require(spinBox.value() == 0.5 && !spinBox.editor()->isModified(),
             "committing identical text changed the value or left a pending edit");
     }
+
+    // A number typed past a bounded range is clamped to the bound, visibly,
+    // rather than silently replaced by the previous value.
+    TestScientificDoubleSpinBox bounded;
+    bounded.setRange(0.01, 10000.0);
+    bounded.setValue(1.0);
+    const auto commit = [&bounded](const QString& text, bool focusOut) {
+        bounded.editor()->setText(text);
+        bounded.editor()->setModified(true);
+        if (focusOut) {
+            QFocusEvent event(QEvent::FocusOut, Qt::TabFocusReason);
+            QApplication::sendEvent(&bounded, &event);
+        } else {
+            bounded.interpretText();
+        }
+    };
+    commit(QStringLiteral("10000000000000000000"), false);
+    require(bounded.value() == 10000.0 && bounded.cleanText() == QStringLiteral("10000"),
+        "a number above the range was not clamped to the maximum");
+    bounded.setValue(1.0);
+    commit(QStringLiteral("1e400"), true);
+    require(bounded.value() == 10000.0,
+        "a number past double range was not clamped to the maximum");
+    commit(QStringLiteral("0.001"), true);
+    require(bounded.value() == 0.01 && bounded.cleanText() == QStringLiteral("0.01"),
+        "a number below the range was not clamped to the minimum");
+    bounded.setValue(1.0);
+    commit(QStringLiteral("1e-400"), true);
+    require(bounded.value() == 0.01,
+        "a number past double range toward zero was not clamped to the minimum");
+    bounded.setValue(1.0);
+    commit(QStringLiteral("1e"), true);
+    require(bounded.value() == 1.0,
+        "an unfinished number did not keep the previous value");
+
+    // The clamped value is parsed again, so a short display format must not
+    // round it past the bound: %.3g shows DBL_MAX as 1.8e+308, an overflow,
+    // and 1.2356 as 1.24.
+    bounded.setNumberFormat(QStringLiteral("%.3g"));
+    bounded.setRange(-std::numeric_limits<double>::max(), std::numeric_limits<double>::max());
+    bounded.setValue(1.0);
+    commit(QStringLiteral("1e400"), true);
+    require(bounded.value() == std::numeric_limits<double>::max(),
+        "a short format rounded the clamped maximum into an overflow");
+    bounded.setRange(0.0, 1.2356);
+    bounded.setValue(1.0);
+    commit(QStringLiteral("5"), false);
+    require(bounded.value() == 1.2356 && bounded.cleanText() == QStringLiteral("1.24"),
+        "a short format rounded the clamped maximum past the bound");
+
+    // Under a comma-decimal locale the clamped text must not carry a group
+    // separator, which that locale would read as a decimal point (10,000 as 10).
+    TestScientificDoubleSpinBox german;
+    german.setLocale(QLocale(QLocale::German, QLocale::Germany));
+    german.setRange(0.01, 10000.0);
+    german.setValue(1.0);
+    german.editor()->setText(QStringLiteral("1,5e4"));
+    german.editor()->setModified(true);
+    QFocusEvent germanFocusOut(QEvent::FocusOut, Qt::TabFocusReason);
+    QApplication::sendEvent(&german, &germanFocusOut);
+    require(german.value() == 10000.0,
+        "a comma-decimal locale read the clamped maximum's group separator as a decimal");
 }

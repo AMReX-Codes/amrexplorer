@@ -4,9 +4,11 @@
 #include <QDoubleValidator>
 #include <QLineEdit>
 #include <QLocale>
+#include <QRegularExpression>
 #include <QSignalBlocker>
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace amrvis::qt {
@@ -29,6 +31,16 @@ QValidator::State validateNumber(const QString& text, int position,
     validator.setNotation(QDoubleValidator::ScientificNotation);
     auto candidate = text;
     return validator.validate(candidate, position);
+}
+
+// A whole decimal number in either locale's notation. QLocale::toDouble
+// rejects one only when it underflows.
+bool isCompleteNumber(const QString& text, const QLocale& locale)
+{
+    const QRegularExpression pattern(QStringLiteral(
+        "^[+-]?(\\d+(%1\\d*)?|%1\\d+)([eE][+-]?\\d+)?$")
+            .arg(QRegularExpression::escape(locale.decimalPoint())));
+    return pattern.match(text).hasMatch();
 }
 
 } // namespace
@@ -97,6 +109,36 @@ double ScientificDoubleSpinBox::valueFromText(const QString& text) const
     }
     const auto localizedValue = locale().toDouble(number, &ok);
     return ok ? localizedValue : QDoubleSpinBox::valueFromText(text);
+}
+
+void ScientificDoubleSpinBox::fixup(QString& input) const
+{
+    // A number past the range is clamped to it. Left alone, Qt puts the old
+    // value back without a word. An overflow parses as an infinity, and a
+    // complete number that still fails to parse has underflowed to zero.
+    const auto number = numberText(input);
+    const auto parse = [&number](const QLocale& locale, double& value) {
+        bool ok = false;
+        value = locale.toDouble(number, &ok);
+        if (!ok && !std::isinf(value) && isCompleteNumber(number, locale)) {
+            value = 0.0;
+            ok = true;
+        }
+        return ok || std::isinf(value);
+    };
+    double value = 0.0;
+    if ((!parse(cNumberLocale(), value) && !parse(locale(), value)) || std::isnan(value)) {
+        QDoubleSpinBox::fixup(input);
+        return;
+    }
+    // Full precision, not the display format: the text is parsed again, and a
+    // short format can round the bound past itself (DBL_MAX to 1.8e+308). No
+    // group separator either: a comma-decimal locale reads 10,000 as 10. The
+    // committed value is then shown in the display format.
+    input = prefix()
+        + QString::number(std::clamp(value, minimum(), maximum()), 'g',
+            std::numeric_limits<double>::max_digits10)
+        + suffix();
 }
 
 QValidator::State ScientificDoubleSpinBox::validate(

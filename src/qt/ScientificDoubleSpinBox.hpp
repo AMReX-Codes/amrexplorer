@@ -18,6 +18,7 @@ public:
 protected:
     [[nodiscard]] QString textFromValue(double value) const override;
     [[nodiscard]] double valueFromText(const QString& text) const override;
+    void fixup(QString& input) const override;
     QValidator::State validate(QString& input, int& position) const override;
 
 private:

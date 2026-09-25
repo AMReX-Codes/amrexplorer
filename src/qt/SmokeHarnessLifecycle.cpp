@@ -238,16 +238,8 @@ Outcome dispatchLifecycle(Context& context)
             }
             return true;
         };
-        // Still the region shown before the resize: contained in what is shown
-        // now, and filling it along at least one axis.
-        const auto sameFraming = [](const QRectF& before, const QRectF& after) {
-            const auto slack = 0.02 * std::max(before.width(), before.height());
-            return after.adjusted(-slack, -slack, slack, slack).contains(before)
-                && std::min(after.width() / before.width(),
-                       after.height() / before.height()) < 1.05;
-        };
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
-            &application, [&window, opened, fail, only, sameFraming, path3d,
+            &application, [&window, opened, fail, only, path3d,
                               second3d, path2d](bool success) {
                 if (!success) {
                     fail("a plotfile did not open");
@@ -318,17 +310,57 @@ Outcome dispatchLifecycle(Context& context)
                     const auto* view = window.navigationViewForTest();
                     return view->mapToScene(view->viewport()->rect()).boundingRect();
                 };
+                // Still the region shown before, as the screen now draws it:
+                // inside the viewport and filling it along one axis. Measured
+                // in pixels with a scroll bar's slack, since a bar coming or
+                // going recentres a scene narrower than the viewport. On
+                // failure, say what was compared: CI has failed where local
+                // runs pass.
+                const auto framingKept = [&window, &shown, &fail](
+                                             const char* what, const QRectF& before) {
+                    const auto* view = window.navigationViewForTest();
+                    const auto after = shown();
+                    const QRectF drawn = view->mapFromScene(before).boundingRect();
+                    const QRectF screen = view->viewport()->rect();
+                    constexpr double slack = 24.0;
+                    if (screen.adjusted(-slack, -slack, slack, slack).contains(drawn)
+                        && std::min(screen.width() - drawn.width(),
+                               screen.height() - drawn.height())
+                            < std::max(slack, 0.05 * std::min(screen.width(), screen.height()))) {
+                        return true;
+                    }
+                    qCritical("before (%g, %g) %g x %g, after (%g, %g) %g x %g, "
+                              "viewport %d x %d, mode %d, visible %d",
+                        before.x(), before.y(), before.width(), before.height(),
+                        after.x(), after.y(), after.width(), after.height(),
+                        view->viewport()->width(), view->viewport()->height(),
+                        static_cast<int>(view->transformMode()), view->isVisible());
+                    fail(what);
+                    return false;
+                };
                 window.wheelActiveViewForTest(4);
                 const auto zoomed = shown();
                 maximize->trigger();
-                if (!sameFraming(zoomed, shown())) {
-                    fail("maximizing a zoomed panel changed the region it shows");
+                if (!framingKept("maximizing a zoomed panel changed the region it shows", zoomed)) {
                     return;
                 }
                 maximize->trigger();
-                if (!sameFraming(zoomed, shown())) {
-                    fail("restoring a zoomed panel changed the region it shows");
+                if (!framingKept("restoring a zoomed panel changed the region it shows", zoomed)) {
                     return;
+                }
+                // Layout passes that land later must not move it either, nor
+                // may round trips accumulate margins.
+                for (int trip = 0; trip < 10; ++trip) {
+                    maximize->trigger();
+                    QCoreApplication::processEvents();
+                    if (!framingKept("a maximized zoomed panel drifted after events", zoomed)) {
+                        return;
+                    }
+                    maximize->trigger();
+                    QCoreApplication::processEvents();
+                    if (!framingKept("a restored zoomed panel drifted after events", zoomed)) {
+                        return;
+                    }
                 }
                 auto* isometric = window.findChild<QAction*>(
                     QStringLiteral("panelIsometricAction"));
@@ -349,8 +381,8 @@ Outcome dispatchLifecycle(Context& context)
                     return;
                 }
                 // XZ was hidden behind the isometric view, still zoomed.
-                if (!sameFraming(zoomed, shown())) {
-                    fail("a zoomed panel shown again from hiding changed its region");
+                if (!framingKept("a zoomed panel shown again from hiding changed its region",
+                        zoomed)) {
                     return;
                 }
                 yz->trigger();

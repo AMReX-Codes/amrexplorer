@@ -13,6 +13,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
+#include <QScopedValueRollback>
 #include <QScrollBar>
 #include <QKeyEvent>
 #include <QFocusEvent>
@@ -207,7 +208,24 @@ ImageView::ImageView(QWidget* parent)
     // outside the scene. FullViewportUpdate ensures it never ghosts when
     // the viewport scrolls partial-update.
     setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
+    // The bars border the neutral viewport gray under every skin, where a
+    // skin's pale groove and handle barely show; give them their own contrast.
+    const auto groove = viewportBackground().darker(130).name();
+    const auto barStyle = QStringLiteral(
+        "QScrollBar { background: %1; border: none; }"
+        "QScrollBar:vertical { width: 12px; }"
+        "QScrollBar:horizontal { height: 12px; }"
+        "QScrollBar::handle { background: #d8d8d8; border-radius: 4px; margin: 2px; }"
+        "QScrollBar::handle:hover, QScrollBar::handle:pressed { background: #ffffff; }"
+        "QScrollBar::handle:vertical { min-height: 24px; }"
+        "QScrollBar::handle:horizontal { min-width: 24px; }"
+        "QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: none; }"
+        "QScrollBar::add-page, QScrollBar::sub-page { background: none; }").arg(groove);
+    auto* corner = new QWidget(this);
+    corner->setStyleSheet(QStringLiteral("background: %1;").arg(groove));
+    setCornerWidget(corner);
     for (auto* bar : {horizontalScrollBar(), verticalScrollBar()}) {
+        bar->setStyleSheet(barStyle);
         connect(bar, &QScrollBar::sliderPressed, this, [this] {
             m_scrollNavigationActive = true;
             emit navigationBegan(NavigationKind::Scrollbar);
@@ -542,6 +560,11 @@ void ImageView::applyPixmapTransformationMode(Tile& tile)
 
 void ImageView::noteViewChanged()
 {
+    // Before the no-change return: a zoom that scrolled on the way was noted
+    // while the mode still read Fit.
+    if (m_transformMode == TransformMode::Custom && !m_refittingCustomWindow) {
+        rememberCustomWindow();
+    }
     ViewSnapshot now;
     now.transform = transform();
     now.horizontalScroll = horizontalScrollBar()->value();
@@ -1121,6 +1144,7 @@ void ImageView::restoreNavigation(TransformMode mode, int factor,
         centerOn(window.center());
     } else {
         m_transformMode = TransformMode::Custom;
+        m_customWindow = window;
         applyCustomWindow(window);
     }
     noteViewChanged();
@@ -1131,6 +1155,7 @@ void ImageView::applyCustomWindow(const QRectF& window)
     // The window is the whole viewport, including its margins; fitSceneRect
     // would add another margin each time. Two passes, as the first rescale
     // can add or remove scroll bars.
+    const QScopedValueRollback refitting(m_refittingCustomWindow, true);
     for (int pass = 0; pass < 2; ++pass) {
         const double scale = std::min(
             viewport()->width() / (window.width() * m_stretch.x()),
@@ -1140,14 +1165,9 @@ void ImageView::applyCustomWindow(const QRectF& window)
     }
 }
 
-void ImageView::refitCustomWindow(const QRectF& window)
+void ImageView::rememberCustomWindow()
 {
-    if (!hasImage() || window.isEmpty() || m_transformMode != TransformMode::Custom) {
-        return;
-    }
-    applyCustomWindow(window);
-    emit viewportMoved();
-    noteViewChanged();
+    m_customWindow = mapToScene(viewport()->rect()).boundingRect();
 }
 
 void ImageView::fitToWindow()
@@ -1198,6 +1218,7 @@ void ImageView::zoomToSceneRect(const QRectF& sceneTarget, bool confineScene)
         m_scene->setSceneRect(sceneTarget);
     }
     fitSceneRect(sceneTarget);
+    rememberCustomWindow();
 }
 
 void ImageView::showSceneWindow(const QRectF& sceneRect)
@@ -1443,9 +1464,20 @@ void ImageView::mouseMoveEvent(QMouseEvent* event)
 
 void ImageView::resizeEvent(QResizeEvent* event)
 {
+    // When the view itself is resized, a custom zoom keeps framing the region
+    // it last showed, bigger or smaller, and the refit is not recorded: its
+    // margins would add up. A viewport-only resize (a scroll bar coming or
+    // going) keeps the scale, as before.
+    const bool viewResized = size() != m_lastViewSize;
+    m_lastViewSize = size();
+    const QScopedValueRollback refitting(
+        m_refittingCustomWindow, m_refittingCustomWindow || viewResized);
     QGraphicsView::resizeEvent(event);
     if (m_transformMode == TransformMode::Fit) {
         fitImage();
+    } else if (viewResized && m_transformMode == TransformMode::Custom && m_customWindow
+               && hasImage()) {
+        applyCustomWindow(*m_customWindow);
     }
     emit viewportResized(viewport()->size());
     // A resize changes how much of the raster is on screen even when nothing

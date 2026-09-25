@@ -274,9 +274,6 @@ public:
                                        bool omitOuterGridEdges = false) const;
     void restoreNavigation(TransformMode mode, int factor,
         const QRectF& window, const QRectF& canvas);
-    // Custom zoom only: rescale so this scene window (a viewport captured
-    // before a resize) fills the viewport again. Other modes refit themselves.
-    void refitCustomWindow(const QRectF& window);
     void fitToWindow();
     void setFixedScale(int factor);
     void zoomBy(qreal factor);
@@ -452,6 +449,7 @@ private:
     // fits its whole rect, consistent with fixed scale and export.
     void fitSceneRect(const QRectF& rect);
     void applyCustomWindow(const QRectF& window);
+    void rememberCustomWindow();
     void applyFixedScale();
     void applyPlacement();
     // Compare the view's scene-to-screen state with the last emission of
@@ -496,6 +494,11 @@ private:
     bool m_sliceMoveEnabled = false;
     bool m_lineToolEnabled = true;
     TransformMode m_transformMode = TransformMode::Fit;
+    // The scene region a custom zoom frames, whole viewport included. It
+    // follows every view change but a resize, which fits it again instead.
+    std::optional<QRectF> m_customWindow;
+    bool m_refittingCustomWindow = false;
+    QSize m_lastViewSize;
     int m_fixedScaleFactor = 1;
     QPointF m_stretch{1.0, 1.0};
     bool m_smoothPixmaps = false;

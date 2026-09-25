@@ -1346,18 +1346,8 @@ void MainWindow::setMaximizedPanel(int panel)
     for (const auto& state : primary().planeViews) {
         panelsHadFocus = panelsHadFocus || focused == state.view;
     }
-    // A zoomed panel keeps showing the same region, only bigger or smaller;
-    // Fit and fixed scales refit on the resize themselves. A hidden panel
-    // keeps its last size, so its window is still the one it showed.
-    std::array<std::optional<QRectF>, 3> zoomedWindows;
-    for (int normal = 0; normal < 3; ++normal) {
-        auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
-        if (view->transformMode() == ImageView::TransformMode::Custom) {
-            zoomedWindows[static_cast<std::size_t>(normal)]
-                = view->mapToScene(view->viewport()->rect()).boundingRect();
-        }
-    }
-    // Hidden panels keep rendering, so restoring the grid is instant.
+    // Hidden panels keep rendering, so restoring the grid is instant. A zoomed
+    // panel refits its region on the resize (ImageView::resizeEvent).
     for (int normal = 0; normal < 3; ++normal) {
         primary().planeViews[static_cast<std::size_t>(normal)].view->setVisible(
             panel == -1 || panel == normal);
@@ -1372,13 +1362,6 @@ void MainWindow::setMaximizedPanel(int panel)
         m_panelGrid->setColumnStretch(index, cell == nullptr || (*cell)[1] == index ? 1 : 0);
     }
     m_panelGrid->activate();
-    for (int normal = 0; normal < 3; ++normal) {
-        auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
-        if (const auto& window = zoomedWindows[static_cast<std::size_t>(normal)];
-            window && view->isVisible()) {
-            view->refitCustomWindow(*window);
-        }
-    }
     if (panel >= 0 && panel < 3) {
         setActiveView(primary().planeViews[static_cast<std::size_t>(panel)]);
     }

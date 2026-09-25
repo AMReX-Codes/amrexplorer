@@ -132,10 +132,11 @@ void ScientificDoubleSpinBox::fixup(QString& input) const
         return;
     }
     // Full precision, not the display format: the text is parsed again, and a
-    // short format can round the bound past itself (DBL_MAX to 1.8e+308). The
+    // short format can round the bound past itself (DBL_MAX to 1.8e+308). No
+    // group separator either: a comma-decimal locale reads 10,000 as 10. The
     // committed value is then shown in the display format.
     input = prefix()
-        + cNumberLocale().toString(std::clamp(value, minimum(), maximum()), 'g',
+        + QString::number(std::clamp(value, minimum(), maximum()), 'g',
             std::numeric_limits<double>::max_digits10)
         + suffix();
 }

@@ -5,6 +5,7 @@
 #include <QFocusEvent>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QLocale>
 #include <QString>
 
 #include <cstdlib>
@@ -200,4 +201,17 @@ int main(int argc, char* argv[])
     commit(QStringLiteral("5"), false);
     require(bounded.value() == 1.2356 && bounded.cleanText() == QStringLiteral("1.24"),
         "a short format rounded the clamped maximum past the bound");
+
+    // Under a comma-decimal locale the clamped text must not carry a group
+    // separator, which that locale would read as a decimal point (10,000 as 10).
+    TestScientificDoubleSpinBox german;
+    german.setLocale(QLocale(QLocale::German, QLocale::Germany));
+    german.setRange(0.01, 10000.0);
+    german.setValue(1.0);
+    german.editor()->setText(QStringLiteral("1,5e4"));
+    german.editor()->setModified(true);
+    QFocusEvent germanFocusOut(QEvent::FocusOut, Qt::TabFocusReason);
+    QApplication::sendEvent(&german, &germanFocusOut);
+    require(german.value() == 10000.0,
+        "a comma-decimal locale read the clamped maximum's group separator as a decimal");
 }

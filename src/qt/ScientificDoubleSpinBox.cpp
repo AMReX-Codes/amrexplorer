@@ -7,6 +7,7 @@
 #include <QSignalBlocker>
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace amrvis::qt {
@@ -97,6 +98,24 @@ double ScientificDoubleSpinBox::valueFromText(const QString& text) const
     }
     const auto localizedValue = locale().toDouble(number, &ok);
     return ok ? localizedValue : QDoubleSpinBox::valueFromText(text);
+}
+
+void ScientificDoubleSpinBox::fixup(QString& input) const
+{
+    // A number past the range is clamped to it. Left alone, Qt puts the old
+    // value back without a word. An overflow parses as an infinity.
+    const auto number = numberText(input);
+    const auto parse = [&number](const QLocale& locale, double& value) {
+        bool ok = false;
+        value = locale.toDouble(number, &ok);
+        return ok || std::isinf(value);
+    };
+    double value = 0.0;
+    if ((!parse(cNumberLocale(), value) && !parse(locale(), value)) || std::isnan(value)) {
+        QDoubleSpinBox::fixup(input);
+        return;
+    }
+    input = prefix() + textFromValue(std::clamp(value, minimum(), maximum())) + suffix();
 }
 
 QValidator::State ScientificDoubleSpinBox::validate(

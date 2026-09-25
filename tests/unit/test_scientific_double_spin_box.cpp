@@ -151,4 +151,30 @@ int main(int argc, char* argv[])
         require(spinBox.value() == 0.5 && !spinBox.editor()->isModified(),
             "committing identical text changed the value or left a pending edit");
     }
+
+    // A number typed past a bounded range is clamped to the bound, visibly,
+    // rather than silently replaced by the previous value.
+    TestScientificDoubleSpinBox bounded;
+    bounded.setRange(0.01, 10000.0);
+    bounded.setValue(1.0);
+    const auto commit = [&bounded](const QString& text, bool focusOut) {
+        bounded.editor()->setText(text);
+        bounded.editor()->setModified(true);
+        if (focusOut) {
+            QFocusEvent event(QEvent::FocusOut, Qt::TabFocusReason);
+            QApplication::sendEvent(&bounded, &event);
+        } else {
+            bounded.interpretText();
+        }
+    };
+    commit(QStringLiteral("10000000000000000000"), false);
+    require(bounded.value() == 10000.0 && bounded.cleanText() == QStringLiteral("10000"),
+        "a number above the range was not clamped to the maximum");
+    bounded.setValue(1.0);
+    commit(QStringLiteral("1e400"), true);
+    require(bounded.value() == 10000.0,
+        "a number past double range was not clamped to the maximum");
+    commit(QStringLiteral("0.001"), true);
+    require(bounded.value() == 0.01 && bounded.cleanText() == QStringLiteral("0.01"),
+        "a number below the range was not clamped to the minimum");
 }

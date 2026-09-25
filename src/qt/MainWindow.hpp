@@ -497,6 +497,8 @@ public:
     {
         applyAxisScale(axisScale);
     }
+    [[nodiscard]] std::array<double, 3> axisScaleForTest() const { return m_axisScale; }
+    void showAxisScalingDialogForTest() { showAxisScalingDialog(); }
     [[nodiscard]] bool aspectMenuEnabledForTest() const;
     [[nodiscard]] double activeViewStretchRatioForTest() const;
     // The isometric view's outlined domain in its display coordinates.
@@ -1243,14 +1245,14 @@ private:
     void showLengthUnitsDialog();
     void applyLengthUnit(const QString& unitId);
     // View > Aspect Ratio: the per-axis display stretch (see AspectMode.hpp).
-    // The dialog edits m_axisScale; applyAxisScale installs a new set and
-    // resetAxisScale returns to unit factors when a dataset is opened.
+    // The dialog edits m_axisScale; applyAxisScale installs a new set, saved
+    // in the settings and kept across opens.
     void showAxisScalingDialog();
     // The per-axis factors (the primary's along every axis) and, with a
     // companion, the companion's factor along the perpendicular axis.
     void applyAxisScale(const std::array<double, 3>& axisScale,
         std::optional<double> companionPerpendicularScale = std::nullopt);
-    void resetAxisScale();
+    void closeAxisScalingDialog();
     void setAspectMode(AspectMode mode);
     [[nodiscard]] std::array<double, 3> displayStretchPerAxis() const;
     // The two factors a panel shows, normalized so the smaller is one.
@@ -1331,6 +1333,7 @@ private:
     void updateWindowTitle();
     void restoreSettings();
     void saveSettings();
+    void saveAxisScale();
 
     // Per-view wiring and display updates. A panel's ImageView is wired once
     // for the signals that belong to the panel (zoom, fit, resize, scroll,

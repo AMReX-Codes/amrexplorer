@@ -1683,8 +1683,12 @@ std::array<double, 3> MainWindow::displayStretchPerAxis() const
     // (updateAspectControls shows the mode in effect). Only the spherical R-Z
     // warp is physical in its pixels.
     const auto mode = displayIsMapped() ? AspectMode::PhysicalSize : m_aspectMode;
+    // Axis Scaling is unavailable for a spherical plotfile, so its saved
+    // factors wait for the next dataset rather than stretch r and theta.
+    const auto factors = displayIsSpherical()
+        ? std::array<double, 3>{1.0, 1.0, 1.0} : m_axisScale;
     return amrvis::qt::displayStretchPerAxis(primary().session->metadata(),
-        mode, m_axisScale, displayIsSpherical());
+        mode, factors, displayIsSpherical());
 }
 
 std::array<double, 2> MainWindow::displayStretchFor(

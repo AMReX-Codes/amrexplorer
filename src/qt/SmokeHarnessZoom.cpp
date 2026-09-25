@@ -4,6 +4,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QDoubleSpinBox>
 #include <QKeyEvent>
 #include <QSignalBlocker>
 #include <QStyle>
@@ -135,6 +136,94 @@ Outcome dispatchZoom(Context& context)
                     near(window.activeViewStretchRatioForTest(), 0.5)
                         && window.fixedScaleStateMatchesForTest(2)
                         ? 0 : 1);
+            });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if ((argc == 4 || argc == 5)
+        && std::string_view(argv[1]) == "--axis-scale-settings-smoke-test") {
+        // Axis Scaling is saved and kept. "save" sets the factors, reopens,
+        // checks the dialog shows plain factors up to 10000, and has a second
+        // window, still on unit factors, save its other settings. "load", a
+        // second process on the same settings, starts from the saved factors
+        // and applies them, but not to a spherical plotfile's r-theta display,
+        // where Axis Scaling is unavailable.
+        const bool save = std::string_view(argv[2]) == "save";
+        const std::filesystem::path path(argv[3]);
+        const std::filesystem::path spherical(argc == 5 ? argv[4] : "");
+        const std::array<double, 3> stretched{1.0, 2.0, 1000.0};
+        const auto fail = [&application](const char* message) {
+            qCritical("%s", message);
+            application.exit(1);
+        };
+        if (window.axisScaleForTest() != (save ? std::array<double, 3>{1.0, 1.0, 1.0} : stretched)) {
+            qCritical("Axis Scaling started at %g, %g, %g", window.axisScaleForTest()[0],
+                window.axisScaleForTest()[1], window.axisScaleForTest()[2]);
+            return {true, 1};
+        }
+        // Built now, so it holds unit factors when it saves later.
+        auto other = save ? std::make_shared<amrvis::qt::MainWindow>() : nullptr;
+        auto opened = std::make_shared<int>(0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, fail, save, path, spherical, stretched,
+                              opened, other](bool success) {
+                if (!success) {
+                    fail("the plotfile did not open");
+                    return;
+                }
+                const auto stage = ++*opened;
+                if (save && stage == 1) {
+                    window.setAxisScaleForTest(stretched);
+                    other->setSlicePlanesVisibleForTest(false);  // saves its settings
+                    QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+                    return;
+                }
+                if (!save && stage == 2) {
+                    // r across, theta up: the saved Y factor must not apply.
+                    if (window.displayIsSphericalWarpForTest()
+                        || std::abs(window.activeViewStretchRatioForTest() - 1.0) > 0.02) {
+                        qCritical("r-theta stretch %g", window.activeViewStretchRatioForTest());
+                        fail("saved factors stretched a spherical plotfile");
+                        return;
+                    }
+                    application.exit(window.axisScaleForTest() == stretched ? 0 : 1);
+                    return;
+                }
+                if (window.axisScaleForTest() != stretched) {
+                    fail(save ? "reopening reset Axis Scaling" : "Axis Scaling was not restored");
+                    return;
+                }
+                // XZ: X across, Z up, so the stretch is the Z factor.
+                window.setActiveViewForTest(1);
+                if (std::abs(window.activeViewStretchRatioForTest() / 1000.0 - 1.0) > 0.02) {
+                    qCritical("XZ stretch %g", window.activeViewStretchRatioForTest());
+                    fail("the kept Z factor does not stretch the view");
+                    return;
+                }
+                if (save) {
+                    window.showAxisScalingDialogForTest();
+                    const auto* x = window.findChild<QDoubleSpinBox*>(QStringLiteral("axisScaleSpinX"));
+                    const auto* z = window.findChild<QDoubleSpinBox*>(QStringLiteral("axisScaleSpinZ"));
+                    if (x == nullptr || z == nullptr || x->text() != QStringLiteral("1")
+                        || z->text() != QStringLiteral("1000") || z->maximum() != 10000.0) {
+                        qCritical("dialog shows X '%s', Z '%s' up to %g",
+                            x != nullptr ? qUtf8Printable(x->text()) : "?",
+                            z != nullptr ? qUtf8Printable(z->text()) : "?",
+                            z != nullptr ? z->maximum() : 0.0);
+                        fail("the Axis Scaling dialog does not show plain factors up to 10000");
+                        return;
+                    }
+                    application.exit(0);
+                    return;
+                }
+                if (spherical.empty()) {
+                    fail("no spherical plotfile to load");
+                    return;
+                }
+                QTimer::singleShot(0, &window, [&window, spherical] {
+                    window.selectSphericalDisplayForTest(1);  // r-theta
+                    window.openDataset(spherical);
+                });
             });
         QTimer::singleShot(15000, &application,
             [&application] { application.exit(4); });

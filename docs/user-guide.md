@@ -362,9 +362,10 @@ the factors of the two axes it shows, and the isometric wireframe in the
 lower-right panel is stretched by all three, so a shallow ocean's grid boxes
 stay visible there too. With a [companion
 plotfile](#companion-plotfiles) open, the axis perpendicular to the shared
-plane has one factor per dataset. The factors reset to 1 when you open a
-new dataset or sequence and are kept while stepping through a sequence's
-frames; the proportion persists across sessions.
+plane has one factor per dataset. Factors range from 0.01 to 10000 and are
+saved: they carry over to the datasets you open next and to later sessions,
+until **Reset** puts them back to 1. The companion's own factor starts at 1
+with each companion. The proportion persists across sessions too.
 
 The stretch is applied on screen only. The slice raster keeps one sample per
 finest cell, readouts and overlays follow the stretch, and image and animation
@@ -375,7 +376,8 @@ cells, in Physical Size mode equal axis factors. Vector glyphs are drawn in
 cell units, so a stretched display skews their arrows.
 
 The controls are unavailable for 2-D spherical plotfiles, whose R-Z view is
-already physical, and Physical Size is unavailable for standalone FABs and
+already physical; saved axis factors do not apply to them in any layout and
+wait for the next plotfile. Physical Size is unavailable for standalone FABs and
 MultiFabs, which carry no cell sizes. While a [mapped grid](#mapped-grids) is
 shown the display is physical too: the menu shows Physical Size in effect,
 Axis Scaling still applies, and the persisted proportion is untouched.
@@ -923,8 +925,8 @@ their neutral gray under every skin, so a colormap looks the same whichever
 one you pick.
 
 Window geometry, logarithmic mapping, palette, skin, number format,
-animation speed, aspect ratio proportion, the mapped-grid display, and the
-isosurface color persist across sessions.
+animation speed, aspect ratio proportion, axis scaling factors, the
+mapped-grid display, and the isosurface color persist across sessions.
 
 Each open dataset has a 1 GiB data cache by default, and volume rendering fills
 a second cache of the same size with the grids it samples the field into (an

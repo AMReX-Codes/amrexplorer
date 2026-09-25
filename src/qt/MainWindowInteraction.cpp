@@ -256,24 +256,26 @@ void MainWindow::showAxisScalingDialog()
 
     auto* explanation = new QLabel(tr(
         "Stretch each axis of the slice views by a factor. Factors apply on "
-        "top of the Aspect Ratio mode and reset when a dataset is opened."),
+        "top of the Aspect Ratio mode and are kept for later datasets and "
+        "sessions."),
         dialog);
     explanation->setWordWrap(true);
     const int dimension = primary().session ? primary().session->metadata().dimension : 3;
     auto* form = new QFormLayout;
-    std::array<QDoubleSpinBox*, 3> spins{nullptr, nullptr, nullptr};
+    std::array<ScientificDoubleSpinBox*, 3> spins{nullptr, nullptr, nullptr};
     // With a companion, the axis perpendicular to the shared plane has a
     // second factor for the companion, so each dataset can be stretched on
     // its own; the primary's is the ordinary axis factor.
-    QDoubleSpinBox* companionSpin = nullptr;
+    ScientificDoubleSpinBox* companionSpin = nullptr;
     const std::array<QString, 3> names{tr("X"), tr("Y"), tr("Z")};
     const std::array<const char*, 3> objectNames{
         "axisScaleSpinX", "axisScaleSpinY", "axisScaleSpinZ"};
+    // Shortest form ("1", "0.125", "1000"), so a factor is typed without
+    // deleting trailing zeros; "1e3" works too.
     const auto makeSpin = [dialog](const char* objectName, double value, bool enabled) {
-        auto* spin = new QDoubleSpinBox(dialog);
+        auto* spin = new ScientificDoubleSpinBox(dialog);
         spin->setObjectName(QLatin1String(objectName));
-        spin->setDecimals(3);
-        spin->setRange(0.01, 100.0);
+        spin->setRange(minimumAxisScale, maximumAxisScale);
         spin->setSingleStep(0.1);
         spin->setValue(value);
         spin->setEnabled(enabled);
@@ -355,7 +357,8 @@ void MainWindow::applyAxisScale(const std::array<double, 3>& axisScale,
     for (std::size_t axis = 0; axis < 3; ++axis) {
         factors[axis] = sane(axisScale[axis]);
     }
-    bool changed = factors != m_axisScale;
+    const bool axisChanged = factors != m_axisScale;
+    bool changed = axisChanged;
     m_axisScale = factors;
     if (companionPerpendicularScale) {
         const auto value = sane(*companionPerpendicularScale);
@@ -366,23 +369,19 @@ void MainWindow::applyAxisScale(const std::array<double, 3>& axisScale,
         clearNavigation();
         applyDisplayStretches();
     }
+    // The axis factors persist; the companion's own factor belongs to it.
+    if (axisChanged) {
+        saveAxisScale();
+    }
 }
 
-void MainWindow::resetAxisScale()
+void MainWindow::closeAxisScalingDialog()
 {
-    // Axis factors belong to this dataset, including any unapplied edit.
+    // The factors stay, but an open dialog's rows (and unapplied edits) belong
+    // to the outgoing dataset and its companion.
     if (m_axisScalingDialog != nullptr) {
         m_axisScalingDialog->reject();
     }
-    m_axisScale = {1.0, 1.0, 1.0};
-    // The views still show the outgoing dataset, and keep showing it if the
-    // new one fails to load, so they take the unit factors now. No remote
-    // re-request: that dataset is on its way out.
-    for (auto* state : currentViews()) {
-        applyDisplayStretch(*state);
-    }
-    updateScaleBarAvailability();
-    updateScaleBars();
 }
 
 void MainWindow::validateVectorMode()

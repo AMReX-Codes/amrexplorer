@@ -177,4 +177,12 @@ int main(int argc, char* argv[])
     commit(QStringLiteral("0.001"), true);
     require(bounded.value() == 0.01 && bounded.cleanText() == QStringLiteral("0.01"),
         "a number below the range was not clamped to the minimum");
+    bounded.setValue(1.0);
+    commit(QStringLiteral("1e-400"), true);
+    require(bounded.value() == 0.01,
+        "a number past double range toward zero was not clamped to the minimum");
+    bounded.setValue(1.0);
+    commit(QStringLiteral("1e"), true);
+    require(bounded.value() == 1.0,
+        "an unfinished number did not keep the previous value");
 }

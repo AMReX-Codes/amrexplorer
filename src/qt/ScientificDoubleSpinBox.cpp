@@ -4,6 +4,7 @@
 #include <QDoubleValidator>
 #include <QLineEdit>
 #include <QLocale>
+#include <QRegularExpression>
 #include <QSignalBlocker>
 
 #include <algorithm>
@@ -30,6 +31,16 @@ QValidator::State validateNumber(const QString& text, int position,
     validator.setNotation(QDoubleValidator::ScientificNotation);
     auto candidate = text;
     return validator.validate(candidate, position);
+}
+
+// A whole decimal number in either locale's notation. QLocale::toDouble
+// rejects one only when it underflows.
+bool isCompleteNumber(const QString& text, const QLocale& locale)
+{
+    const QRegularExpression pattern(QStringLiteral(
+        "^[+-]?(\\d+(%1\\d*)?|%1\\d+)([eE][+-]?\\d+)?$")
+            .arg(QRegularExpression::escape(locale.decimalPoint())));
+    return pattern.match(text).hasMatch();
 }
 
 } // namespace
@@ -103,11 +114,16 @@ double ScientificDoubleSpinBox::valueFromText(const QString& text) const
 void ScientificDoubleSpinBox::fixup(QString& input) const
 {
     // A number past the range is clamped to it. Left alone, Qt puts the old
-    // value back without a word. An overflow parses as an infinity.
+    // value back without a word. An overflow parses as an infinity, and a
+    // complete number that still fails to parse has underflowed to zero.
     const auto number = numberText(input);
     const auto parse = [&number](const QLocale& locale, double& value) {
         bool ok = false;
         value = locale.toDouble(number, &ok);
+        if (!ok && !std::isinf(value) && isCompleteNumber(number, locale)) {
+            value = 0.0;
+            ok = true;
+        }
         return ok || std::isinf(value);
     };
     double value = 0.0;

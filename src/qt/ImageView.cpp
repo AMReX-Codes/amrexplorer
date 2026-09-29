@@ -131,11 +131,15 @@ private:
         stamp.setDevicePixelRatio(ratio);
         stamp.fill(Qt::transparent);
         const QPointF centre(reach / ratio, reach / ratio);
+        // Opaque in the stamp, the alpha applied as it is copied: overlapping
+        // strokes (the cross's centre) would otherwise compound it.
+        auto opaque = m_color;
+        opaque.setAlpha(255);
         {
             QPainter shape(&stamp);
             shape.setRenderHint(QPainter::Antialiasing, true);
             shape.setPen(Qt::NoPen);
-            shape.setBrush(m_color);
+            shape.setBrush(opaque);
             switch (m_shape) {
             case MarkerShape::Circle:
                 shape.drawEllipse(centre, half, half);
@@ -159,7 +163,7 @@ private:
                 break;
             }
             case MarkerShape::Cross: {
-                QPen pen(m_color, std::max<qreal>(1.0, m_size / 3.0) / ratio);
+                QPen pen(opaque, std::max<qreal>(1.0, m_size / 3.0) / ratio);
                 pen.setCapStyle(Qt::FlatCap);
                 shape.setPen(pen);
                 const auto arm = 0.75 * size;
@@ -169,6 +173,7 @@ private:
             }
             }
         }
+        painter.setOpacity(painter.opacity() * m_color.alphaF());
         for (const auto& point : m_points) {
             painter.drawImage(transform.map(point) - centre, stamp);
         }

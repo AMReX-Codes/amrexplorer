@@ -598,6 +598,31 @@ void markersCoverWhatPaintingThemDirectlyDoes()
     }
 }
 
+// A translucent marker is one layer of its colour throughout: where a
+// shape's own strokes overlap (the cross's centre) it must not darken.
+void translucentMarkersAreOneLayer()
+{
+    for (const auto shape : amrvis::qt::markerShapes) {
+        amrvis::qt::ImageView view;
+        view.setImage(solidImage(64, 64));
+        amrvis::qt::PointOverlay overlay;
+        overlay.points = {{32.0, 32.0}};
+        overlay.color = QColor(255, 0, 0, 77);
+        overlay.size = 9.0F;
+        overlay.shape = shape;
+        view.setPointOverlays({overlay});
+        const auto image = view.composedImage(1.0);
+        int strongest = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                strongest = std::max(strongest, qRed(image.pixel(x, y)));
+            }
+        }
+        require(strongest >= 70 && strongest <= 80,
+            "a translucent marker is not one layer of its colour");
+    }
+}
+
 // A marker is m_size device pixels on screen whatever the display's pixel
 // ratio, as in an export and as the cosmetic circle is. The check means most
 // under image_view_pan_hidpi, where the viewport's ratio is 2.
@@ -929,6 +954,7 @@ int main(int argc, char* argv[])
     tearingDownTheSceneForgetsThePointTally();
     markerShapesPaintDistinctFixedSizeStamps();
     markersCoverWhatPaintingThemDirectlyDoes();
+    translucentMarkersAreOneLayer();
     markerShapesKeepTheirSizeOnHighDpiViewports();
     tilesShareOnePlacedScene();
     clearingAnAbsentTileLeavesTheViewAlone();

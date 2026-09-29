@@ -121,69 +121,56 @@ private:
         const auto ratio = painter.device()->devicePixelRatioF();
         const auto size = m_size / ratio;
         const auto half = 0.5 * size;
-        if (m_shape == MarkerShape::Circle) {
-            // One disc copied to each point. A wide round-capped point is
-            // stroked into its own antialiased path, about 40 times the cost.
-            const auto reach = std::ceil(0.5 * m_size) + 1.0;
-            const auto side = static_cast<int>(2.0 * reach);
-            QImage disc(side, side, QImage::Format_ARGB32_Premultiplied);
-            disc.setDevicePixelRatio(ratio);
-            disc.fill(Qt::transparent);
-            const QPointF centre(reach / ratio, reach / ratio);
-            {
-                QPainter discPainter(&disc);
-                discPainter.setRenderHint(QPainter::Antialiasing, true);
-                discPainter.setPen(Qt::NoPen);
-                discPainter.setBrush(m_color);
-                discPainter.drawEllipse(centre, half, half);
+        // The shape is drawn once and copied to each point: filling or
+        // stroking it per point costs 5 to 30 times the copy.
+        // Device pixels from the centre to the stamp's edge: the circle's
+        // radius, or past the cross's arms and the triangle's corners.
+        const auto reach = std::ceil(m_shape == MarkerShape::Circle ? 0.5 * m_size : m_size) + 1.0;
+        const auto side = static_cast<int>(2.0 * reach);
+        QImage stamp(side, side, QImage::Format_ARGB32_Premultiplied);
+        stamp.setDevicePixelRatio(ratio);
+        stamp.fill(Qt::transparent);
+        const QPointF centre(reach / ratio, reach / ratio);
+        {
+            QPainter shape(&stamp);
+            shape.setRenderHint(QPainter::Antialiasing, true);
+            shape.setPen(Qt::NoPen);
+            shape.setBrush(m_color);
+            switch (m_shape) {
+            case MarkerShape::Circle:
+                shape.drawEllipse(centre, half, half);
+                break;
+            case MarkerShape::Square:
+                shape.drawRect(QRectF(centre - QPointF(half, half), QSizeF(size, size)));
+                break;
+            case MarkerShape::Diamond: {
+                const auto r = half * std::sqrt(2.0);
+                shape.drawPolygon(QPolygonF{{QPointF(0.0, -r), QPointF(r, 0.0),
+                    QPointF(0.0, r), QPointF(-r, 0.0)}}.translated(centre));
+                break;
             }
-            for (const auto& point : m_points) {
-                painter.drawImage(transform.map(point) - centre, disc);
+            case MarkerShape::Triangle: {
+                // Equilateral, pointing up, centred on its centroid.
+                const auto edge = size * std::sqrt(4.0 / std::sqrt(3.0));
+                const auto height = edge * std::sqrt(3.0) / 2.0;
+                shape.drawPolygon(QPolygonF{{QPointF(0.0, -2.0 * height / 3.0),
+                    QPointF(0.5 * edge, height / 3.0),
+                    QPointF(-0.5 * edge, height / 3.0)}}.translated(centre));
+                break;
             }
-            return;
-        }
-        if (m_shape == MarkerShape::Cross) {
-            QPen pen(m_color, std::max<qreal>(1.0, m_size / 3.0) / ratio);
-            pen.setCapStyle(Qt::FlatCap);
-            painter.setPen(pen);
-            const auto arm = 0.75 * size;
-            std::vector<QLineF> lines;
-            lines.reserve(2 * m_points.size());
-            for (const auto& point : m_points) {
-                const auto centre = transform.map(point);
-                lines.emplace_back(centre - QPointF(arm, 0.0), centre + QPointF(arm, 0.0));
-                lines.emplace_back(centre - QPointF(0.0, arm), centre + QPointF(0.0, arm));
+            case MarkerShape::Cross: {
+                QPen pen(m_color, std::max<qreal>(1.0, m_size / 3.0) / ratio);
+                pen.setCapStyle(Qt::FlatCap);
+                shape.setPen(pen);
+                const auto arm = 0.75 * size;
+                shape.drawLine(centre - QPointF(arm, 0.0), centre + QPointF(arm, 0.0));
+                shape.drawLine(centre - QPointF(0.0, arm), centre + QPointF(0.0, arm));
+                break;
             }
-            painter.drawLines(lines.data(), static_cast<int>(lines.size()));
-            return;
-        }
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(m_color);
-        if (m_shape == MarkerShape::Square) {
-            std::vector<QRectF> squares;
-            squares.reserve(m_points.size());
-            for (const auto& point : m_points) {
-                squares.emplace_back(transform.map(point) - QPointF(half, half),
-                    QSizeF(size, size));
             }
-            painter.drawRects(squares.data(), static_cast<int>(squares.size()));
-            return;
-        }
-        QPolygonF marker;
-        if (m_shape == MarkerShape::Diamond) {
-            const auto r = half * std::sqrt(2.0);
-            marker << QPointF(0.0, -r) << QPointF(r, 0.0) << QPointF(0.0, r)
-                   << QPointF(-r, 0.0);
-        } else {
-            // Equilateral, pointing up, centred on its centroid.
-            const auto side = size * std::sqrt(4.0 / std::sqrt(3.0));
-            const auto height = side * std::sqrt(3.0) / 2.0;
-            marker << QPointF(0.0, -2.0 * height / 3.0)
-                   << QPointF(0.5 * side, height / 3.0)
-                   << QPointF(-0.5 * side, height / 3.0);
         }
         for (const auto& point : m_points) {
-            painter.drawPolygon(marker.translated(transform.map(point)));
+            painter.drawImage(transform.map(point) - centre, stamp);
         }
     }
 

@@ -4,11 +4,13 @@
 #include <QApplication>
 #include <QImage>
 #include <QKeyEvent>
+#include <QLineF>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
 #include <QPoint>
 #include <QPointF>
+#include <QPolygonF>
 #include <QRectF>
 #include <QScrollBar>
 #include <QSizeF>
@@ -499,42 +501,100 @@ void markerShapesPaintDistinctFixedSizeStamps()
     }
 }
 
-// The circle is a stamped disc from size 2 and a plain point below it; either
-// way it must cover what a round-capped point of that width does.
-void circleCoversWhatTheRoundPointDid()
+// Each marker is a stamp (a plain point for a one-pixel circle); it must
+// cover what painting its shape straight onto the point does, whole and in
+// place, so a stamp too small for its shape clips and fails here.
+void markersCoverWhatPaintingThemDirectlyDoes()
 {
+    // Summed red, so a one-pixel shape spread over four faint pixels by the
+    // antialiasing still counts, and where that red is centred.
+    struct Ink {
+        double red = 0.0;
+        QPointF centroid;
+    };
     const auto marked = [](const QImage& image) {
-        int count = 0;
+        Ink ink;
         for (int y = 0; y < image.height(); ++y) {
             for (int x = 0; x < image.width(); ++x) {
-                count += qRed(image.pixel(x, y)) > 128 ? 1 : 0;
+                const auto red = static_cast<double>(qRed(image.pixel(x, y)));
+                ink.red += red;
+                ink.centroid += red * QPointF(x + 0.5, y + 0.5);
             }
         }
-        return count;
+        if (ink.red > 0.0) {
+            ink.centroid /= ink.red;
+        }
+        return ink;
     };
-    for (const auto size : {1.0F, 3.0F, 9.0F}) {
-        amrvis::qt::ImageView view;
-        view.setImage(solidImage(64, 64));
-        amrvis::qt::PointOverlay overlay;
-        overlay.points = {{32.0, 32.0}};
-        overlay.color = Qt::red;
-        overlay.size = size;
-        view.setPointOverlays({overlay});
-        const auto drawn = marked(view.composedImage(1.0));
+    using amrvis::qt::MarkerShape;
+    const QPointF centre(32.0, 32.0);
+    // The shapes as the stamps draw them, painted directly.
+    const auto paintDirectly = [&centre](QPainter& painter, MarkerShape shape, qreal size) {
+        const auto half = 0.5 * size;
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(Qt::red);
+        switch (shape) {
+        case MarkerShape::Circle: {
+            QPen pen(Qt::red);
+            pen.setCosmetic(true);
+            pen.setWidthF(size);
+            pen.setCapStyle(Qt::RoundCap);
+            painter.setPen(pen);
+            painter.drawPoint(centre);
+            break;
+        }
+        case MarkerShape::Square:
+            painter.drawRect(QRectF(centre - QPointF(half, half), QSizeF(size, size)));
+            break;
+        case MarkerShape::Diamond: {
+            const auto r = half * std::sqrt(2.0);
+            painter.drawPolygon(QPolygonF{{QPointF(0.0, -r), QPointF(r, 0.0),
+                QPointF(0.0, r), QPointF(-r, 0.0)}}.translated(centre));
+            break;
+        }
+        case MarkerShape::Triangle: {
+            const auto edge = size * std::sqrt(4.0 / std::sqrt(3.0));
+            const auto height = edge * std::sqrt(3.0) / 2.0;
+            painter.drawPolygon(QPolygonF{{QPointF(0.0, -2.0 * height / 3.0),
+                QPointF(0.5 * edge, height / 3.0),
+                QPointF(-0.5 * edge, height / 3.0)}}.translated(centre));
+            break;
+        }
+        case MarkerShape::Cross: {
+            QPen pen(Qt::red, std::max<qreal>(1.0, size / 3.0));
+            pen.setCapStyle(Qt::FlatCap);
+            painter.setPen(pen);
+            const auto arm = 0.75 * size;
+            painter.drawLine(centre - QPointF(arm, 0.0), centre + QPointF(arm, 0.0));
+            painter.drawLine(centre - QPointF(0.0, arm), centre + QPointF(0.0, arm));
+            break;
+        }
+        }
+    };
+    for (const auto shape : amrvis::qt::markerShapes) {
+        for (const auto size : {1.0F, 3.0F, 9.0F}) {
+            amrvis::qt::ImageView view;
+            view.setImage(solidImage(64, 64));
+            amrvis::qt::PointOverlay overlay;
+            overlay.points = {centre};
+            overlay.color = Qt::red;
+            overlay.size = size;
+            overlay.shape = shape;
+            view.setPointOverlays({overlay});
+            const auto drawn = marked(view.composedImage(1.0));
 
-        QImage reference = solidImage(64, 64);
-        QPainter painter(&reference);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        QPen pen(Qt::red);
-        pen.setCosmetic(true);
-        pen.setWidthF(size);
-        pen.setCapStyle(Qt::RoundCap);
-        painter.setPen(pen);
-        painter.drawPoint(QPointF(32.0, 32.0));
-        painter.end();
-        const auto expected = marked(reference);
-        require(expected > 0 && 10 * drawn >= 9 * expected && 10 * drawn <= 11 * expected,
-            "the circle does not cover what a round-capped point does");
+            QImage reference = solidImage(64, 64);
+            QPainter painter(&reference);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            paintDirectly(painter, shape, size);
+            painter.end();
+            const auto expected = marked(reference);
+            require(expected.red > 0.0 && drawn.red >= 0.9 * expected.red
+                    && drawn.red <= 1.1 * expected.red,
+                "a marker does not cover what painting its shape directly does");
+            require(QLineF(drawn.centroid, expected.centroid).length() < 0.5,
+                "a marker is not centred where painting its shape directly is");
+        }
     }
 }
 
@@ -868,7 +928,7 @@ int main(int argc, char* argv[])
     arrowKeysRequestPanOnlyWhenFocusedWithAnImage();
     tearingDownTheSceneForgetsThePointTally();
     markerShapesPaintDistinctFixedSizeStamps();
-    circleCoversWhatTheRoundPointDid();
+    markersCoverWhatPaintingThemDirectlyDoes();
     markerShapesKeepTheirSizeOnHighDpiViewports();
     tilesShareOnePlacedScene();
     clearingAnAbsentTileLeavesTheViewAlone();

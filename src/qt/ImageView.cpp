@@ -176,6 +176,9 @@ private:
             }
         }
         painter.setOpacity(painter.opacity() * m_color.alphaF());
+        // A plain copy: the view's smooth transforms change no pixel here and
+        // halve the copy's speed.
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
         for (const auto& point : m_points) {
             painter.drawImage(transform.map(point) - centre, stamp);
         }

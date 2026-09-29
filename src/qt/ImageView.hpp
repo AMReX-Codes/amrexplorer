@@ -1,5 +1,6 @@
 #pragma once
 
+#include "MarkerShape.hpp"
 #include "ScaleBar.hpp"
 
 #include <amrexplorer/pipeline/ImageTransformPolicy.hpp>
@@ -54,6 +55,7 @@ struct PointOverlay {
     std::vector<QPointF> points;
     QColor color;
     float size = 3.0F;
+    MarkerShape shape = MarkerShape::Circle;
 };
 
 // ImageTransformPolicy lives in the Qt-free pipeline layer (the
@@ -263,6 +265,7 @@ public:
     // emptying it leaves pointOverlayCount unchanged.
     [[nodiscard]] std::size_t pointOverlayPointCount() const noexcept;
     [[nodiscard]] const std::vector<QColor>& pointOverlayColors() const noexcept;
+    [[nodiscard]] const std::vector<MarkerShape>& pointOverlayShapes() const noexcept;
     // Renders the scene (tiles plus grid boxes and any other overlays) to a
     // fresh QImage for export. scaleFactor multiplies the raster's native
     // resolution so the export reflects the on-screen zoom (WYSIWYG); an
@@ -405,6 +408,7 @@ private:
         std::vector<QGraphicsPathItem*> pathItems;
         std::vector<QGraphicsItem*> pointItems;
         std::vector<QColor> pointOverlayColors;
+        std::vector<MarkerShape> pointOverlayShapes;
         std::size_t pointOverlayPointCount = 0;
         std::optional<QLineF> crosshairVertical;
         std::optional<QLineF> crosshairHorizontal;

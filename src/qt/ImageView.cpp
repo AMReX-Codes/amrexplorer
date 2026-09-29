@@ -62,11 +62,12 @@ public:
 class PointCloudItem final : public QGraphicsItem {
 public:
     PointCloudItem(std::vector<QPointF> points, const QRectF& bounds,
-        QColor color, qreal size)
+        QColor color, qreal size, MarkerShape shape)
         : m_points(std::move(points))
         , m_bounds(bounds)
         , m_color(std::move(color))
         , m_size(size)
+        , m_shape(shape)
     {
     }
 
@@ -91,22 +92,80 @@ public:
 
     void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override
     {
-        QPen pen(m_color);
-        pen.setCosmetic(true);
-        pen.setWidthF(m_size);
-        pen.setCapStyle(Qt::RoundCap);
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing, true);
-        painter->setPen(pen);
-        painter->drawPoints(m_points.data(), static_cast<int>(m_points.size()));
+        if (m_shape == MarkerShape::Circle) {
+            QPen pen(m_color);
+            pen.setCosmetic(true);
+            pen.setWidthF(m_size);
+            pen.setCapStyle(Qt::RoundCap);
+            painter->setPen(pen);
+            painter->drawPoints(m_points.data(), static_cast<int>(m_points.size()));
+        } else {
+            paintMarkers(*painter);
+        }
         painter->restore();
     }
 
 private:
+    // Stamped in device pixels, so a marker keeps its on-screen size at any
+    // zoom, as the cosmetic dot does. Each shape covers about the dot's area
+    // (m_size squared) so no species looks heavier than another.
+    void paintMarkers(QPainter& painter) const
+    {
+        const auto transform = painter.worldTransform();
+        painter.resetTransform();
+        const auto half = 0.5 * m_size;
+        if (m_shape == MarkerShape::Cross) {
+            QPen pen(m_color, std::max<qreal>(1.0, m_size / 3.0));
+            pen.setCapStyle(Qt::FlatCap);
+            painter.setPen(pen);
+            const auto arm = 0.75 * m_size;
+            std::vector<QLineF> lines;
+            lines.reserve(2 * m_points.size());
+            for (const auto& point : m_points) {
+                const auto centre = transform.map(point);
+                lines.emplace_back(centre - QPointF(arm, 0.0), centre + QPointF(arm, 0.0));
+                lines.emplace_back(centre - QPointF(0.0, arm), centre + QPointF(0.0, arm));
+            }
+            painter.drawLines(lines.data(), static_cast<int>(lines.size()));
+            return;
+        }
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(m_color);
+        if (m_shape == MarkerShape::Square) {
+            std::vector<QRectF> squares;
+            squares.reserve(m_points.size());
+            for (const auto& point : m_points) {
+                squares.emplace_back(transform.map(point) - QPointF(half, half),
+                    QSizeF(m_size, m_size));
+            }
+            painter.drawRects(squares.data(), static_cast<int>(squares.size()));
+            return;
+        }
+        QPolygonF marker;
+        if (m_shape == MarkerShape::Diamond) {
+            const auto r = half * std::sqrt(2.0);
+            marker << QPointF(0.0, -r) << QPointF(r, 0.0) << QPointF(0.0, r)
+                   << QPointF(-r, 0.0);
+        } else {
+            // Equilateral, pointing up, centred on its centroid.
+            const auto side = m_size * std::sqrt(4.0 / std::sqrt(3.0));
+            const auto height = side * std::sqrt(3.0) / 2.0;
+            marker << QPointF(0.0, -2.0 * height / 3.0)
+                   << QPointF(0.5 * side, height / 3.0)
+                   << QPointF(-0.5 * side, height / 3.0);
+        }
+        for (const auto& point : m_points) {
+            painter.drawPolygon(marker.translated(transform.map(point)));
+        }
+    }
+
     std::vector<QPointF> m_points;
     QRectF m_bounds;
     QColor m_color;
     qreal m_size = 3.0;
+    MarkerShape m_shape = MarkerShape::Circle;
 };
 
 void paintScaleBar(QPainter* painter, const QRectF& imageBounds, double codeUnitsPerImagePixel,
@@ -279,6 +338,7 @@ void ImageView::clearTileItems(Tile& tile)
     tile.pathItems.clear();
     tile.pointItems.clear();
     tile.pointOverlayColors.clear();
+    tile.pointOverlayShapes.clear();
     tile.pointOverlayPointCount = 0;
     tile.crosshairVerticalItem = nullptr;
     tile.crosshairHorizontalItem = nullptr;
@@ -711,6 +771,7 @@ void ImageView::setPointOverlays(const std::vector<PointOverlay>& overlays,
     }
     deleteItems(m_scene, tile->pointItems);
     tile->pointOverlayColors.clear();
+    tile->pointOverlayShapes.clear();
     tile->pointOverlayPointCount = 0;
     if (tile->item == nullptr) {
         return;
@@ -722,11 +783,12 @@ void ImageView::setPointOverlays(const std::vector<PointOverlay>& overlays,
         }
         auto* item = new PointCloudItem(
             overlay.points, tile->item->boundingRect(), overlay.color,
-            overlay.size);
+            overlay.size, overlay.shape);
         item->setParentItem(tile->item);
         item->setZValue(3.0);
         tile->pointItems.push_back(item);
         tile->pointOverlayColors.push_back(overlay.color);
+        tile->pointOverlayShapes.push_back(overlay.shape);
         tile->pointOverlayPointCount += overlay.points.size();
     }
 }
@@ -780,6 +842,11 @@ std::size_t ImageView::pointOverlayPointCount() const noexcept
 const std::vector<QColor>& ImageView::pointOverlayColors() const noexcept
 {
     return m_tiles.front().pointOverlayColors;
+}
+
+const std::vector<MarkerShape>& ImageView::pointOverlayShapes() const noexcept
+{
+    return m_tiles.front().pointOverlayShapes;
 }
 
 void ImageView::setCrosshairs(const std::optional<QLineF>& vertical,

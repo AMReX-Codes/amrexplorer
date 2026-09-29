@@ -772,19 +772,22 @@ Plotfiles that carry particle data can draw it over the slice. Choose **Overlays
 Particles...** — the item is enabled only while the open dataset has at least
 one particle species.
 
-The dialog lists every species with its particle count and three controls
+The dialog lists every species with its particle count and four controls
 each:
 
 - **Show** draws that species, or hides it.
 - **Color** picks the point color. Each species starts with a distinct default.
 - **Alpha** sets opacity from 0 to 100 percent.
+- **Shape** picks the marker: circle, square, diamond, triangle, or cross. Each
+  species starts with a distinct default, the first with a circle. Shapes are
+  easier to tell apart at a larger point size.
 
 Below the species list are the settings that apply to all of them:
 
 - **Visible subset** is the percentage of particles drawn, from 0.01 to 100.
 - **Sampling seed** chooses *which* particles the subset contains. Change it to
   look at a different sample of the same size.
-- **Point size** is the drawn diameter in pixels, from 1 to 12.
+- **Point size** is the drawn marker size in pixels, from 1 to 12.
 - **Only particles in cells the slice crosses** narrows each panel to the
   particles lying inside the cells that panel is showing. 3-D data only.
 
@@ -805,7 +808,7 @@ level's spacing, and on a mapped grid it is the cell's own faces, which follow
 the terrain; where a panel shows no data it shows no particles either.
 
 Particle settings are not saved between sessions. Species selection, colors,
-subset percentage, seed, point size, and the slice-cell filter all reset when a
+shapes, subset percentage, seed, point size, and the slice-cell filter all reset when a
 new dataset or sequence is opened; they carry across the frames of an open
 sequence.
 

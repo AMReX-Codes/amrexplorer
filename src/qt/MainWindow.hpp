@@ -621,6 +621,7 @@ public:
         const std::string& species, const QColor& color);
     [[nodiscard]] bool particleOverlaysUseColorForTest(
         const QColor& color);
+    [[nodiscard]] bool particleOverlaysUseShapeForTest(MarkerShape shape);
     [[nodiscard]] std::size_t particleSampleCountForTest() const;
     // Point batches (one per drawn species) and the points in them: the
     // slice-cell filter thins the batches without emptying them.

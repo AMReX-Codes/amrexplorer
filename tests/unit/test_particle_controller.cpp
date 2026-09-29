@@ -5,6 +5,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QProgressBar>
@@ -279,6 +280,8 @@ int main(int argc, char** argv)
             "settings do not start at their defaults");
         require(controller.colorFor("electrons") == QColor(Qt::white),
             "an unknown species is not drawn white");
+        require(controller.shapeFor("electrons") == amrvis::qt::MarkerShape::Circle,
+            "an unknown species is not drawn as a circle");
         controller.configureForDataset(false);
         require(!action->isEnabled(), "no dataset yet enabled the action");
         current = session;
@@ -287,13 +290,21 @@ int main(int argc, char** argv)
         require(controller.settings().colors.at("electrons") == QColor(Qt::white)
                 && controller.settings().colors.at("ions") == QColor(Qt::yellow),
             "default species colours were not seeded in order");
+        require(controller.shapeFor("electrons") == amrvis::qt::MarkerShape::Circle
+                && controller.shapeFor("ions") == amrvis::qt::MarkerShape::Square,
+            "default species shapes were not seeded in order");
         controller.setColor("ions", QColor(Qt::red));
+        controller.setShape("ions", amrvis::qt::MarkerShape::Cross);
         controller.configureForDataset(true);
         require(controller.settings().colors.at("ions") == QColor(Qt::red),
             "preserving the selection did not keep a chosen colour");
+        require(controller.shapeFor("ions") == amrvis::qt::MarkerShape::Cross,
+            "preserving the selection did not keep a chosen shape");
         controller.configureForDataset(false);
         require(controller.settings().colors.at("ions") == QColor(Qt::yellow),
             "a reset did not restore the default colour");
+        require(controller.shapeFor("ions") == amrvis::qt::MarkerShape::Square,
+            "a reset did not restore the default shape");
         current.reset();
     }
 
@@ -695,6 +706,50 @@ int main(int argc, char** argv)
             "the reopened check box did not show the applied setting");
         controller.closeDialog();
         current = session;
+    }
+
+    // Each row offers a shape starting from the stored one; Apply stores the
+    // pick as a redraw, since the samples do not change.
+    {
+        current = session;
+        Observed observed;
+        ParticleController controller(hooks());
+        controller.configureForDataset(false);
+        controller.restoreSelection({"ions"}, 0.5, 3, true);
+        observe(controller, observed);
+        QWidget host;
+        controller.showDialog(&host);
+        auto* dialog = host.findChild<QDialog*>(QStringLiteral("particlesDialog"));
+        require(dialog != nullptr, "the dialog was not shown");
+        const auto shapeOf = [](const QComboBox* combo) {
+            return static_cast<amrvis::qt::MarkerShape>(combo->currentData().toInt());
+        };
+        auto shapes = dialog->findChildren<QComboBox*>(QStringLiteral("particleShape"));
+        require(shapes.size() == 2
+                && shapeOf(shapes[0]) == amrvis::qt::MarkerShape::Circle
+                && shapeOf(shapes[1]) == amrvis::qt::MarkerShape::Square,
+            "the shape rows do not show the stored shapes");
+        shapes[1]->setCurrentIndex(shapes[1]->findData(
+            static_cast<int>(amrvis::qt::MarkerShape::Diamond)));
+        auto* buttons = dialog->findChild<QDialogButtonBox*>(
+            QStringLiteral("particlesDialogButtons"));
+        require(buttons != nullptr, "no button box");
+        buttons->button(QDialogButtonBox::Apply)->click();
+        require(controller.shapeFor("ions") == amrvis::qt::MarkerShape::Diamond,
+            "Apply did not store the picked shape");
+        require(observed.overlays == 1 && observed.selection == 0,
+            "a shape change reloaded instead of redrawing");
+        controller.closeDialog();
+        QCoreApplication::processEvents();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        controller.showDialog(&host);
+        dialog = host.findChild<QDialog*>(QStringLiteral("particlesDialog"));
+        require(dialog != nullptr, "the dialog did not reopen");
+        shapes = dialog->findChildren<QComboBox*>(QStringLiteral("particleShape"));
+        require(shapes.size() == 2
+                && shapeOf(shapes[1]) == amrvis::qt::MarkerShape::Diamond,
+            "the reopened row did not show the applied shape");
+        controller.closeDialog();
     }
 
     std::cout << "particle controller tests passed\n";

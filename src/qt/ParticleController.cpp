@@ -8,6 +8,7 @@
 #include <QAction>
 #include <QCheckBox>
 #include <QColorDialog>
+#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -45,6 +46,23 @@ QColor defaultParticleColor(std::size_t speciesIndex)
 {
     return QColor(
         particleDefaultColors[speciesIndex % particleDefaultColors.size()]);
+}
+
+MarkerShape defaultParticleShape(std::size_t speciesIndex)
+{
+    return markerShapes[speciesIndex % markerShapes.size()];
+}
+
+QString markerShapeName(MarkerShape shape)
+{
+    switch (shape) {
+    case MarkerShape::Circle: return ParticleController::tr("Circle");
+    case MarkerShape::Square: return ParticleController::tr("Square");
+    case MarkerShape::Diamond: return ParticleController::tr("Diamond");
+    case MarkerShape::Triangle: return ParticleController::tr("Triangle");
+    case MarkerShape::Cross: return ParticleController::tr("Cross");
+    }
+    return {};
 }
 
 void updateColorButton(QPushButton& button, const QColor& color)
@@ -90,6 +108,12 @@ QColor ParticleController::colorFor(const std::string& species) const
     return color != m_settings.colors.end() ? color->second : QColor(Qt::white);
 }
 
+MarkerShape ParticleController::shapeFor(const std::string& species) const
+{
+    const auto shape = m_settings.shapes.find(species);
+    return shape != m_settings.shapes.end() ? shape->second : MarkerShape::Circle;
+}
+
 void ParticleController::applySelection(std::vector<std::string> species,
     double fraction, int pointSize, std::uint64_t seed, bool sliceCellsOnly)
 {
@@ -103,7 +127,7 @@ void ParticleController::applySelection(std::vector<std::string> species,
     m_settings.sliceCellsOnly = sliceCellsOnly;
     m_settings.selectionInitialized = true;
     if (!sampleChanged) {
-        // Colour, alpha, point size and the slice-cell filter only affect the
+        // Colour, alpha, shape, point size and the slice-cell filter only affect the
         // installed point batches; do not reread particle files when the
         // sampled identities are unchanged.
         emit overlaysChanged();
@@ -115,6 +139,12 @@ void ParticleController::applySelection(std::vector<std::string> species,
 void ParticleController::setColor(const std::string& species, const QColor& color)
 {
     m_settings.colors[species] = color;
+    emit overlaysChanged();
+}
+
+void ParticleController::setShape(const std::string& species, MarkerShape shape)
+{
+    m_settings.shapes[species] = shape;
     emit overlaysChanged();
 }
 
@@ -152,6 +182,8 @@ void ParticleController::configureForDataset(bool preserveSelection)
         for (std::size_t index = 0; index < species.size(); ++index) {
             m_settings.colors.try_emplace(
                 species[index].name, defaultParticleColor(index));
+            m_settings.shapes.try_emplace(
+                species[index].name, defaultParticleShape(index));
         }
     }
     refreshActionEnabled();
@@ -330,6 +362,7 @@ void ParticleController::showDialog(QWidget* parent)
         QCheckBox* enabled = nullptr;
         QPushButton* colorButton = nullptr;
         QSpinBox* alpha = nullptr;
+        QComboBox* shape = nullptr;
         QColor color;
     };
     // The dialog outlives this call, so the per-species state has to as
@@ -342,6 +375,7 @@ void ParticleController::showDialog(QWidget* parent)
     speciesGrid->addWidget(new QLabel(tr("Species"), dialog), 0, 1);
     speciesGrid->addWidget(new QLabel(tr("Color"), dialog), 0, 2);
     speciesGrid->addWidget(new QLabel(tr("Alpha"), dialog), 0, 3);
+    speciesGrid->addWidget(new QLabel(tr("Shape"), dialog), 0, 4);
     for (std::size_t speciesIndex = 0; speciesIndex < allSpecies.size();
          ++speciesIndex) {
         const auto& species = allSpecies[speciesIndex];
@@ -372,13 +406,24 @@ void ParticleController::showDialog(QWidget* parent)
         alpha->setRange(0, 100);
         alpha->setSuffix(tr("%"));
         alpha->setValue(qRound(stored.alphaF() * 100.0));
+        auto* shape = new QComboBox(dialog);
+        shape->setObjectName(QStringLiteral("particleShape"));
+        for (const auto option : markerShapes) {
+            shape->addItem(markerShapeName(option), static_cast<int>(option));
+        }
+        const auto storedShape = m_settings.shapes.find(species.name);
+        shape->setCurrentIndex(shape->findData(static_cast<int>(
+            storedShape != m_settings.shapes.end()
+                ? storedShape->second
+                : defaultParticleShape(speciesIndex))));
         const auto row = static_cast<int>(speciesIndex + 1);
         speciesGrid->addWidget(check, row, 0, Qt::AlignHCenter);
         speciesGrid->addWidget(name, row, 1);
         speciesGrid->addWidget(colorButton, row, 2);
         speciesGrid->addWidget(alpha, row, 3);
+        speciesGrid->addWidget(shape, row, 4);
         speciesControls->push_back(
-            {species.name, check, colorButton, alpha, color});
+            {species.name, check, colorButton, alpha, shape, color});
     }
     for (std::size_t index = 0; index < speciesControls->size(); ++index) {
         connect((*speciesControls)[index].colorButton, &QPushButton::clicked,
@@ -487,6 +532,8 @@ void ParticleController::showDialog(QWidget* parent)
                 applied.setAlphaF(
                     static_cast<float>(controls.alpha->value()) / 100.0F);
                 m_settings.colors[controls.name] = applied;
+                m_settings.shapes[controls.name] = static_cast<MarkerShape>(
+                    controls.shape->currentData().toInt());
             }
             // No check box below three dimensions; keep what is stored so
             // the filter is not silently cleared by a 2-D dataset's dialog.

@@ -44,6 +44,7 @@ add_executable(amrexplorer_qt
     MainWindowNavigation.cpp
     MainWindowInternal.hpp
     MainWindowSlice.cpp
+    MarkerShape.hpp
     NumberFormat.cpp
     NumberFormat.hpp
     PaletteController.cpp

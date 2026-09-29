@@ -639,6 +639,7 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
     for (const auto& sample : samples) {
         PointOverlay overlay;
         overlay.color = m_particleController->colorFor(sample.species.name);
+        overlay.shape = m_particleController->shapeFor(sample.species.name);
         overlay.size
             = static_cast<float>(m_particleController->settings().pointSize);
         if (mapped) {

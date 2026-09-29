@@ -628,6 +628,16 @@ Outcome dispatchRange(Context& context)
                     application.exit(1);
                     return;
                 }
+                // The picked shape must reach the drawn points.
+                auto* shape = dialog->findChild<QComboBox*>(
+                    QStringLiteral("particleShape"));
+                if (shape == nullptr) {
+                    qCritical("the particles dialog has no shape choice");
+                    application.exit(1);
+                    return;
+                }
+                shape->setCurrentIndex(shape->findData(
+                    static_cast<int>(amrvis::qt::MarkerShape::Diamond)));
                 buttons->button(QDialogButtonBox::Apply)->click();
                 // Apply draws the checked species and leaves the dialog up.
                 if (!dialog->isVisible() || !window.particleLoadingForTest()) {
@@ -657,6 +667,12 @@ Outcome dispatchRange(Context& context)
                 auto* dialog = liveDialog();
                 if (dialog == nullptr) {
                     qCritical("the dialog did not survive the particle read");
+                    application.exit(1);
+                    return;
+                }
+                if (!window.particleOverlaysUseShapeForTest(
+                        amrvis::qt::MarkerShape::Diamond)) {
+                    qCritical("the drawn particles do not use the picked shape");
                     application.exit(1);
                     return;
                 }

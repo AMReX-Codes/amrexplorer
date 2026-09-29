@@ -456,6 +456,47 @@ void tearingDownTheSceneForgetsThePointTally()
         "replacing the overlays left the point tally behind");
 }
 
+// Each marker shape paints a distinct stamp over its point, and keeps its
+// device size when the export is scaled up, as the cosmetic circle does.
+void markerShapesPaintDistinctFixedSizeStamps()
+{
+    const auto markedPixels = [](amrvis::qt::MarkerShape shape, qreal scale) {
+        amrvis::qt::ImageView view;
+        view.setImage(solidImage(64, 64));
+        amrvis::qt::PointOverlay overlay;
+        overlay.points = {{32.0, 32.0}};
+        overlay.color = Qt::red;
+        overlay.size = 9.0F;
+        overlay.shape = shape;
+        view.setPointOverlays({overlay});
+        const auto image = view.composedImage(scale);
+        std::vector<QPoint> marked;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                if (qRed(image.pixel(x, y)) > 128) marked.emplace_back(x, y);
+            }
+        }
+        return marked;
+    };
+    std::vector<std::vector<QPoint>> stamps;
+    for (const auto shape : amrvis::qt::markerShapes) {
+        const auto native = markedPixels(shape, 1.0);
+        require(std::find(native.begin(), native.end(), QPoint(32, 32)) != native.end(),
+            "a marker did not cover its own point");
+        require(native.size() > 10 && native.size() < 150,
+            "a marker is far from the dot's size");
+        const auto scaled = markedPixels(shape, 2.0);
+        require(scaled.size() < 2 * native.size(),
+            "a marker grew with the export scale");
+        stamps.push_back(native);
+    }
+    for (std::size_t a = 0; a < stamps.size(); ++a) {
+        for (std::size_t b = a + 1; b < stamps.size(); ++b) {
+            require(stamps[a] != stamps[b], "two marker shapes paint the same stamp");
+        }
+    }
+}
+
 // Move the pointer over a scene point and report which tile and raster pixel
 // the view named, or -1 when it stayed silent.
 struct TileProbe {
@@ -743,6 +784,7 @@ int main(int argc, char* argv[])
     fullyVisibleSceneIgnoresPan();
     arrowKeysRequestPanOnlyWhenFocusedWithAnImage();
     tearingDownTheSceneForgetsThePointTally();
+    markerShapesPaintDistinctFixedSizeStamps();
     tilesShareOnePlacedScene();
     clearingAnAbsentTileLeavesTheViewAlone();
     fitFramesTheCanvasNotTheTilesOnShow();

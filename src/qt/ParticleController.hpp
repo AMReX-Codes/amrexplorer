@@ -96,8 +96,8 @@ public:
     void setColor(const std::string& species, const QColor& color);
     void setShape(const std::string& species, MarkerShape shape);
     // Reinstalls what a restored frame spec carries (species, fraction, seed,
-    // initialised), leaving the display settings -- colours, point size, the
-    // slice-cell filter -- alone.
+    // initialised), leaving the display settings -- colours, shapes, point
+    // size, the slice-cell filter -- alone.
     void restoreSelection(std::vector<std::string> species, double fraction,
         std::uint64_t seed, bool selectionInitialized);
     // Drops every setting back to its default: the shared reset for the two

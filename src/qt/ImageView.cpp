@@ -73,12 +73,12 @@ public:
 
     [[nodiscard]] QRectF boundingRect() const override
     {
-        // The pen is cosmetic, so its width is m_size *device* pixels however
-        // far the view is zoomed out; in item coordinates that is m_size/scale,
-        // which exceeds a bare m_size padding as soon as the scale drops below
-        // one, and edge points then paint outside the declared bounds. Nothing
-        // shows today because the view repaints its whole viewport, but the
-        // contract holds regardless of who is asking.
+        // A marker's stamp reaches under m_size + 2 *device* pixels from its
+        // point however far the view is zoomed out; in item coordinates that
+        // grows as the scale drops below one, and edge points then paint
+        // outside the declared bounds. Nothing shows today because the view
+        // repaints its whole viewport, but the contract holds regardless of
+        // who is asking.
         //
         // A constant multiple rather than the live view scale: boundingRect
         // must not change without prepareGeometryChange, or the scene's item
@@ -86,7 +86,7 @@ public:
         // covers zoom-out to 1/16, past which the whole raster occupies a
         // handful of pixels and a point's overspill is not a visible artifact.
         constexpr qreal smallestCoveredScale = 16.0;
-        const auto padding = m_size * smallestCoveredScale;
+        const auto padding = (m_size + 2.0) * smallestCoveredScale;
         return m_bounds.adjusted(-padding, -padding, padding, padding);
     }
 
@@ -110,8 +110,8 @@ public:
 
 private:
     // Stamped in device pixels, so a marker keeps its on-screen size at any
-    // zoom, as the cosmetic dot does. Each shape covers about the dot's area
-    // (m_size squared) so no species looks heavier than another.
+    // zoom. The square, diamond and triangle each cover m_size squared (the
+    // circle pi/4 of that), so none looks much heavier than another.
     void paintMarkers(QPainter& painter) const
     {
         const auto transform = painter.worldTransform();
@@ -121,8 +121,7 @@ private:
         const auto ratio = painter.device()->devicePixelRatioF();
         const auto size = m_size / ratio;
         const auto half = 0.5 * size;
-        // The shape is drawn once and copied to each point: filling or
-        // stroking it per point costs 5 to 30 times the copy.
+        // Drawn once and copied to each point.
         // Device pixels from the centre to the stamp's edge: the circle's
         // radius, or past the cross's arms and the triangle's corners.
         const auto reach = std::ceil(m_shape == MarkerShape::Circle ? 0.5 * m_size : m_size) + 1.0;

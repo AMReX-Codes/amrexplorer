@@ -526,6 +526,12 @@ void markerShapesKeepTheirSizeOnHighDpiViewports()
         overlay.shape = shape;
         view.setPointOverlays({overlay});
         QApplication::processEvents();
+        // Under image_view_pan_hidpi the viewport must really be scaled, or
+        // this compares two ratio-1 pictures and passes without testing.
+        if (qgetenv("QT_SCALE_FACTOR") == "2") {
+            require(view.viewport()->devicePixelRatioF() == 2.0,
+                "QT_SCALE_FACTOR=2 did not scale the viewport");
+        }
         const auto exported = marked(view.composedImage(1.0));
         const auto shown = marked(view.viewport()->grab().toImage());
         require(4 * shown < 5 * exported && 5 * shown > 4 * exported,

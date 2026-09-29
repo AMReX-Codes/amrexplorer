@@ -115,12 +115,16 @@ private:
     {
         const auto transform = painter.worldTransform();
         painter.resetTransform();
-        const auto half = 0.5 * m_size;
+        // The reset keeps the device's pixel ratio, which a cosmetic pen
+        // does not see: divide it out so every shape is m_size device pixels.
+        const auto ratio = painter.device()->devicePixelRatioF();
+        const auto size = m_size / ratio;
+        const auto half = 0.5 * size;
         if (m_shape == MarkerShape::Cross) {
-            QPen pen(m_color, std::max<qreal>(1.0, m_size / 3.0));
+            QPen pen(m_color, std::max<qreal>(1.0, m_size / 3.0) / ratio);
             pen.setCapStyle(Qt::FlatCap);
             painter.setPen(pen);
-            const auto arm = 0.75 * m_size;
+            const auto arm = 0.75 * size;
             std::vector<QLineF> lines;
             lines.reserve(2 * m_points.size());
             for (const auto& point : m_points) {
@@ -138,7 +142,7 @@ private:
             squares.reserve(m_points.size());
             for (const auto& point : m_points) {
                 squares.emplace_back(transform.map(point) - QPointF(half, half),
-                    QSizeF(m_size, m_size));
+                    QSizeF(size, size));
             }
             painter.drawRects(squares.data(), static_cast<int>(squares.size()));
             return;
@@ -150,7 +154,7 @@ private:
                    << QPointF(-r, 0.0);
         } else {
             // Equilateral, pointing up, centred on its centroid.
-            const auto side = m_size * std::sqrt(4.0 / std::sqrt(3.0));
+            const auto side = size * std::sqrt(4.0 / std::sqrt(3.0));
             const auto height = side * std::sqrt(3.0) / 2.0;
             marker << QPointF(0.0, -2.0 * height / 3.0)
                    << QPointF(0.5 * side, height / 3.0)

@@ -1721,6 +1721,14 @@ if(TARGET amrexplorer_qt)
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
             "$<TARGET_FILE:test_image_view_pan>"
     )
+    # Again on a scaled display, where a stamp sized in logical pixels would
+    # come out twice as wide as the cosmetic circle beside it.
+    add_test(
+        NAME image_view_pan_hidpi
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            QT_SCALE_FACTOR=2
+            "$<TARGET_FILE:test_image_view_pan>"
+    )
 
     add_test(
         NAME qt_metadata_smoke

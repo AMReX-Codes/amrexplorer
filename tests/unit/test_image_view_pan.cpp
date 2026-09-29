@@ -497,6 +497,42 @@ void markerShapesPaintDistinctFixedSizeStamps()
     }
 }
 
+// A marker is m_size device pixels on screen whatever the display's pixel
+// ratio, as in an export and as the cosmetic circle is. The check means most
+// under image_view_pan_hidpi, where the viewport's ratio is 2.
+void markerShapesKeepTheirSizeOnHighDpiViewports()
+{
+    const auto marked = [](const QImage& image) {
+        int count = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                // Red, not merely bright: the viewport around the image is light.
+                const auto pixel = image.pixel(x, y);
+                count += qRed(pixel) > 128 && qGreen(pixel) < 64 && qBlue(pixel) < 64
+                    ? 1 : 0;
+            }
+        }
+        return count;
+    };
+    for (const auto shape : amrvis::qt::markerShapes) {
+        amrvis::qt::ImageView view;
+        view.resize(200, 200);
+        view.show();
+        view.setImage(solidImage(64, 64));
+        amrvis::qt::PointOverlay overlay;
+        overlay.points = {{32.0, 32.0}};
+        overlay.color = Qt::red;
+        overlay.size = 9.0F;
+        overlay.shape = shape;
+        view.setPointOverlays({overlay});
+        QApplication::processEvents();
+        const auto exported = marked(view.composedImage(1.0));
+        const auto shown = marked(view.viewport()->grab().toImage());
+        require(4 * shown < 5 * exported && 5 * shown > 4 * exported,
+            "a marker's size on screen differs from its exported size");
+    }
+}
+
 // Move the pointer over a scene point and report which tile and raster pixel
 // the view named, or -1 when it stayed silent.
 struct TileProbe {
@@ -785,6 +821,7 @@ int main(int argc, char* argv[])
     arrowKeysRequestPanOnlyWhenFocusedWithAnImage();
     tearingDownTheSceneForgetsThePointTally();
     markerShapesPaintDistinctFixedSizeStamps();
+    markerShapesKeepTheirSizeOnHighDpiViewports();
     tilesShareOnePlacedScene();
     clearingAnAbsentTileLeavesTheViewAlone();
     fitFramesTheCanvasNotTheTilesOnShow();

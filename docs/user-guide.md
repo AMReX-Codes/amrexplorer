@@ -787,7 +787,9 @@ Below the species list are the settings that apply to all of them:
 - **Visible subset** is the percentage of particles drawn, from 0.01 to 100.
 - **Sampling seed** chooses *which* particles the subset contains. Change it to
   look at a different sample of the same size.
-- **Point size** is the drawn marker size in pixels, from 1 to 12.
+- **Point size** is the circle's diameter and the square's side in pixels,
+  from 1 to 12. The other shapes cover the same area, so a diamond, triangle or
+  cross reaches a little past it.
 - **Only particles in cells the slice crosses** narrows each panel to the
   particles lying inside the cells that panel is showing. 3-D data only.
 

@@ -1091,6 +1091,17 @@ QString MainWindow::scaleMenuCheckedLabelForTest() const
     return text;
 }
 
+void MainWindow::centerSlicesForTest()
+{
+    if (!primary().session) return;
+    const auto domain = datasetSampleBounds(primary().session->metadata());
+    std::array<double, 3> positions{};
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        positions[axis] = domain.lower[axis] + 0.5 * (domain.upper[axis] - domain.lower[axis]);
+    }
+    setSlicePositions(positions);
+}
+
 QRectF MainWindow::datasetPhysicalDomainForTest() const
 {
     if (!primary().openMetadata || primary().openMetadata->levels.empty()

@@ -1274,7 +1274,7 @@ void MainWindow::requestInitialSlice(
     // other setActiveView callers run mid-session, where focus belongs to
     // whatever the user is doing; this one and the sequence path are opens.
     focusActiveViewForPanning();
-    // Slice positions start at the domain midpoints unless a reversible FAB
+    // Slice positions start at the middle cells unless a reversible FAB
     // transition is restoring the previous MultiFab view.
     const auto dataBounds = datasetSampleBounds(metadata);
     for (std::size_t axis = 0; axis < 3; ++axis) {
@@ -1283,7 +1283,7 @@ void MainWindow::requestInitialSlice(
         m_slicePosition3d[axis] = initialSpec
             ? std::clamp(initialSpec->slicePositions[axis], lower,
                 std::nextafter(upper, lower))
-            : lower + 0.5 * (upper - lower);
+            : datasetDefaultSlicePosition(metadata, static_cast<int>(axis));
     }
     m_initialStopSource.request_stop();
     m_linePlotStopSource.request_stop();

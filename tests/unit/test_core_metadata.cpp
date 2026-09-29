@@ -104,6 +104,17 @@ int main()
     require(amrvis::sampleIndex(mixed, 0, 0.5) == 0
         && amrvis::sampleIndex(mixed, 1, 0.0) == 0,
         "mixed-centering physical-to-index mapping is wrong");
+    {
+        // An even cell count puts the midpoint on a face; the default slice
+        // must land on a sample instead (issue #274).
+        amrvis::DatasetMetadata sliced;
+        sliced.dimension = 3;
+        sliced.levels.push_back(mixed);
+        require(amrvis::datasetDefaultSlicePosition(sliced, 0) == 2.5,
+            "default cell-centered slice is not on a cell center");
+        require(amrvis::datasetDefaultSlicePosition(sliced, 1) == 4.0,
+            "default nodal slice is not on a node");
+    }
     require(amrvis::centeringFromIndexType({{0, 1, 1}}, 3)
             == amrvis::Centering::EdgeX,
         "mixed index type was not classified as an x edge");

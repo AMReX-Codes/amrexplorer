@@ -104,6 +104,9 @@ Outcome dispatchNavigation(Context& context)
                 window.openCompanion(second);
                 return;
             }
+            // The center zooms below keep the crosshair in view only from
+            // the domain midpoint.
+            if (success) window.centerSlicesForTest();
             if (success) timer->start(); else application.exit(1);
         });
     if (companion) {
@@ -111,6 +114,7 @@ Outcome dispatchNavigation(Context& context)
             [timer, &application, &window](bool success) {
                 if (!success) { application.exit(1); return; }
                 window.setActiveViewForTest(1);
+                window.centerSlicesForTest();
                 timer->start();
             });
     }

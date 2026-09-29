@@ -808,9 +808,9 @@ level's spacing, and on a mapped grid it is the cell's own faces, which follow
 the terrain; where a panel shows no data it shows no particles either.
 
 Particle settings are not saved between sessions. Species selection, colors,
-shapes, subset percentage, seed, point size, and the slice-cell filter all reset when a
-new dataset or sequence is opened; they carry across the frames of an open
-sequence.
+shapes, subset percentage, seed, point size, and the slice-cell filter all reset
+when a new dataset or sequence is opened; they carry across the frames of an
+open sequence.
 
 ## 2-D spherical coordinates
 

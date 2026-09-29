@@ -73,18 +73,10 @@ public:
 
     [[nodiscard]] QRectF boundingRect() const override
     {
-        // A marker's stamp reaches under m_size + 2 *device* pixels from its
-        // point however far the view is zoomed out; in item coordinates that
-        // grows as the scale drops below one, and edge points then paint
-        // outside the declared bounds. Nothing shows today because the view
-        // repaints its whole viewport, but the contract holds regardless of
-        // who is asking.
-        //
-        // A constant multiple rather than the live view scale: boundingRect
-        // must not change without prepareGeometryChange, or the scene's item
-        // index goes stale, and the view scale changes on every zoom. This
-        // covers zoom-out to 1/16, past which the whole raster occupies a
-        // handful of pixels and a point's overspill is not a visible artifact.
+        // A stamp reaches under m_size + 2 device pixels from its point, more
+        // in item coordinates as the view zooms out. A constant multiple, not
+        // the live scale, which boundingRect cannot follow without
+        // prepareGeometryChange; it covers zoom-out to 1/16.
         constexpr qreal smallestCoveredScale = 16.0;
         const auto padding = (m_size + 2.0) * smallestCoveredScale;
         return m_bounds.adjusted(-padding, -padding, padding, padding);
@@ -121,11 +113,11 @@ private:
         const auto ratio = painter.device()->devicePixelRatioF();
         const auto size = m_size / ratio;
         const auto half = 0.5 * size;
-        // Drawn once and copied to each point.
         // Device pixels from the centre to the stamp's edge: the circle's
         // radius, or past the cross's arms and the triangle's corners.
         const auto reach = std::ceil(m_shape == MarkerShape::Circle ? 0.5 * m_size : m_size) + 1.0;
         const auto side = static_cast<int>(2.0 * reach);
+        // Drawn once and copied to each point.
         QImage stamp(side, side, QImage::Format_ARGB32_Premultiplied);
         stamp.setDevicePixelRatio(ratio);
         stamp.fill(Qt::transparent);

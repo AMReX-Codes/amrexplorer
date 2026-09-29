@@ -5,6 +5,8 @@
 #include <QImage>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPen>
 #include <QPoint>
 #include <QPointF>
 #include <QRectF>
@@ -497,6 +499,45 @@ void markerShapesPaintDistinctFixedSizeStamps()
     }
 }
 
+// The circle is a stamped disc from size 2 and a plain point below it; either
+// way it must cover what a round-capped point of that width does.
+void circleCoversWhatTheRoundPointDid()
+{
+    const auto marked = [](const QImage& image) {
+        int count = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                count += qRed(image.pixel(x, y)) > 128 ? 1 : 0;
+            }
+        }
+        return count;
+    };
+    for (const auto size : {1.0F, 3.0F, 9.0F}) {
+        amrvis::qt::ImageView view;
+        view.setImage(solidImage(64, 64));
+        amrvis::qt::PointOverlay overlay;
+        overlay.points = {{32.0, 32.0}};
+        overlay.color = Qt::red;
+        overlay.size = size;
+        view.setPointOverlays({overlay});
+        const auto drawn = marked(view.composedImage(1.0));
+
+        QImage reference = solidImage(64, 64);
+        QPainter painter(&reference);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        QPen pen(Qt::red);
+        pen.setCosmetic(true);
+        pen.setWidthF(size);
+        pen.setCapStyle(Qt::RoundCap);
+        painter.setPen(pen);
+        painter.drawPoint(QPointF(32.0, 32.0));
+        painter.end();
+        const auto expected = marked(reference);
+        require(expected > 0 && 10 * drawn >= 9 * expected && 10 * drawn <= 11 * expected,
+            "the circle does not cover what a round-capped point does");
+    }
+}
+
 // A marker is m_size device pixels on screen whatever the display's pixel
 // ratio, as in an export and as the cosmetic circle is. The check means most
 // under image_view_pan_hidpi, where the viewport's ratio is 2.
@@ -827,6 +868,7 @@ int main(int argc, char* argv[])
     arrowKeysRequestPanOnlyWhenFocusedWithAnImage();
     tearingDownTheSceneForgetsThePointTally();
     markerShapesPaintDistinctFixedSizeStamps();
+    circleCoversWhatTheRoundPointDid();
     markerShapesKeepTheirSizeOnHighDpiViewports();
     tilesShareOnePlacedScene();
     clearingAnAbsentTileLeavesTheViewAlone();

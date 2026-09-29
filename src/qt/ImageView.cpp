@@ -94,7 +94,8 @@ public:
     {
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing, true);
-        if (m_shape == MarkerShape::Circle) {
+        // A one-pixel dot stays a point: a disc stamp that small is too faint.
+        if (m_shape == MarkerShape::Circle && m_size < 2.0) {
             QPen pen(m_color);
             pen.setCosmetic(true);
             pen.setWidthF(m_size);
@@ -120,6 +121,27 @@ private:
         const auto ratio = painter.device()->devicePixelRatioF();
         const auto size = m_size / ratio;
         const auto half = 0.5 * size;
+        if (m_shape == MarkerShape::Circle) {
+            // One disc copied to each point. A wide round-capped point is
+            // stroked into its own antialiased path, about 40 times the cost.
+            const auto reach = std::ceil(0.5 * m_size) + 1.0;
+            const auto side = static_cast<int>(2.0 * reach);
+            QImage disc(side, side, QImage::Format_ARGB32_Premultiplied);
+            disc.setDevicePixelRatio(ratio);
+            disc.fill(Qt::transparent);
+            const QPointF centre(reach / ratio, reach / ratio);
+            {
+                QPainter discPainter(&disc);
+                discPainter.setRenderHint(QPainter::Antialiasing, true);
+                discPainter.setPen(Qt::NoPen);
+                discPainter.setBrush(m_color);
+                discPainter.drawEllipse(centre, half, half);
+            }
+            for (const auto& point : m_points) {
+                painter.drawImage(transform.map(point) - centre, disc);
+            }
+            return;
+        }
         if (m_shape == MarkerShape::Cross) {
             QPen pen(m_color, std::max<qreal>(1.0, m_size / 3.0) / ratio);
             pen.setCapStyle(Qt::FlatCap);

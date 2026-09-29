@@ -130,7 +130,10 @@ private:
         QImage stamp(side, side, QImage::Format_ARGB32_Premultiplied);
         stamp.setDevicePixelRatio(ratio);
         stamp.fill(Qt::transparent);
-        const QPointF centre(reach / ratio, reach / ratio);
+        // On a pixel centre for an odd size and a corner for an even one, so
+        // the shape's edges fall on pixel edges; the copy snaps the rest.
+        const auto pixelCentre = std::lround(m_size) % 2 == 1 ? 0.5 : 0.0;
+        const QPointF centre((reach + pixelCentre) / ratio, (reach + pixelCentre) / ratio);
         // Opaque in the stamp, the alpha applied as it is copied: overlapping
         // strokes (the cross's centre) would otherwise compound it.
         auto opaque = m_color;

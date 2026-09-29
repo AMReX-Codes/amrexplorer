@@ -502,34 +502,15 @@ void markerShapesPaintDistinctFixedSizeStamps()
 }
 
 // Each marker is a stamp (a plain point for a one-pixel circle); it must
-// cover what painting its shape straight onto the point does, whole and in
-// place, so a stamp too small for its shape clips and fails here.
-void markersCoverWhatPaintingThemDirectlyDoes()
+// look as painting its shape straight onto the point does, where that shape
+// lines up with the pixels: an odd size on a pixel centre, an even one on a
+// corner. A stamp too small for its shape, or placed off, fails here.
+void markersLookAsPaintingThemDirectlyDoes()
 {
-    // Summed red, so a one-pixel shape spread over four faint pixels by the
-    // antialiasing still counts, and where that red is centred.
-    struct Ink {
-        double red = 0.0;
-        QPointF centroid;
-    };
-    const auto marked = [](const QImage& image) {
-        Ink ink;
-        for (int y = 0; y < image.height(); ++y) {
-            for (int x = 0; x < image.width(); ++x) {
-                const auto red = static_cast<double>(qRed(image.pixel(x, y)));
-                ink.red += red;
-                ink.centroid += red * QPointF(x + 0.5, y + 0.5);
-            }
-        }
-        if (ink.red > 0.0) {
-            ink.centroid /= ink.red;
-        }
-        return ink;
-    };
     using amrvis::qt::MarkerShape;
-    const QPointF centre(32.0, 32.0);
     // The shapes as the stamps draw them, painted directly.
-    const auto paintDirectly = [&centre](QPainter& painter, MarkerShape shape, qreal size) {
+    const auto paintDirectly = [](QPainter& painter, MarkerShape shape, qreal size,
+                                   QPointF centre) {
         const auto half = 0.5 * size;
         painter.setPen(Qt::NoPen);
         painter.setBrush(Qt::red);
@@ -572,7 +553,9 @@ void markersCoverWhatPaintingThemDirectlyDoes()
         }
     };
     for (const auto shape : amrvis::qt::markerShapes) {
-        for (const auto size : {1.0F, 3.0F, 9.0F}) {
+        for (const auto size : {1.0F, 3.0F, 4.0F, 9.0F}) {
+            const auto offset = static_cast<int>(size) % 2 == 1 ? 0.5 : 0.0;
+            const QPointF centre(32.0 + offset, 32.0 + offset);
             amrvis::qt::ImageView view;
             view.setImage(solidImage(64, 64));
             amrvis::qt::PointOverlay overlay;
@@ -581,19 +564,24 @@ void markersCoverWhatPaintingThemDirectlyDoes()
             overlay.size = size;
             overlay.shape = shape;
             view.setPointOverlays({overlay});
-            const auto drawn = marked(view.composedImage(1.0));
+            const auto drawn = view.composedImage(1.0);
 
             QImage reference = solidImage(64, 64);
             QPainter painter(&reference);
             painter.setRenderHint(QPainter::Antialiasing, true);
-            paintDirectly(painter, shape, size);
+            paintDirectly(painter, shape, size, centre);
             painter.end();
-            const auto expected = marked(reference);
-            require(expected.red > 0.0 && drawn.red >= 0.9 * expected.red
-                    && drawn.red <= 1.1 * expected.red,
-                "a marker does not cover what painting its shape directly does");
-            require(QLineF(drawn.centroid, expected.centroid).length() < 0.5,
-                "a marker is not centred where painting its shape directly is");
+            double ink = 0.0;
+            double difference = 0.0;
+            for (int y = 0; y < reference.height(); ++y) {
+                for (int x = 0; x < reference.width(); ++x) {
+                    const auto expected = qRed(reference.pixel(x, y));
+                    ink += expected;
+                    difference += std::abs(qRed(drawn.pixel(x, y)) - expected);
+                }
+            }
+            require(ink > 0.0 && difference <= 0.2 * ink,
+                "a marker does not look as painting its shape directly does");
         }
     }
 }
@@ -953,7 +941,7 @@ int main(int argc, char* argv[])
     arrowKeysRequestPanOnlyWhenFocusedWithAnImage();
     tearingDownTheSceneForgetsThePointTally();
     markerShapesPaintDistinctFixedSizeStamps();
-    markersCoverWhatPaintingThemDirectlyDoes();
+    markersLookAsPaintingThemDirectlyDoes();
     translucentMarkersAreOneLayer();
     markerShapesKeepTheirSizeOnHighDpiViewports();
     tilesShareOnePlacedScene();

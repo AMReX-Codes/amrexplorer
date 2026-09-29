@@ -870,7 +870,7 @@ InitialSliceResult executeSessionFrameLoad(
         const auto lower = dataBounds.lower[axis];
         const auto upper = dataBounds.upper[axis];
         positions[axis] = spec.defaultPositions
-            ? lower + 0.5 * (upper - lower)
+            ? datasetDefaultSlicePosition(metadata, static_cast<int>(axis))
             : std::clamp(spec.slicePositions[axis], lower,
                 std::nextafter(upper, lower));
     }

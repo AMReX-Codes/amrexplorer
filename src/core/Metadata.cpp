@@ -96,6 +96,18 @@ RealBox datasetSampleBounds(const DatasetMetadata& metadata) noexcept
     return sampleBounds(level, level.domain, metadata.dimension);
 }
 
+double datasetDefaultSlicePosition(const DatasetMetadata& metadata, int axis)
+{
+    const auto i = static_cast<std::size_t>(axis);
+    const auto bounds = datasetSampleBounds(metadata);
+    const auto midpoint = bounds.lower[i] + 0.5 * (bounds.upper[i] - bounds.lower[i]);
+    if (metadata.levels.empty() || axis >= metadata.dimension) {
+        return midpoint;
+    }
+    const auto& level = metadata.levels.back();
+    return samplePosition(level, axis, sampleIndex(level, axis, midpoint));
+}
+
 int sampleIndex(const LevelMetadata& level, int axis, double position)
 {
     const auto i = static_cast<std::size_t>(axis);

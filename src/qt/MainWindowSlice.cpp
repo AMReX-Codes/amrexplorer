@@ -2625,15 +2625,14 @@ void MainWindow::configureSequenceControls(
     }
 
     // 3-D keeps the user's slice positions (clamped into the new domain);
-    // the first 3-D frame of a session starts at the domain midpoints.
+    // the first 3-D frame of a session starts at the middle cells.
     const auto isThreeDimensional = metadata.dimension == 3;
     m_syncRubberBandZoomAction->setVisible(isThreeDimensional);
     if (isThreeDimensional) {
         const auto domain = datasetSampleBounds(metadata);
         for (std::size_t axis = 0; axis < 3; ++axis) {
             m_slicePosition3d[axis] = defaultPositions
-                ? domain.lower[axis]
-                    + 0.5 * (domain.upper[axis] - domain.lower[axis])
+                ? datasetDefaultSlicePosition(metadata, static_cast<int>(axis))
                 : std::clamp(m_slicePosition3d[axis], domain.lower[axis],
                     std::nextafter(domain.upper[axis], domain.lower[axis]));
         }

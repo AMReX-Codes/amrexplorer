@@ -596,6 +596,7 @@ Outcome dispatchZoom(Context& context)
                 // must not swallow the click): from the tile's upper-left
                 // quarter point, x lands on a cell centre below the middle
                 // and z on one above it.
+                window.centerSlicesForTest();
                 for (std::size_t axis = 0; axis < 3; ++axis) {
                     progress->positionsBefore[axis]
                         = window.slicePositionForTest(static_cast<int>(axis));

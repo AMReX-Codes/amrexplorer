@@ -62,9 +62,17 @@ public:
         const RangeRequest& request, StopToken cancellation = {}) = 0;
     [[nodiscard]] virtual bool rangeAvailable(
         const RangeRequest& request) const noexcept = 0;
+    // Whether requestParticleSample can read an attribute: every session but
+    // a remote one whose server predates protocol 1.9.
+    [[nodiscard]] virtual bool supportsParticleAttributes() const noexcept
+    {
+        return true;
+    }
+    // With an attribute, each point also carries that component's value.
     [[nodiscard]] virtual ParticleSample requestParticleSample(
         const std::string& species, double fraction, std::uint64_t seed,
-        StopToken cancellation = {}) = 0;
+        StopToken cancellation = {},
+        std::optional<ParticleAttribute> attribute = std::nullopt) = 0;
 
     // Direct volume rendering of a 3-D field (core/Volume.hpp): the session
     // samples the field into a bounded grid, caches it, and ray-casts it to a

@@ -298,6 +298,8 @@ void writeFab(const std::filesystem::path& path, BlockRecord& block,
 
 // Adds one small native AMReX particle species so the Qt slice and sequence
 // smoke tests exercise particle discovery, binary reads, and point overlays.
+// Its one real component, mass, is the particle's id, so coloring by it
+// spreads the particles over the scale.
 void writeParticles(const std::filesystem::path& root, int dimension)
 {
     constexpr int particleCount = 8;
@@ -309,7 +311,7 @@ void writeParticles(const std::filesystem::path& root, int dimension)
             "could not create the fixture particle Header");
         header << "Version_Two_Dot_Zero_double\n"
                << dimension << '\n'
-               << "0\n"
+               << "1\nmass\n"
                << "0\n"
                << "1\n"
                << particleCount << '\n'
@@ -334,6 +336,8 @@ void writeParticles(const std::filesystem::path& root, int dimension)
         data.write(reinterpret_cast<const char*>(positions),
             static_cast<std::streamsize>(
                 static_cast<std::size_t>(dimension) * sizeof(double)));
+        const auto mass = static_cast<double>(id);
+        data.write(reinterpret_cast<const char*>(&mass), sizeof(mass));
     }
     require(static_cast<bool>(data),
         "could not write the fixture particle data");

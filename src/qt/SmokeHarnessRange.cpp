@@ -563,6 +563,121 @@ Outcome dispatchRange(Context& context)
             window.openDataset(path);
         });
     } else if (argc == 4
+        && std::string_view(argv[1]) == "--particle-color-smoke-test") {
+        // Color by an attribute through the dialog: the fixture's mass is the
+        // particle id, 1 to 8, so each of the 8 particles lands on its own
+        // slot and the bar spans 1 to 8. The next sequence frame loads its
+        // particles from the frame spec, which must carry the attribute; back
+        // to species colors, the bar goes away.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        struct Progress {
+            int phase = 0;
+            int attempts = 0;
+        };
+        auto progress = std::make_shared<Progress>();
+        auto* poll = new QTimer(&window);
+        poll->setInterval(10);
+        const auto fail = [&application, poll](const char* message) {
+            poll->stop();
+            qCritical("%s", message);
+            application.exit(1);
+        };
+        const auto applyColorBy = [&window](const QString& name) {
+            auto* action = window.findChild<QAction*>(QStringLiteral("particlesAction"));
+            if (action == nullptr || !action->isEnabled()) {
+                return false;
+            }
+            action->trigger();
+            QDialog* dialog = nullptr;
+            for (auto* candidate : window.findChildren<QDialog*>(
+                     QStringLiteral("particlesDialog"))) {
+                if (candidate->isVisible()) {
+                    dialog = candidate;
+                }
+            }
+            auto* colorBy = dialog != nullptr
+                ? dialog->findChild<QComboBox*>(QStringLiteral("particleColorBy"))
+                : nullptr;
+            auto* buttons = dialog != nullptr
+                ? dialog->findChild<QDialogButtonBox*>(
+                      QStringLiteral("particlesDialogButtons"))
+                : nullptr;
+            if (colorBy == nullptr || buttons == nullptr
+                || colorBy->findData(name) < 0) {
+                return false;
+            }
+            colorBy->setCurrentIndex(colorBy->findData(name));
+            buttons->button(QDialogButtonBox::Ok)->click();
+            return true;
+        };
+        const auto colored = [&window] {
+            return window.particleColorBarRangeForTest()
+                    == std::optional<std::pair<double, double>>{{1.0, 8.0}}
+                && window.particleOverlayColorCountForTest() == 8;
+        };
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, poll, progress, fail, applyColorBy](int index) {
+                if (index == 0 && progress->phase == 0) {
+                    if (!applyColorBy(QStringLiteral("mass"))) {
+                        fail("the dialog offers no mass to color by");
+                        return;
+                    }
+                    progress->phase = 1;
+                    poll->start();
+                } else if (index == 1 && progress->phase == 2) {
+                    progress->phase = 3;
+                    poll->start();
+                }
+                static_cast<void>(window);
+            });
+        QObject::connect(poll, &QTimer::timeout, &application,
+            [&window, &application, poll, progress, fail, applyColorBy, colored] {
+                if (++progress->attempts > 500) {
+                    fail("the particle coloring never settled");
+                    return;
+                }
+                if (window.particleLoadingForTest()) {
+                    return;
+                }
+                switch (progress->phase) {
+                case 1:
+                    if (!colored()) {
+                        return;
+                    }
+                    poll->stop();
+                    progress->phase = 2;
+                    window.stepSequence(1);
+                    break;
+                case 3:
+                    if (!colored()) {
+                        return;
+                    }
+                    if (!applyColorBy(QString())) {
+                        fail("the dialog did not offer species colors");
+                        return;
+                    }
+                    progress->phase = 4;
+                    break;
+                case 4:
+                    if (window.particleColorBarRangeForTest()
+                        || window.particleOverlayColorCountForTest() != 1) {
+                        return;
+                    }
+                    poll->stop();
+                    window.close();
+                    application.exit(0);
+                    break;
+                default:
+                    break;
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [fail] { fail("a sequence frame failed"); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
         && std::string_view(argv[1]) == "--particle-dialog-smoke-test") {
         // The particles dialog is modeless with an Apply button: settings are
         // meant to be tried against the image, so the dialog must not block the

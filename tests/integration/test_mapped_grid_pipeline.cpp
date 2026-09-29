@@ -104,9 +104,10 @@ public:
     }
     [[nodiscard]] amrvis::ParticleSample requestParticleSample(
         const std::string& species, double fraction, std::uint64_t seed,
-        amrvis::StopToken cancellation) override
+        amrvis::StopToken cancellation, std::optional<amrvis::ParticleAttribute> attribute) override
     {
-        return m_inner->requestParticleSample(species, fraction, seed, cancellation);
+        return m_inner->requestParticleSample(
+            species, fraction, seed, cancellation, attribute);
     }
     [[nodiscard]] bool supportsMappedGrid() const noexcept override
     {

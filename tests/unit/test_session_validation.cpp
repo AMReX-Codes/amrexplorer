@@ -1168,7 +1168,7 @@ int main()
     // Particle samples against the catalog they claim to sample.
     {
         const std::vector<ParticleSpeciesMetadata> species{
-            {"electrons", 3, 0, 0, 2, ParticleRealPrecision::Double}};
+            {"electrons", 3, 0, 0, 2, ParticleRealPrecision::Double, {}, {}}};
         ParticleSample sample;
         sample.species = species.front();
         sample.points.push_back({1, Real3{{0.5, 0.5, 0.5}}});

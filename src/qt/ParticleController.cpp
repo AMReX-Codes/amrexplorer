@@ -1,5 +1,8 @@
 #include "ParticleController.hpp"
 
+#include "PaletteController.hpp"
+#include "ScientificDoubleSpinBox.hpp"
+
 #include "QtErrorText.hpp"
 
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
@@ -32,6 +35,7 @@
 #include <array>
 #include <cstddef>
 #include <exception>
+#include <limits>
 #include <utility>
 
 namespace amrvis::qt {
@@ -114,12 +118,62 @@ MarkerShape ParticleController::shapeFor(const std::string& species) const
     return shape != m_settings.shapes.end() ? shape->second : MarkerShape::Circle;
 }
 
+std::vector<std::string> ParticleController::attributeNames() const
+{
+    const auto dataset = m_hooks.dataset ? m_hooks.dataset() : nullptr;
+    std::vector<std::string> names;
+    if (!dataset || !dataset->supportsParticleAttributes()) {
+        return names;
+    }
+    const auto add = [&names](const std::vector<std::string>& components) {
+        for (const auto& name : components) {
+            if (std::find(names.begin(), names.end(), name) == names.end()) {
+                names.push_back(name);
+            }
+        }
+    };
+    for (const auto& species : dataset->particleSpecies()) {
+        add(species.realComponentNames);
+        add(species.intComponentNames);
+    }
+    return names;
+}
+
+std::optional<ParticleColorRange> ParticleController::colorRange() const
+{
+    const auto& coloring = m_settings.coloring;
+    if (coloring.attribute.empty()
+        || std::none_of(m_samples.begin(), m_samples.end(),
+            [](const auto& sample) { return sample.attribute.has_value(); })) {
+        return std::nullopt;
+    }
+    return coloring.range ? coloring.range
+                          : particleValueRange(m_samples, coloring.logarithmic);
+}
+
+const Palette& ParticleController::colorPalette() const
+{
+    const auto index = std::clamp(m_settings.coloring.palette, 0,
+        static_cast<int>(builtinPalettes.size()) - 1);
+    return builtinPalette(builtinPalettes[static_cast<std::size_t>(index)]);
+}
+
 void ParticleController::applySelection(std::vector<std::string> species,
     double fraction, int pointSize, std::uint64_t seed, bool sliceCellsOnly)
 {
+    applySelection(std::move(species), fraction, pointSize, seed,
+        sliceCellsOnly, m_settings.coloring);
+}
+
+void ParticleController::applySelection(std::vector<std::string> species,
+    double fraction, int pointSize, std::uint64_t seed, bool sliceCellsOnly,
+    Coloring coloring)
+{
     const bool sampleChanged = !m_settings.selectionInitialized
         || species != m_settings.species || fraction != m_settings.fraction
-        || seed != m_settings.seed;
+        || seed != m_settings.seed
+        || coloring.attribute != m_settings.coloring.attribute;
+    m_settings.coloring = std::move(coloring);
     m_settings.species = std::move(species);
     m_settings.fraction = fraction;
     m_settings.seed = seed;
@@ -127,7 +181,8 @@ void ParticleController::applySelection(std::vector<std::string> species,
     m_settings.sliceCellsOnly = sliceCellsOnly;
     m_settings.selectionInitialized = true;
     if (!sampleChanged) {
-        // Colour, alpha, shape, point size and the slice-cell filter only affect the
+        // Colour, alpha, shape, point size, the color scale and the slice-cell
+        // filter only affect the
         // installed point batches; do not reread particle files when the
         // sampled identities are unchanged.
         emit overlaysChanged();
@@ -149,8 +204,10 @@ void ParticleController::setShape(const std::string& species, MarkerShape shape)
 }
 
 void ParticleController::restoreSelection(std::vector<std::string> species,
-    double fraction, std::uint64_t seed, bool selectionInitialized)
+    double fraction, std::uint64_t seed, bool selectionInitialized,
+    std::string colorAttribute)
 {
+    m_settings.coloring.attribute = std::move(colorAttribute);
     m_settings.species = std::move(species);
     m_settings.fraction = fraction;
     m_settings.seed = seed;
@@ -249,6 +306,7 @@ void ParticleController::reload()
     const auto selectedSpecies = m_settings.species;
     const auto fraction = m_settings.fraction;
     const auto seed = m_settings.seed;
+    const auto attribute = m_settings.coloring.attribute;
     const auto generation = ++m_generation;
     m_samples.clear();
     emit overlaysChanged();
@@ -304,9 +362,9 @@ void ParticleController::reload()
             watcher->deleteLater();
         });
     watcher->setFuture(QtConcurrent::run(
-        [dataset, selectedSpecies, fraction, seed, cancellation] {
-            return loadParticleSamples(
-                *dataset, selectedSpecies, fraction, seed, cancellation);
+        [dataset, selectedSpecies, fraction, seed, attribute, cancellation] {
+            return loadParticleSamples(*dataset, selectedSpecies, fraction,
+                seed, cancellation, attribute);
         }));
 }
 
@@ -380,6 +438,7 @@ void ParticleController::showDialog(QWidget* parent)
          ++speciesIndex) {
         const auto& species = allSpecies[speciesIndex];
         auto* check = new QCheckBox(dialog);
+        check->setObjectName(QStringLiteral("particleShow"));
         check->setChecked(!m_settings.selectionInitialized
             || std::find(m_settings.species.begin(), m_settings.species.end(),
                    species.name)
@@ -471,18 +530,74 @@ void ParticleController::showDialog(QWidget* parent)
     sizeRow->addStretch(1);
     layout->addLayout(sizeRow);
 
+    // Coloring by one attribute every species with that component shares.
+    const auto& coloring = m_settings.coloring;
+    auto* colorGrid = new QGridLayout;
+    auto* colorBy = new QComboBox(dialog);
+    colorBy->setObjectName(QStringLiteral("particleColorBy"));
+    colorBy->addItem(tr("Species color"), QString());
+    for (const auto& name : attributeNames()) {
+        colorBy->addItem(QString::fromStdString(name), QString::fromStdString(name));
+    }
+    const auto storedAttribute = colorBy->findData(QString::fromStdString(coloring.attribute));
+    colorBy->setCurrentIndex(std::max(storedAttribute, 0));
+    if (!dataset->supportsParticleAttributes()) {
+        colorBy->setToolTip(tr("The server's protocol predates particle attributes."));
+    }
+    colorBy->setEnabled(colorBy->count() > 1);
+    auto* colormap = new QComboBox(dialog);
+    colormap->setObjectName(QStringLiteral("particleColormap"));
+    for (std::size_t index = 0; index < builtinPalettes.size(); ++index) {
+        colormap->addItem(builtinPaletteLabel(index));
+    }
+    colormap->setCurrentIndex(std::clamp(coloring.palette, 0, colormap->count() - 1));
+    auto* logarithmic = new QCheckBox(tr("Log scale"), dialog);
+    logarithmic->setObjectName(QStringLiteral("particleColorLog"));
+    logarithmic->setChecked(coloring.logarithmic);
+    auto* fixedRange = new QCheckBox(tr("Fixed range"), dialog);
+    fixedRange->setObjectName(QStringLiteral("particleColorFixedRange"));
+    fixedRange->setChecked(coloring.range.has_value());
+    const auto shownRange = coloring.range ? coloring.range : colorRange();
+    auto* rangeMinimum = new ScientificDoubleSpinBox(dialog);
+    auto* rangeMaximum = new ScientificDoubleSpinBox(dialog);
+    rangeMinimum->setObjectName(QStringLiteral("particleColorMinimum"));
+    rangeMaximum->setObjectName(QStringLiteral("particleColorMaximum"));
+    for (auto* bound : {rangeMinimum, rangeMaximum}) {
+        bound->setRange(-std::numeric_limits<double>::max(),
+            std::numeric_limits<double>::max());
+        bound->setDecimals(std::numeric_limits<double>::max_digits10);
+    }
+    rangeMinimum->setValue(shownRange ? shownRange->minimum : 0.0);
+    rangeMaximum->setValue(shownRange ? shownRange->maximum : 1.0);
+    colorGrid->addWidget(new QLabel(tr("Color by:"), dialog), 0, 0);
+    colorGrid->addWidget(colorBy, 0, 1, 1, 2);
+    colorGrid->addWidget(new QLabel(tr("Colormap:"), dialog), 1, 0);
+    colorGrid->addWidget(colormap, 1, 1, 1, 2);
+    colorGrid->addWidget(logarithmic, 2, 1, 1, 2);
+    colorGrid->addWidget(fixedRange, 3, 1, 1, 2);
+    colorGrid->addWidget(rangeMinimum, 4, 1);
+    colorGrid->addWidget(rangeMaximum, 4, 2);
+    layout->addLayout(colorGrid);
+    const auto refreshColorControls = [colorBy, colormap, logarithmic,
+                                          fixedRange, rangeMinimum, rangeMaximum] {
+        const bool colored = !colorBy->currentData().toString().isEmpty();
+        colormap->setEnabled(colored);
+        logarithmic->setEnabled(colored);
+        fixedRange->setEnabled(colored);
+        rangeMinimum->setEnabled(colored && fixedRange->isChecked());
+        rangeMaximum->setEnabled(colored && fixedRange->isChecked());
+    };
+    connect(colorBy, &QComboBox::currentIndexChanged, dialog, refreshColorControls);
+    connect(fixedRange, &QCheckBox::toggled, dialog, refreshColorControls);
+    refreshColorControls();
+
     // 3-D only: in 2-D the slice is the whole domain, so every particle is
     // already in a cell the plane crosses and the filter would do nothing.
     QCheckBox* sliceCellsOnly = nullptr;
     if (dataset->metadata().dimension == 3) {
         sliceCellsOnly = new QCheckBox(
             tr("Only particles in cells the slice crosses"), dialog);
-        // Named so a test can ask for this box by name. The name does not
-        // keep it out of a bare findChildren<QCheckBox*>(), which matches
-        // every object name; what keeps the species rows findable by type
-        // and order is that this box exists in 3-D alone and is added after
-        // their grid. A 3-D test that indexes that list has to account for
-        // it.
+        // Named, like the species rows' boxes, so a test finds each by name.
         sliceCellsOnly->setObjectName(
             QStringLiteral("particlesSliceCellsOnly"));
         sliceCellsOnly->setChecked(m_settings.sliceCellsOnly);
@@ -503,7 +618,8 @@ void ParticleController::showDialog(QWidget* parent)
     // the lambda acts on, and it goes with the dialog's buttons anyway.
     connect(buttons, &QDialogButtonBox::clicked, this,
         [this, dialog, buttons, speciesControls, fraction, seed, pointSize,
-            sliceCellsOnly](QAbstractButton* button) {
+            sliceCellsOnly, colorBy, colormap, logarithmic, fixedRange,
+            rangeMinimum, rangeMaximum](QAbstractButton* button) {
             const auto role = buttons->buttonRole(button);
             if (role == QDialogButtonBox::RejectRole) {
                 dialog->reject();
@@ -523,6 +639,22 @@ void ParticleController::showDialog(QWidget* parent)
                        "18446744073709551615."));
                 return;
             }
+            Coloring newColoring;
+            newColoring.attribute = colorBy->currentData().toString().toStdString();
+            newColoring.palette = colormap->currentIndex();
+            newColoring.logarithmic = logarithmic->isChecked();
+            if (fixedRange->isChecked()) {
+                newColoring.range = ParticleColorRange{
+                    rangeMinimum->value(), rangeMaximum->value()};
+                if (!(newColoring.range->maximum > newColoring.range->minimum)
+                    || (newColoring.logarithmic && !(newColoring.range->minimum > 0.0))) {
+                    QMessageBox::warning(dialog, tr("Invalid color range"),
+                        newColoring.logarithmic
+                            ? tr("A log-scale range needs 0 < minimum < maximum.")
+                            : tr("The color range needs minimum < maximum."));
+                    return;
+                }
+            }
             std::vector<std::string> selectedSpecies;
             for (const auto& controls : *speciesControls) {
                 if (controls.enabled->isChecked()) {
@@ -540,7 +672,8 @@ void ParticleController::showDialog(QWidget* parent)
             applySelection(std::move(selectedSpecies),
                 fraction->value() / 100.0, pointSize->value(), seedValue,
                 sliceCellsOnly != nullptr ? sliceCellsOnly->isChecked()
-                                          : m_settings.sliceCellsOnly);
+                                          : m_settings.sliceCellsOnly,
+                std::move(newColoring));
             if (role == QDialogButtonBox::AcceptRole) {
                 dialog->accept();
             }

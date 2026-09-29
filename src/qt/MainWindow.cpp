@@ -626,6 +626,12 @@ MainWindow::MainWindow(QWidget* parent)
     m_layers[1].colorBar->setObjectName(QStringLiteral("companionColorBar"));
     m_layers[1].colorBar->setVisible(false);
     colorBarLayout->addWidget(m_layers[1].colorBar);
+    // The particles' own scale, shown while they are colored by an attribute.
+    m_particleColorBar = new ColorBarWidget(colorBars);
+    m_particleColorBar->setObjectName(QStringLiteral("particleColorBar"));
+    m_particleColorBar->setNumberFormat(m_numberFormat);
+    m_particleColorBar->setVisible(false);
+    colorBarLayout->addWidget(m_particleColorBar);
     m_colorBarDock->setWidget(colorBars);
     addDockWidget(Qt::RightDockWidgetArea, m_colorBarDock);
 

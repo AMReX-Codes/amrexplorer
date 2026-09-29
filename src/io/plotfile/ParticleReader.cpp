@@ -50,6 +50,7 @@ struct ParsedHeader {
 struct SelectedParticle {
     std::uint64_t index = 0;
     std::uint64_t id = 0;
+    double value = 0.0;
 };
 
 // String tokens -- the version string, a component name -- are bounded and
@@ -172,7 +173,8 @@ ParsedHeader parseHeader(const std::filesystem::path& path,
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
         }
-        (void)readRequired<std::string>(input, "real component name");
+        result.metadata.realComponentNames.push_back(
+            readRequired<std::string>(input, "real component name"));
     }
     result.metadata.intComponentCount
         = readRequired<int>(input, "integer component count");
@@ -185,7 +187,8 @@ ParsedHeader parseHeader(const std::filesystem::path& path,
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
         }
-        (void)readRequired<std::string>(input, "integer component name");
+        result.metadata.intComponentNames.push_back(
+            readRequired<std::string>(input, "integer component name"));
     }
     const auto checkpointFlag = readRequired<int>(input, "checkpoint flag");
     if (checkpointFlag != 0 && checkpointFlag != 1) {
@@ -396,9 +399,19 @@ template <typename Real>
 void readGrid(std::istream& input, const GridRecord& grid,
     std::uint64_t dataFileSize, const ParsedHeader& header, double fraction,
     std::uint64_t seed, StopToken cancellation,
-    std::size_t maximumPoints, std::vector<ParticlePoint>& output,
-    ParticleReadMetrics& metrics)
+    std::size_t maximumPoints, const std::optional<ParticleAttribute>& attribute,
+    std::vector<ParticlePoint>& output, ParticleReadMetrics& metrics)
 {
+    // Byte offsets of the attribute inside its record, when there is one.
+    std::optional<std::size_t> intValueOffset;
+    std::optional<std::size_t> realValueOffset;
+    if (attribute && attribute->kind == ParticleAttribute::Kind::Int) {
+        intValueOffset = static_cast<std::size_t>(2 + attribute->index)
+            * sizeof(std::int32_t);
+    } else if (attribute) {
+        realValueOffset = static_cast<std::size_t>(
+            header.metadata.dimension + attribute->index) * sizeof(Real);
+    }
     const auto [intRecordBytes, realRecordBytes]
         = particleRecordBytes(header, sizeof(Real));
 
@@ -448,8 +461,16 @@ void readGrid(std::istream& input, const GridRecord& grid,
                     throw ParticleSampleLimitExceeded(
                         "particle sample exceeds its point limit");
                 }
+                double value = 0.0;
+                if (intValueOffset) {
+                    std::int32_t word = 0;
+                    std::memcpy(&word,
+                        buffer.data() + recordOffset + *intValueOffset,
+                        sizeof(word));
+                    value = static_cast<double>(word);
+                }
                 selectedParticles.push_back(
-                    {firstIndex + relativeIndex, *idcpu});
+                    {firstIndex + relativeIndex, *idcpu, value});
             }
         }
         firstIndex += count;
@@ -484,6 +505,14 @@ void readGrid(std::istream& input, const GridRecord& grid,
                     * sizeof(Real));
             ParticlePoint point;
             point.id = selectedParticle.id;
+            point.value = selectedParticle.value;
+            if (realValueOffset) {
+                Real value{};
+                std::memcpy(&value,
+                    buffer.data() + recordOffset + *realValueOffset,
+                    sizeof(value));
+                point.value = static_cast<double>(value);
+            }
             for (int axis = 0; axis < header.metadata.dimension; ++axis) {
                 point.position[static_cast<std::size_t>(axis)]
                     = static_cast<double>(position[static_cast<std::size_t>(axis)]);
@@ -496,6 +525,25 @@ void readGrid(std::istream& input, const GridRecord& grid,
 }
 
 } // namespace
+
+std::optional<ParticleAttribute> findParticleAttribute(
+    const ParticleSpeciesMetadata& species, const std::string& name)
+{
+    const auto find = [&](const std::vector<std::string>& names,
+                          ParticleAttribute::Kind kind)
+        -> std::optional<ParticleAttribute> {
+        const auto found = std::ranges::find(names, name);
+        if (found == names.end()) {
+            return std::nullopt;
+        }
+        return ParticleAttribute{
+            kind, static_cast<int>(found - names.begin())};
+    };
+    if (auto real = find(species.realComponentNames, ParticleAttribute::Kind::Real)) {
+        return real;
+    }
+    return find(species.intComponentNames, ParticleAttribute::Kind::Int);
+}
 
 std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
     const std::filesystem::path& plotfile, StopToken cancellation)
@@ -551,7 +599,7 @@ std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
 ParticleSample readParticleSample(
     const std::filesystem::path& plotfile, const std::string& species,
     double fraction, std::uint64_t seed, StopToken cancellation,
-    std::size_t maximumPoints)
+    std::size_t maximumPoints, std::optional<ParticleAttribute> attribute)
 {
     if (!std::isfinite(fraction) || fraction < 0.0 || fraction > 1.0) {
         throw std::invalid_argument("particle sample fraction must be between 0 and 1");
@@ -567,8 +615,18 @@ ParticleSample readParticleSample(
             "non-checkpoint particle data is unsupported because it has no "
             "ID/CPU identity words");
     }
+    if (attribute) {
+        const auto count = attribute->kind == ParticleAttribute::Kind::Int
+            ? header.metadata.intComponentCount
+            : header.metadata.realComponentCount;
+        if (attribute->index < 0 || attribute->index >= count) {
+            throw std::invalid_argument(
+                "particle attribute is not one of the species' components");
+        }
+    }
     ParticleSample result;
     result.species = header.metadata;
+    result.attribute = attribute;
     if (fraction == 0.0 || header.metadata.particleCount == 0) {
         return result;
     }
@@ -626,10 +684,12 @@ ParticleSample readParticleSample(
         for (const auto* grid : grids) {
             if (header.metadata.precision == ParticleRealPrecision::Single) {
                 readGrid<float>(input, *grid, dataFileSize, header, fraction,
-                    seed, cancellation, maximumPoints, result.points, result.io);
+                    seed, cancellation, maximumPoints, attribute,
+                    result.points, result.io);
             } else {
                 readGrid<double>(input, *grid, dataFileSize, header, fraction,
-                    seed, cancellation, maximumPoints, result.points, result.io);
+                    seed, cancellation, maximumPoints, attribute,
+                    result.points, result.io);
             }
         }
     }

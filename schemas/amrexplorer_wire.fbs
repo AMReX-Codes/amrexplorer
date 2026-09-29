@@ -140,6 +140,16 @@ table ParticleSpeciesCatalog {
   int_component_count:int (id: 3);
   particle_count:ulong (id: 4);
   single_precision:bool (id: 5);
+  // Protocol 1.9; empty from an older server.
+  real_component_names:[string] (id: 6);
+  int_component_names:[string] (id: 7);
+}
+
+// Protocol 1.9: one component read with the positions, by its index among
+// the species' reals or ints.
+table ParticleAttribute {
+  integer:bool (id: 0);
+  index:int (id: 1);
 }
 
 table MetadataReadMetrics {
@@ -292,6 +302,7 @@ table ParticleSampleRequest {
   species:string (id: 1);
   fraction:double (id: 2);
   seed:ulong (id: 3);
+  attribute:ParticleAttribute (id: 4);
 }
 
 table ParticleSampleResponse {
@@ -303,6 +314,9 @@ table ParticleSampleResponse {
   level_directories_scanned:ulong (id: 5);
   data_files_opened:ulong (id: 6);
   cache:CacheState (id: 7);
+  // Protocol 1.9: the attribute read, and one value per id.
+  attribute:ParticleAttribute (id: 8);
+  values:[double] (id: 9);
 }
 
 table RangeRequest {

@@ -1432,7 +1432,8 @@ void MainWindow::requestInitialSlice(
                             restoredSpec->particleSpecies,
                             restoredSpec->particleFraction,
                             restoredSpec->particleSeed,
-                            restoredSpec->particleSelectionInitialized);
+                            restoredSpec->particleSelectionInitialized,
+                            restoredSpec->particleAttribute);
                     }
                     m_particleController->configureForDataset(
                         restoredSpec.has_value());

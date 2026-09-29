@@ -1,4 +1,5 @@
 #include "ParticleController.hpp"
+#include "PaletteController.hpp"
 
 #include <amrexplorer/data/DatasetSession.hpp>
 
@@ -45,15 +46,23 @@ public:
         amrvis::ParticleSpeciesMetadata electrons;
         electrons.name = "electrons";
         electrons.particleCount = 10;
+        electrons.realComponentCount = 1;
+        electrons.realComponentNames = {"mass"};
         amrvis::ParticleSpeciesMetadata ions;
         ions.name = "ions";
         ions.particleCount = 20;
+        ions.realComponentCount = 2;
+        ions.realComponentNames = {"temperature", "mass"};
+        ions.intComponentCount = 1;
+        ions.intComponentNames = {"charge"};
         m_species = {electrons, ions};
         m_metadata.dimension = dimension;
     }
 
     std::size_t pointsPerSpecies = 3;
     std::atomic<bool> failing{false};
+    // Off, this stands in for a remote session whose server predates 1.9.
+    std::atomic<bool> attributesSupported{true};
     std::atomic<int> delayMs{0};
     // A request whose seed is slowSeed sleeps slowDelayMs instead: two loads
     // in flight together can be given distinct, order-independent durations.
@@ -66,16 +75,18 @@ public:
     std::string lastSpecies;
     double lastFraction = -1.0;
     std::uint64_t lastSeed = 0;
+    std::optional<amrvis::ParticleAttribute> lastAttribute;
 
     struct Request {
         std::string species;
         double fraction;
         std::uint64_t seed;
+        std::optional<amrvis::ParticleAttribute> attribute;
     };
     Request last()
     {
         const std::scoped_lock lock(lastMutex);
-        return {lastSpecies, lastFraction, lastSeed};
+        return {lastSpecies, lastFraction, lastSeed, lastAttribute};
     }
 
     [[nodiscard]] amrvis::DatasetId id() const noexcept override
@@ -100,6 +111,10 @@ public:
     {
         return m_species;
     }
+    [[nodiscard]] bool supportsParticleAttributes() const noexcept override
+    {
+        return attributesSupported;
+    }
     [[nodiscard]] amrvis::ViewDataResult requestView(
         const amrvis::ViewDataRequest&, amrvis::StopToken) override
     {
@@ -122,13 +137,15 @@ public:
     }
     [[nodiscard]] amrvis::ParticleSample requestParticleSample(
         const std::string& species, double fraction, std::uint64_t seed,
-        amrvis::StopToken cancellation) override
+        amrvis::StopToken cancellation,
+        std::optional<amrvis::ParticleAttribute> attribute) override
     {
         {
             const std::scoped_lock lock(lastMutex);
             lastSpecies = species;
             lastFraction = fraction;
             lastSeed = seed;
+            lastAttribute = attribute;
         }
         ++requests;
         const auto delay = slowDelayMs.load() > 0 && seed == slowSeed.load()
@@ -149,9 +166,12 @@ public:
                 sample.species = candidate;
             }
         }
+        // With an attribute, values 1, 2, ... in point order.
+        sample.attribute = attribute;
         for (std::size_t index = 0; index < pointsPerSpecies; ++index) {
             amrvis::ParticlePoint point;
             point.id = index;
+            point.value = attribute ? static_cast<double>(index + 1) : 0.0;
             sample.points.push_back(point);
         }
         return sample;
@@ -248,6 +268,7 @@ void waitFor(QCoreApplication& application, Predicate done, const char* what)
 int main(int argc, char** argv)
 {
     QApplication application(argc, argv);
+    using amrvis::qt::ParticleColorRange;
     using amrvis::qt::ParticleController;
 
     auto session = std::make_shared<FakeSession>();
@@ -595,7 +616,8 @@ int main(int argc, char** argv)
         controller.showDialog(&host);
         auto* dialog = host.findChild<QDialog*>(QStringLiteral("particlesDialog"));
         require(dialog != nullptr, "the dialog was not shown");
-        const auto checks = dialog->findChildren<QCheckBox*>();
+        const auto checks
+            = dialog->findChildren<QCheckBox*>(QStringLiteral("particleShow"));
         require(checks.size() == 2 && checks[0]->isChecked()
                 && checks[1]->isChecked(),
             "an uninitialised selection did not check every species");
@@ -618,13 +640,13 @@ int main(int argc, char** argv)
         controller.showDialog(&host);
         auto* dialog = host.findChild<QDialog*>(QStringLiteral("particlesDialog"));
         require(dialog != nullptr, "the dialog was not shown");
-        const auto checks = dialog->findChildren<QCheckBox*>();
+        const auto checks
+            = dialog->findChildren<QCheckBox*>(QStringLiteral("particleShow"));
         require(checks.size() == 2 && !checks[0]->isChecked()
                 && checks[1]->isChecked(),
             "the species rows do not reflect the selection");
         // 2-D: the slice is the domain, so the filter would do nothing and
-        // the check box is not offered -- which is also what keeps the
-        // species rows above findable by type and order.
+        // the check box is not offered.
         require(dialog->findChild<QCheckBox*>(
                     QStringLiteral("particlesSliceCellsOnly")) == nullptr,
             "the slice-cell check box was offered for 2-D data");
@@ -750,6 +772,96 @@ int main(int argc, char** argv)
                 && shapeOf(shapes[1]) == amrvis::qt::MarkerShape::Diamond,
             "the reopened row did not show the applied shape");
         controller.closeDialog();
+    }
+
+    // Coloring: the names are the union over the species; a new attribute
+    // reloads, each species reading its own index of it; the scale only
+    // redraws; the range spans the loaded values unless fixed; a session that
+    // cannot read attributes offers none and samples without one.
+    {
+        current = session;
+        Observed observed;
+        ParticleController controller(hooks());
+        controller.configureForDataset(false);
+        observe(controller, observed);
+        require(controller.attributeNames()
+                == std::vector<std::string>{"mass", "temperature", "charge"},
+            "the attribute names are not the union over the species");
+        require(!controller.colorRange(), "an uncolored selection has a range");
+        using Coloring = ParticleController::Coloring;
+        Coloring byMass;
+        byMass.attribute = "mass";
+        controller.applySelection({"ions"}, 1.0, 3, 0, false, byMass);
+        require(observed.selection == 1, "a new attribute did not reload");
+        controller.reload();
+        waitFor(application, [&] { return observed.finished == 1; },
+            "the colored load did not finish");
+        require(session->last().attribute
+                == amrvis::ParticleAttribute{amrvis::ParticleAttribute::Kind::Real, 1},
+            "the attribute was not resolved to the species' own index");
+        require(controller.colorRange() == ParticleColorRange{1.0, 3.0},
+            "the range does not span the loaded values");
+        auto fixed = byMass;
+        fixed.palette = 4;
+        fixed.logarithmic = true;
+        fixed.range = ParticleColorRange{0.5, 10.0};
+        const auto overlaysBefore = observed.overlays;
+        controller.applySelection({"ions"}, 1.0, 3, 0, false, fixed);
+        require(observed.selection == 1 && observed.overlays == overlaysBefore + 1,
+            "a new color scale reloaded instead of redrawing");
+        require(controller.colorRange() == fixed.range
+                && &controller.colorPalette()
+                    == &amrvis::builtinPalette(amrvis::qt::builtinPalettes[4]),
+            "the fixed range or the colormap was not used");
+
+        session->attributesSupported = false;
+        require(controller.attributeNames().empty(),
+            "a session without attributes offered some");
+        controller.reload();
+        waitFor(application, [&] { return observed.finished == 2; },
+            "the unsupported load did not finish");
+        require(!session->last().attribute && !controller.colorRange(),
+            "a session without attributes was asked for one");
+        session->attributesSupported = true;
+    }
+
+    // The dialog lists the attributes, keeps the scale controls idle until
+    // one is chosen, and Apply stores the coloring.
+    {
+        current = session;
+        Observed observed;
+        ParticleController controller(hooks());
+        controller.configureForDataset(false);
+        controller.restoreSelection({"ions"}, 1.0, 0, true);
+        observe(controller, observed);
+        QWidget host;
+        controller.showDialog(&host);
+        auto* dialog = host.findChild<QDialog*>(QStringLiteral("particlesDialog"));
+        require(dialog != nullptr, "the dialog was not shown");
+        auto* colorBy = dialog->findChild<QComboBox*>(QStringLiteral("particleColorBy"));
+        auto* colormap = dialog->findChild<QComboBox*>(QStringLiteral("particleColormap"));
+        auto* logarithmic = dialog->findChild<QCheckBox*>(QStringLiteral("particleColorLog"));
+        require(colorBy != nullptr && colormap != nullptr && logarithmic != nullptr
+                && colorBy->count() == 4 && colorBy->currentIndex() == 0,
+            "the dialog does not list species color and the attributes");
+        require(!colormap->isEnabled() && !logarithmic->isEnabled(),
+            "the scale controls are live without an attribute");
+        colorBy->setCurrentIndex(colorBy->findData(QStringLiteral("charge")));
+        require(colormap->isEnabled() && logarithmic->isEnabled(),
+            "choosing an attribute left the scale controls idle");
+        colormap->setCurrentIndex(3);
+        logarithmic->setChecked(true);
+        auto* buttons = dialog->findChild<QDialogButtonBox*>(
+            QStringLiteral("particlesDialogButtons"));
+        buttons->button(QDialogButtonBox::Apply)->click();
+        const auto& applied = controller.settings().coloring;
+        require(applied.attribute == "charge" && applied.palette == 3
+                && applied.logarithmic && !applied.range,
+            "Apply did not store the coloring");
+        require(observed.selection == 1, "the new attribute did not reload");
+        controller.closeDialog();
+        QCoreApplication::processEvents();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     }
 
     std::cout << "particle controller tests passed\n";

@@ -622,6 +622,11 @@ public:
     [[nodiscard]] bool particleOverlaysUseColorForTest(
         const QColor& color);
     [[nodiscard]] bool particleOverlaysUseShapeForTest(MarkerShape shape);
+    // The particle color bar's range while it is shown.
+    [[nodiscard]] std::optional<std::pair<double, double>>
+    particleColorBarRangeForTest() const;
+    // The distinct colors the drawn particle batches use.
+    [[nodiscard]] std::size_t particleOverlayColorCountForTest();
     [[nodiscard]] std::size_t particleSampleCountForTest() const;
     // Point batches (one per drawn species) and the points in them: the
     // slice-cell filter thins the batches without emptying them.
@@ -1748,6 +1753,7 @@ private:
     QDockWidget* m_metadataDock = nullptr;
     QDockWidget* m_diagnosticsDock = nullptr;
     QDockWidget* m_colorBarDock = nullptr;
+    ColorBarWidget* m_particleColorBar = nullptr;
     QDockWidget* m_animationDock = nullptr;
     // *Why* the Animation panel currently applies, so
     // updateAnimationDockVisibility can act on the transition rather than

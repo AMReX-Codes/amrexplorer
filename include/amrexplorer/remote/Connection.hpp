@@ -148,9 +148,13 @@ public:
         const DatasetPageRequest& request, StopToken cancellation = {});
     [[nodiscard]] std::optional<ValueRange> requestRange(DatasetId dataset,
         const RangeRequest& request, StopToken cancellation = {});
+    // Whether the negotiated protocol carries a particle attribute (1.9).
+    // Ask first: an attribute throws when the server negotiated an older one.
+    [[nodiscard]] bool supportsParticleAttributes() const noexcept;
     [[nodiscard]] ParticleSample requestParticleSample(DatasetId dataset,
         const std::string& species, double fraction, std::uint64_t seed,
-        StopToken cancellation = {});
+        StopToken cancellation = {},
+        std::optional<ParticleAttribute> attribute = std::nullopt);
     [[nodiscard]] CacheMetrics clearCache(
         DatasetId dataset, StopToken cancellation = {});
     [[nodiscard]] CacheMetrics setCacheBudget(DatasetId dataset,

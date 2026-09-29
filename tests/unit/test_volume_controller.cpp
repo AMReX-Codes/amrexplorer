@@ -173,7 +173,8 @@ public:
         return true;
     }
     [[nodiscard]] amrvis::ParticleSample requestParticleSample(
-        const std::string&, double, std::uint64_t, amrvis::StopToken) override
+        const std::string&, double, std::uint64_t, amrvis::StopToken,
+        std::optional<amrvis::ParticleAttribute>) override
     {
         throw std::logic_error("not used");
     }

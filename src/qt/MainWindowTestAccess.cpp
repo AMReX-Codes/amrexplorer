@@ -1521,6 +1521,28 @@ bool MainWindow::particleOverlaysUseShapeForTest(MarkerShape shape)
     return found;
 }
 
+std::optional<std::pair<double, double>> MainWindow::particleColorBarRangeForTest() const
+{
+    const auto range = m_particleController->colorRange();
+    if (!m_particleColorBar->isVisibleTo(this) || !range) {
+        return std::nullopt;
+    }
+    return std::pair{range->minimum, range->maximum};
+}
+
+std::size_t MainWindow::particleOverlayColorCountForTest()
+{
+    std::vector<QRgb> colors;
+    for (const auto* state : currentViews()) {
+        for (const auto& color : state->view->pointOverlayColors()) {
+            if (std::find(colors.begin(), colors.end(), color.rgba()) == colors.end()) {
+                colors.push_back(color.rgba());
+            }
+        }
+    }
+    return colors.size();
+}
+
 std::size_t MainWindow::particleSampleCountForTest() const
 {
     std::size_t count = 0;

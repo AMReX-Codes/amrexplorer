@@ -40,7 +40,7 @@ public:
     amrvis::ViewDataResult requestView(const amrvis::ViewDataRequest&, amrvis::StopToken) override { return {}; }
     std::optional<amrvis::ValueRange> requestRange(const amrvis::RangeRequest&, amrvis::StopToken) override { return {}; }
     bool rangeAvailable(const amrvis::RangeRequest&) const noexcept override { return false; }
-    amrvis::ParticleSample requestParticleSample(const std::string&, double, std::uint64_t, amrvis::StopToken) override { return {}; }
+    amrvis::ParticleSample requestParticleSample(const std::string&, double, std::uint64_t, amrvis::StopToken, std::optional<amrvis::ParticleAttribute>) override { return {}; }
     amrvis::CacheMetrics cacheMetrics() const override { return {}; }
     bool setCacheBudget(std::uint64_t) override { return false; }
     void clearUnpinnedCache() override {}

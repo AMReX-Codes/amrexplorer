@@ -120,6 +120,9 @@ void MainWindow::applyNumberFormat(const QString& format)
             layer.colorBar->setNumberFormat(format);
         }
     }
+    if (m_particleColorBar != nullptr) {
+        m_particleColorBar->setNumberFormat(format);
+    }
     m_displayFormat = resolveNumberFormat(
         format, m_lastDisplayMinimum, m_lastDisplayMaximum);
     // The authored format can change even when its resolved form does not
@@ -635,6 +638,9 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
     }
     const auto& samples = m_particleController->samples();
     const auto dimension = primary().session->metadata().dimension;
+    const auto colorRange = m_particleController->colorRange();
+    const auto& coloring = m_particleController->settings().coloring;
+    const auto& palette = m_particleController->colorPalette();
     overlays.reserve(samples.size());
     for (const auto& sample : samples) {
         PointOverlay overlay;
@@ -642,6 +648,40 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
         overlay.shape = m_particleController->shapeFor(sample.species.name);
         overlay.size
             = static_cast<float>(m_particleController->settings().pointSize);
+        std::vector<double> values;
+        // Colored: one batch per palette slot, in the species' alpha and
+        // shape; a value off the scale keeps the species color.
+        const auto addBatches = [&] {
+            if (!colorRange || !sample.attribute) {
+                overlays.push_back(std::move(overlay));
+                return;
+            }
+            std::array<std::vector<QPointF>, Palette::colorSlots> bySlot;
+            std::vector<QPointF> unplaced;
+            for (std::size_t i = 0; i < overlay.points.size(); ++i) {
+                const auto fraction = particleColorFraction(
+                    values[i], *colorRange, coloring.logarithmic);
+                if (!fraction) {
+                    unplaced.push_back(overlay.points[i]);
+                    continue;
+                }
+                bySlot[static_cast<std::size_t>(
+                    *fraction * (Palette::colorSlots - 1))].push_back(overlay.points[i]);
+            }
+            for (std::size_t slot = 0; slot < bySlot.size(); ++slot) {
+                if (bySlot[slot].empty()) {
+                    continue;
+                }
+                PointOverlay batch = overlay;
+                batch.points = std::move(bySlot[slot]);
+                batch.color = QColor::fromRgb(palette.slotArgb(
+                    Palette::paletteStart + static_cast<int>(slot)));
+                batch.color.setAlpha(overlay.color.alpha());
+                overlays.push_back(std::move(batch));
+            }
+            overlay.points = std::move(unplaced);
+            overlays.push_back(std::move(overlay));
+        };
         if (mapped) {
             // A particle's position is physical, as the mapped pixmap is: it
             // is placed linearly and kept over any cell the warp drew, past
@@ -657,15 +697,18 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
                         particle.position[xAxis], particle.position[yAxis],
                         particle.position[normalAxis], levelSlabs)) {
                     overlay.points.emplace_back(point->x(), point->y());
+                    values.push_back(particle.value);
                 }
             }
-            overlays.push_back(std::move(overlay));
+            addBatches();
             continue;
         }
         const auto projected = projectParticlePoints(
             sample.points, *state.plane, dimension, state.normal, levelSlabs);
         overlay.points.reserve(projected.size());
+        values.reserve(projected.size());
         for (const auto& point : projected) {
+            values.push_back(point.value);
             if (spherical) {
                 // projectParticlePoints returns r-theta scene coords (y flipped
                 // from height to 0). Recover the plane pixel and re-map through
@@ -677,7 +720,7 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
                 overlay.points.emplace_back(point.x, point.y);
             }
         }
-        overlays.push_back(std::move(overlay));
+        addBatches();
     }
     state.view->setPointOverlays(overlays, state.tile);
 }
@@ -687,6 +730,17 @@ void MainWindow::updateParticleOverlays()
     for (auto* state : currentViews()) {
         updateParticleOverlay(*state);
     }
+    const auto range = m_particleController->colorRange();
+    m_particleColorBar->setVisible(range.has_value());
+    if (!range) {
+        m_particleColorBar->clearRange();
+        return;
+    }
+    const auto& coloring = m_particleController->settings().coloring;
+    m_particleColorBar->setPalette(&m_particleController->colorPalette());
+    m_particleColorBar->setLogarithmic(coloring.logarithmic);
+    m_particleColorBar->setFieldRange(
+        QString::fromStdString(coloring.attribute), range->minimum, range->maximum);
 }
 
 void MainWindow::showKeyboardMouseReference()

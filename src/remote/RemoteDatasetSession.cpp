@@ -415,18 +415,31 @@ bool RemoteDatasetSession::rangeAvailable(
 
 ParticleSample RemoteDatasetSession::requestParticleSample(
     const std::string& species, double fraction, std::uint64_t seed,
-    StopToken cancellation)
+    StopToken cancellation, std::optional<ParticleAttribute> attribute)
 {
     requireOpen();
     validateSessionParticleRequest(
-        m_metadata, m_particleSpecies, species, fraction);
+        m_metadata, m_particleSpecies, species, fraction, attribute);
+    if (attribute && !m_connection->supportsParticleAttributes()) {
+        throw std::invalid_argument(
+            "the server's protocol predates particle attributes");
+    }
     return refusingInvalidResponses(*m_connection, [&] {
         auto sample = m_connection->requestParticleSample(
-            m_id, species, fraction, seed, cancellation);
+            m_id, species, fraction, seed, cancellation, attribute);
         validateSessionParticleSampleResult(
             m_particleSpecies, species, sample);
+        if (sample.attribute != attribute) {
+            throw std::invalid_argument(
+                "particle sample carries a different attribute");
+        }
         return sample;
     });
+}
+
+bool RemoteDatasetSession::supportsParticleAttributes() const noexcept
+{
+    return m_connection && m_connection->supportsParticleAttributes();
 }
 
 CacheMetrics RemoteDatasetSession::cacheMetrics() const

@@ -428,6 +428,68 @@ std::string boundedReason(const std::string& reason)
     return reason.substr(0, kept) + std::string(continued);
 }
 
+// One encoding for a species, shared by the catalog and each sample, which
+// the client compares against each other.
+std::unique_ptr<fb::ParticleSpeciesCatalogT> toWireSpecies(
+    const ParticleSpeciesMetadata& species)
+{
+    auto wire = std::make_unique<fb::ParticleSpeciesCatalogT>();
+    wire->name = species.name;
+    wire->dimension = species.dimension;
+    wire->real_component_count = species.realComponentCount;
+    wire->int_component_count = species.intComponentCount;
+    wire->particle_count = species.particleCount;
+    wire->single_precision = species.precision == ParticleRealPrecision::Single;
+    wire->real_component_names = species.realComponentNames;
+    wire->int_component_names = species.intComponentNames;
+    return wire;
+}
+
+ParticleSpeciesMetadata fromWireSpecies(const fb::ParticleSpeciesCatalogT& wire)
+{
+    // A server older than 1.9 sends no names; otherwise one per component.
+    const auto namesFit = [](const std::vector<std::string>& names, int count) {
+        return names.empty()
+            || (count >= 0 && names.size() == static_cast<std::size_t>(count));
+    };
+    if (!namesFit(wire.real_component_names, wire.real_component_count)
+        || !namesFit(wire.int_component_names, wire.int_component_count)) {
+        throw std::invalid_argument(
+            "wire particle component names do not match their counts");
+    }
+    return {wire.name, wire.dimension, wire.real_component_count,
+        wire.int_component_count, wire.particle_count,
+        wire.single_precision ? ParticleRealPrecision::Single
+                              : ParticleRealPrecision::Double,
+        wire.real_component_names, wire.int_component_names};
+}
+
+std::unique_ptr<fb::ParticleAttributeT> toWireAttribute(
+    const std::optional<ParticleAttribute>& attribute)
+{
+    if (!attribute) {
+        return nullptr;
+    }
+    auto wire = std::make_unique<fb::ParticleAttributeT>();
+    wire->integer = attribute->kind == ParticleAttribute::Kind::Int;
+    wire->index = attribute->index;
+    return wire;
+}
+
+std::optional<ParticleAttribute> fromWireAttribute(
+    const fb::ParticleAttributeT* wire)
+{
+    if (wire == nullptr) {
+        return std::nullopt;
+    }
+    if (wire->index < 0) {
+        throw std::invalid_argument("wire particle attribute index is negative");
+    }
+    return ParticleAttribute{wire->integer ? ParticleAttribute::Kind::Int
+                                           : ParticleAttribute::Kind::Real,
+        wire->index};
+}
+
 } // namespace
 
 std::unique_ptr<NativeEnvelope> decode(
@@ -766,15 +828,7 @@ fb::DatasetOpenedT toWire(const OpenedDataset& value)
         wire.levels.push_back(std::move(converted));
     }
     for (const auto& species : value.particleSpecies) {
-        auto converted = std::make_unique<fb::ParticleSpeciesCatalogT>();
-        converted->name = species.name;
-        converted->dimension = species.dimension;
-        converted->real_component_count = species.realComponentCount;
-        converted->int_component_count = species.intComponentCount;
-        converted->particle_count = species.particleCount;
-        converted->single_precision
-            = species.precision == ParticleRealPrecision::Single;
-        wire.particle_species.push_back(std::move(converted));
+        wire.particle_species.push_back(toWireSpecies(species));
     }
     wire.file_range_available = value.fileRangeAvailable;
     wire.level_range_available = value.levelRangeAvailable;
@@ -897,12 +951,7 @@ OpenedDataset fromWire(const fb::DatasetOpenedT& value)
         if (!species) {
             throw std::invalid_argument("wire particle catalog is missing");
         }
-        result.particleSpecies.push_back(ParticleSpeciesMetadata{
-            species->name, species->dimension,
-            species->real_component_count, species->int_component_count,
-            species->particle_count,
-            species->single_precision ? ParticleRealPrecision::Single
-                                      : ParticleRealPrecision::Double});
+        result.particleSpecies.push_back(fromWireSpecies(*species));
     }
     result.fileRangeAvailable = value.file_range_available;
     result.levelRangeAvailable = value.level_range_available;
@@ -1439,13 +1488,15 @@ DatasetPage fromWire(const fb::DatasetPageResponseT& value)
 }
 
 fb::ParticleSampleRequestT toWire(DatasetId dataset,
-    const std::string& species, double fraction, std::uint64_t seed)
+    const std::string& species, double fraction, std::uint64_t seed,
+    std::optional<ParticleAttribute> attribute)
 {
     fb::ParticleSampleRequestT wire;
     wire.dataset_id = dataset.value;
     wire.species = species;
     wire.fraction = fraction;
     wire.seed = seed;
+    wire.attribute = toWireAttribute(attribute);
     return wire;
 }
 
@@ -1457,27 +1508,27 @@ ParticleSampleRequestData fromWire(
         throw std::invalid_argument("wire particle sample request is invalid");
     }
     return {DatasetId{value.dataset_id}, value.species,
-        value.fraction, value.seed};
+        value.fraction, value.seed, fromWireAttribute(value.attribute.get())};
 }
 
 fb::ParticleSampleResponseT toWire(
     const ParticleSample& value, const CacheMetrics& cache)
 {
     fb::ParticleSampleResponseT wire;
-    wire.species = std::make_unique<fb::ParticleSpeciesCatalogT>();
-    wire.species->name = value.species.name;
-    wire.species->dimension = value.species.dimension;
-    wire.species->real_component_count = value.species.realComponentCount;
-    wire.species->int_component_count = value.species.intComponentCount;
-    wire.species->particle_count = value.species.particleCount;
-    wire.species->single_precision
-        = value.species.precision == ParticleRealPrecision::Single;
+    wire.species = toWireSpecies(value.species);
+    wire.attribute = toWireAttribute(value.attribute);
     wire.ids.reserve(value.points.size());
     wire.positions.reserve(value.points.size() * 3);
+    if (value.attribute) {
+        wire.values.reserve(value.points.size());
+    }
     for (const auto& point : value.points) {
         wire.ids.push_back(point.id);
         wire.positions.insert(wire.positions.end(),
             point.position.values.begin(), point.position.values.end());
+        if (value.attribute) {
+            wire.values.push_back(point.value);
+        }
     }
     wire.integer_bytes_read = value.io.integerBytesRead;
     wire.real_bytes_read = value.io.realBytesRead;
@@ -1501,12 +1552,15 @@ ParticleSample fromWire(const fb::ParticleSampleResponseT& value)
     requireFiniteValues(value.positions,
         "wire particle positions contain a non-finite value");
     ParticleSample result;
-    result.species = {value.species->name, value.species->dimension,
-        value.species->real_component_count,
-        value.species->int_component_count,
-        value.species->particle_count,
-        value.species->single_precision ? ParticleRealPrecision::Single
-                                        : ParticleRealPrecision::Double};
+    result.species = fromWireSpecies(*value.species);
+    result.attribute = fromWireAttribute(value.attribute.get());
+    // Values may be non-finite, as a local read's may: they only choose a
+    // color, never a place.
+    if (result.attribute ? value.values.size() != value.ids.size()
+                         : !value.values.empty()) {
+        throw std::invalid_argument(
+            "wire particle values do not match the sample");
+    }
     result.points.reserve(value.ids.size());
     for (std::size_t index = 0; index < value.ids.size(); ++index) {
         ParticlePoint point;
@@ -1514,6 +1568,9 @@ ParticleSample fromWire(const fb::ParticleSampleResponseT& value)
         std::copy_n(value.positions.begin()
                 + static_cast<std::ptrdiff_t>(index * 3),
             3, point.position.values.begin());
+        if (result.attribute) {
+            point.value = value.values[index];
+        }
         result.points.push_back(point);
     }
     result.io = {value.integer_bytes_read, value.real_bytes_read,

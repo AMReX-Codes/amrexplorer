@@ -2759,6 +2759,7 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     }
     spec.particleFraction = particles.fraction;
     spec.particleSeed = particles.seed;
+    spec.particleAttribute = particles.coloring.attribute;
     spec.includeGridBoxes = m_boxesAction->isChecked();
     const auto views = primaryViews();
     spec.visibleRegions.reserve(views.size());

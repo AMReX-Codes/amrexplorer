@@ -88,10 +88,12 @@ public:
         const RangeRequest& request) const noexcept override;
     [[nodiscard]] ParticleSample requestParticleSample(
         const std::string& species, double fraction, std::uint64_t seed,
-        StopToken cancellation = {}) override;
+        StopToken cancellation = {},
+        std::optional<ParticleAttribute> attribute = std::nullopt) override;
     [[nodiscard]] ParticleSample requestParticleSample(
         const std::string& species, double fraction, std::uint64_t seed,
-        std::size_t maximumPoints, StopToken cancellation = {});
+        std::size_t maximumPoints, StopToken cancellation = {},
+        std::optional<ParticleAttribute> attribute = std::nullopt);
 
     // A 3-D plotfile with physical geometry can be volume-rendered.
     [[nodiscard]] bool supportsVolumeRendering() const noexcept override;

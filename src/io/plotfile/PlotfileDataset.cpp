@@ -208,10 +208,11 @@ const std::vector<ParticleSpeciesMetadata>& PlotfileDataset::particleSpecies()
 
 ParticleSample PlotfileDataset::requestParticleSample(
     const std::string& species, double fraction, std::uint64_t seed,
-    StopToken cancellation, std::size_t maximumPoints) const
+    StopToken cancellation, std::size_t maximumPoints,
+    std::optional<ParticleAttribute> attribute) const
 {
-    return readParticleSample(
-        m_plotfile, species, fraction, seed, cancellation, maximumPoints);
+    return readParticleSample(m_plotfile, species, fraction, seed,
+        cancellation, maximumPoints, attribute);
 }
 
 const std::filesystem::path& PlotfileDataset::dataRoot() const noexcept

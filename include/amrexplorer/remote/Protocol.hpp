@@ -59,7 +59,12 @@ inline constexpr std::uint16_t mappedGridMinorVersion = 7;
 // angles alone and returns a frame turned the wrong way, one the client
 // would draw its wireframe over.
 inline constexpr std::uint16_t cameraOrientationMinorVersion = 8;
-inline constexpr std::uint16_t protocolMinorVersion = cameraOrientationMinorVersion;
+// 1.9 carries particle component names in the species catalog and one
+// component's value per sampled point (ParticleSample*.attribute, values).
+// A version for the 1.3 reason: a 1.8 server ignores the attribute and
+// returns positions alone, so a client coloring by it would draw nothing.
+inline constexpr std::uint16_t particleAttributeMinorVersion = 9;
+inline constexpr std::uint16_t protocolMinorVersion = particleAttributeMinorVersion;
 
 enum class PayloadKind : std::uint8_t {
     None = 0,

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "MarkerShape.hpp"
+
 #include <amrexplorer/core/StopToken.hpp>
 #include <amrexplorer/data/DatasetSession.hpp>
 #include <amrexplorer/io/ParticleReader.hpp>
@@ -53,6 +55,7 @@ public:
         // in 2-D the slice is the domain, so it would filter nothing.
         bool sliceCellsOnly = false;
         std::unordered_map<std::string, QColor> colors;
+        std::unordered_map<std::string, MarkerShape> shapes;
     };
 
     struct Hooks {
@@ -81,6 +84,8 @@ public:
     // The colour a species is drawn with; white when it has none (a reset
     // leaves none behind until the next dataset re-seeds the defaults).
     [[nodiscard]] QColor colorFor(const std::string& species) const;
+    // Likewise the marker; a circle when it has none.
+    [[nodiscard]] MarkerShape shapeFor(const std::string& species) const;
 
     // The dialog's and the tests' entry point: installs the selection. A
     // change to the sampled identities (species, fraction, seed) emits
@@ -89,9 +94,10 @@ public:
     void applySelection(std::vector<std::string> species, double fraction,
         int pointSize, std::uint64_t seed, bool sliceCellsOnly);
     void setColor(const std::string& species, const QColor& color);
+    void setShape(const std::string& species, MarkerShape shape);
     // Reinstalls what a restored frame spec carries (species, fraction, seed,
-    // initialised), leaving the display settings -- colours, point size, the
-    // slice-cell filter -- alone.
+    // initialised), leaving the display settings -- colours, shapes, point
+    // size, the slice-cell filter -- alone.
     void restoreSelection(std::vector<std::string> species, double fraction,
         std::uint64_t seed, bool selectionInitialized);
     // Drops every setting back to its default: the shared reset for the two
@@ -103,7 +109,7 @@ public:
     // restore reinstalls what its spec carries.
     void clearSelection();
 
-    // Seeds default colours for the dataset's species (a reset first unless
+    // Seeds default colours and shapes for the dataset's species (a reset first unless
     // preserveSelection), lifts any suspension, and enables the action for
     // datasets with species.
     void configureForDataset(bool preserveSelection);
@@ -142,7 +148,8 @@ public:
     [[nodiscard]] bool loadingUiSettled() const;
 
 signals:
-    // Samples, colours or point size changed: the host redraws the overlays.
+    // Samples, colours, shapes or point size changed: the host redraws the
+    // overlays.
     void overlaysChanged();
     // The sampled identities changed: the host invalidates any prefetched
     // sequence frame and either restarts an in-flight frame load (so the

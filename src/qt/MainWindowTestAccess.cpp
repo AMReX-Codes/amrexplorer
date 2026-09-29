@@ -1507,6 +1507,20 @@ bool MainWindow::particleOverlaysUseColorForTest(const QColor& color)
     return found;
 }
 
+bool MainWindow::particleOverlaysUseShapeForTest(MarkerShape shape)
+{
+    bool found = false;
+    for (const auto* state : currentViews()) {
+        for (const auto overlayShape : state->view->pointOverlayShapes()) {
+            found = true;
+            if (overlayShape != shape) {
+                return false;
+            }
+        }
+    }
+    return found;
+}
+
 std::size_t MainWindow::particleSampleCountForTest() const
 {
     std::size_t count = 0;

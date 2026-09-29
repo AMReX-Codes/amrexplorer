@@ -62,51 +62,125 @@ public:
 class PointCloudItem final : public QGraphicsItem {
 public:
     PointCloudItem(std::vector<QPointF> points, const QRectF& bounds,
-        QColor color, qreal size)
+        QColor color, qreal size, MarkerShape shape)
         : m_points(std::move(points))
         , m_bounds(bounds)
         , m_color(std::move(color))
         , m_size(size)
+        , m_shape(shape)
     {
     }
 
     [[nodiscard]] QRectF boundingRect() const override
     {
-        // The pen is cosmetic, so its width is m_size *device* pixels however
-        // far the view is zoomed out; in item coordinates that is m_size/scale,
-        // which exceeds a bare m_size padding as soon as the scale drops below
-        // one, and edge points then paint outside the declared bounds. Nothing
-        // shows today because the view repaints its whole viewport, but the
-        // contract holds regardless of who is asking.
-        //
-        // A constant multiple rather than the live view scale: boundingRect
-        // must not change without prepareGeometryChange, or the scene's item
-        // index goes stale, and the view scale changes on every zoom. This
-        // covers zoom-out to 1/16, past which the whole raster occupies a
-        // handful of pixels and a point's overspill is not a visible artifact.
+        // A stamp reaches under m_size + 2 device pixels from its point, more
+        // in item coordinates as the view zooms out. A constant multiple, not
+        // the live scale, which boundingRect cannot follow without
+        // prepareGeometryChange; it covers zoom-out to 1/16.
         constexpr qreal smallestCoveredScale = 16.0;
-        const auto padding = m_size * smallestCoveredScale;
+        const auto padding = (m_size + 2.0) * smallestCoveredScale;
         return m_bounds.adjusted(-padding, -padding, padding, padding);
     }
 
     void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override
     {
-        QPen pen(m_color);
-        pen.setCosmetic(true);
-        pen.setWidthF(m_size);
-        pen.setCapStyle(Qt::RoundCap);
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing, true);
-        painter->setPen(pen);
-        painter->drawPoints(m_points.data(), static_cast<int>(m_points.size()));
+        // A one-pixel dot stays a point: a disc stamp that small is too faint.
+        if (m_shape == MarkerShape::Circle && m_size < 2.0) {
+            QPen pen(m_color);
+            pen.setCosmetic(true);
+            pen.setWidthF(m_size);
+            pen.setCapStyle(Qt::RoundCap);
+            painter->setPen(pen);
+            painter->drawPoints(m_points.data(), static_cast<int>(m_points.size()));
+        } else {
+            paintMarkers(*painter);
+        }
         painter->restore();
     }
 
 private:
+    // Stamped in device pixels, so a marker keeps its on-screen size at any
+    // zoom. The square, diamond and triangle each cover m_size squared (the
+    // circle pi/4 of that), so none looks much heavier than another.
+    void paintMarkers(QPainter& painter) const
+    {
+        const auto transform = painter.worldTransform();
+        painter.resetTransform();
+        // The reset keeps the device's pixel ratio, which a cosmetic pen
+        // does not see: divide it out so every shape is m_size device pixels.
+        const auto ratio = painter.device()->devicePixelRatioF();
+        const auto size = m_size / ratio;
+        const auto half = 0.5 * size;
+        // Device pixels from the centre to the stamp's edge: the circle's
+        // radius, or past the cross's arms and the triangle's corners.
+        const auto reach = std::ceil(m_shape == MarkerShape::Circle ? 0.5 * m_size : m_size) + 1.0;
+        const auto side = static_cast<int>(2.0 * reach);
+        // Drawn once and copied to each point.
+        QImage stamp(side, side, QImage::Format_ARGB32_Premultiplied);
+        stamp.setDevicePixelRatio(ratio);
+        stamp.fill(Qt::transparent);
+        // On a pixel centre for an odd size and a corner for an even one, so
+        // the shape's edges fall on pixel edges; the copy snaps the rest.
+        const auto pixelCentre = std::lround(m_size) % 2 == 1 ? 0.5 : 0.0;
+        const QPointF centre((reach + pixelCentre) / ratio, (reach + pixelCentre) / ratio);
+        // Opaque in the stamp, the alpha applied as it is copied: overlapping
+        // strokes (the cross's centre) would otherwise compound it.
+        auto opaque = m_color;
+        opaque.setAlpha(255);
+        {
+            QPainter shape(&stamp);
+            shape.setRenderHint(QPainter::Antialiasing, true);
+            shape.setPen(Qt::NoPen);
+            shape.setBrush(opaque);
+            switch (m_shape) {
+            case MarkerShape::Circle:
+                shape.drawEllipse(centre, half, half);
+                break;
+            case MarkerShape::Square:
+                shape.drawRect(QRectF(centre - QPointF(half, half), QSizeF(size, size)));
+                break;
+            case MarkerShape::Diamond: {
+                const auto r = half * std::sqrt(2.0);
+                shape.drawPolygon(QPolygonF{{QPointF(0.0, -r), QPointF(r, 0.0),
+                    QPointF(0.0, r), QPointF(-r, 0.0)}}.translated(centre));
+                break;
+            }
+            case MarkerShape::Triangle: {
+                // Equilateral, pointing up, centred on its centroid.
+                const auto edge = size * std::sqrt(4.0 / std::sqrt(3.0));
+                const auto height = edge * std::sqrt(3.0) / 2.0;
+                shape.drawPolygon(QPolygonF{{QPointF(0.0, -2.0 * height / 3.0),
+                    QPointF(0.5 * edge, height / 3.0),
+                    QPointF(-0.5 * edge, height / 3.0)}}.translated(centre));
+                break;
+            }
+            case MarkerShape::Cross: {
+                QPen pen(opaque, std::max<qreal>(1.0, m_size / 3.0) / ratio);
+                pen.setCapStyle(Qt::FlatCap);
+                shape.setPen(pen);
+                const auto arm = 0.75 * size;
+                shape.drawLine(centre - QPointF(arm, 0.0), centre + QPointF(arm, 0.0));
+                shape.drawLine(centre - QPointF(0.0, arm), centre + QPointF(0.0, arm));
+                break;
+            }
+            }
+        }
+        painter.setOpacity(painter.opacity() * m_color.alphaF());
+        // A plain copy: the view's smooth transforms change no pixel here and
+        // halve the copy's speed.
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        for (const auto& point : m_points) {
+            painter.drawImage(transform.map(point) - centre, stamp);
+        }
+    }
+
     std::vector<QPointF> m_points;
     QRectF m_bounds;
     QColor m_color;
     qreal m_size = 3.0;
+    MarkerShape m_shape = MarkerShape::Circle;
 };
 
 void paintScaleBar(QPainter* painter, const QRectF& imageBounds, double codeUnitsPerImagePixel,
@@ -279,6 +353,7 @@ void ImageView::clearTileItems(Tile& tile)
     tile.pathItems.clear();
     tile.pointItems.clear();
     tile.pointOverlayColors.clear();
+    tile.pointOverlayShapes.clear();
     tile.pointOverlayPointCount = 0;
     tile.crosshairVerticalItem = nullptr;
     tile.crosshairHorizontalItem = nullptr;
@@ -711,6 +786,7 @@ void ImageView::setPointOverlays(const std::vector<PointOverlay>& overlays,
     }
     deleteItems(m_scene, tile->pointItems);
     tile->pointOverlayColors.clear();
+    tile->pointOverlayShapes.clear();
     tile->pointOverlayPointCount = 0;
     if (tile->item == nullptr) {
         return;
@@ -722,11 +798,12 @@ void ImageView::setPointOverlays(const std::vector<PointOverlay>& overlays,
         }
         auto* item = new PointCloudItem(
             overlay.points, tile->item->boundingRect(), overlay.color,
-            overlay.size);
+            overlay.size, overlay.shape);
         item->setParentItem(tile->item);
         item->setZValue(3.0);
         tile->pointItems.push_back(item);
         tile->pointOverlayColors.push_back(overlay.color);
+        tile->pointOverlayShapes.push_back(overlay.shape);
         tile->pointOverlayPointCount += overlay.points.size();
     }
 }
@@ -780,6 +857,11 @@ std::size_t ImageView::pointOverlayPointCount() const noexcept
 const std::vector<QColor>& ImageView::pointOverlayColors() const noexcept
 {
     return m_tiles.front().pointOverlayColors;
+}
+
+const std::vector<MarkerShape>& ImageView::pointOverlayShapes() const noexcept
+{
+    return m_tiles.front().pointOverlayShapes;
 }
 
 void ImageView::setCrosshairs(const std::optional<QLineF>& vertical,

@@ -4,9 +4,13 @@
 #include <QApplication>
 #include <QImage>
 #include <QKeyEvent>
+#include <QLineF>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPen>
 #include <QPoint>
 #include <QPointF>
+#include <QPolygonF>
 #include <QRectF>
 #include <QScrollBar>
 #include <QSizeF>
@@ -456,6 +460,199 @@ void tearingDownTheSceneForgetsThePointTally()
         "replacing the overlays left the point tally behind");
 }
 
+// Each marker shape paints a distinct stamp over its point, and keeps its
+// device size when the export is scaled up, as the cosmetic circle does.
+void markerShapesPaintDistinctFixedSizeStamps()
+{
+    const auto markedPixels = [](amrvis::qt::MarkerShape shape, qreal scale) {
+        amrvis::qt::ImageView view;
+        view.setImage(solidImage(64, 64));
+        amrvis::qt::PointOverlay overlay;
+        overlay.points = {{32.0, 32.0}};
+        overlay.color = Qt::red;
+        overlay.size = 9.0F;
+        overlay.shape = shape;
+        view.setPointOverlays({overlay});
+        const auto image = view.composedImage(scale);
+        std::vector<QPoint> marked;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                if (qRed(image.pixel(x, y)) > 128) marked.emplace_back(x, y);
+            }
+        }
+        return marked;
+    };
+    std::vector<std::vector<QPoint>> stamps;
+    for (const auto shape : amrvis::qt::markerShapes) {
+        const auto native = markedPixels(shape, 1.0);
+        require(std::find(native.begin(), native.end(), QPoint(32, 32)) != native.end(),
+            "a marker did not cover its own point");
+        require(native.size() > 10 && native.size() < 150,
+            "a marker is far from the dot's size");
+        const auto scaled = markedPixels(shape, 2.0);
+        require(scaled.size() < 2 * native.size(),
+            "a marker grew with the export scale");
+        stamps.push_back(native);
+    }
+    for (std::size_t a = 0; a < stamps.size(); ++a) {
+        for (std::size_t b = a + 1; b < stamps.size(); ++b) {
+            require(stamps[a] != stamps[b], "two marker shapes paint the same stamp");
+        }
+    }
+}
+
+// Each marker is a stamp (a plain point for a one-pixel circle); it must
+// look as painting its shape straight onto the point does, where that shape
+// lines up with the pixels: an odd size on a pixel centre, an even one on a
+// corner. A stamp too small for its shape, or placed off, fails here.
+void markersLookAsPaintingThemDirectlyDoes()
+{
+    using amrvis::qt::MarkerShape;
+    // The shapes as the stamps draw them, painted directly.
+    const auto paintDirectly = [](QPainter& painter, MarkerShape shape, qreal size,
+                                   QPointF centre) {
+        const auto half = 0.5 * size;
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(Qt::red);
+        switch (shape) {
+        case MarkerShape::Circle: {
+            QPen pen(Qt::red);
+            pen.setCosmetic(true);
+            pen.setWidthF(size);
+            pen.setCapStyle(Qt::RoundCap);
+            painter.setPen(pen);
+            painter.drawPoint(centre);
+            break;
+        }
+        case MarkerShape::Square:
+            painter.drawRect(QRectF(centre - QPointF(half, half), QSizeF(size, size)));
+            break;
+        case MarkerShape::Diamond: {
+            const auto r = half * std::sqrt(2.0);
+            painter.drawPolygon(QPolygonF{{QPointF(0.0, -r), QPointF(r, 0.0),
+                QPointF(0.0, r), QPointF(-r, 0.0)}}.translated(centre));
+            break;
+        }
+        case MarkerShape::Triangle: {
+            const auto edge = size * std::sqrt(4.0 / std::sqrt(3.0));
+            const auto height = edge * std::sqrt(3.0) / 2.0;
+            painter.drawPolygon(QPolygonF{{QPointF(0.0, -2.0 * height / 3.0),
+                QPointF(0.5 * edge, height / 3.0),
+                QPointF(-0.5 * edge, height / 3.0)}}.translated(centre));
+            break;
+        }
+        case MarkerShape::Cross: {
+            QPen pen(Qt::red, std::max<qreal>(1.0, size / 3.0));
+            pen.setCapStyle(Qt::FlatCap);
+            painter.setPen(pen);
+            const auto arm = 0.75 * size;
+            painter.drawLine(centre - QPointF(arm, 0.0), centre + QPointF(arm, 0.0));
+            painter.drawLine(centre - QPointF(0.0, arm), centre + QPointF(0.0, arm));
+            break;
+        }
+        }
+    };
+    for (const auto shape : amrvis::qt::markerShapes) {
+        for (const auto size : {1.0F, 3.0F, 4.0F, 9.0F}) {
+            const auto offset = static_cast<int>(size) % 2 == 1 ? 0.5 : 0.0;
+            const QPointF centre(32.0 + offset, 32.0 + offset);
+            amrvis::qt::ImageView view;
+            view.setImage(solidImage(64, 64));
+            amrvis::qt::PointOverlay overlay;
+            overlay.points = {centre};
+            overlay.color = Qt::red;
+            overlay.size = size;
+            overlay.shape = shape;
+            view.setPointOverlays({overlay});
+            const auto drawn = view.composedImage(1.0);
+
+            QImage reference = solidImage(64, 64);
+            QPainter painter(&reference);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            paintDirectly(painter, shape, size, centre);
+            painter.end();
+            double ink = 0.0;
+            double difference = 0.0;
+            for (int y = 0; y < reference.height(); ++y) {
+                for (int x = 0; x < reference.width(); ++x) {
+                    const auto expected = qRed(reference.pixel(x, y));
+                    ink += expected;
+                    difference += std::abs(qRed(drawn.pixel(x, y)) - expected);
+                }
+            }
+            require(ink > 0.0 && difference <= 0.2 * ink,
+                "a marker does not look as painting its shape directly does");
+        }
+    }
+}
+
+// A translucent marker is one layer of its colour throughout: where a
+// shape's own strokes overlap (the cross's centre) it must not darken.
+void translucentMarkersAreOneLayer()
+{
+    for (const auto shape : amrvis::qt::markerShapes) {
+        amrvis::qt::ImageView view;
+        view.setImage(solidImage(64, 64));
+        amrvis::qt::PointOverlay overlay;
+        overlay.points = {{32.0, 32.0}};
+        overlay.color = QColor(255, 0, 0, 77);
+        overlay.size = 9.0F;
+        overlay.shape = shape;
+        view.setPointOverlays({overlay});
+        const auto image = view.composedImage(1.0);
+        int strongest = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                strongest = std::max(strongest, qRed(image.pixel(x, y)));
+            }
+        }
+        require(strongest >= 70 && strongest <= 80,
+            "a translucent marker is not one layer of its colour");
+    }
+}
+
+// A marker is m_size device pixels on screen whatever the display's pixel
+// ratio, as in an export and as the cosmetic circle is. The check means most
+// under image_view_pan_hidpi, where the viewport's ratio is 2.
+void markerShapesKeepTheirSizeOnHighDpiViewports()
+{
+    const auto marked = [](const QImage& image) {
+        int count = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                // Red, not merely bright: the viewport around the image is light.
+                const auto pixel = image.pixel(x, y);
+                count += qRed(pixel) > 128 && qGreen(pixel) < 64 && qBlue(pixel) < 64
+                    ? 1 : 0;
+            }
+        }
+        return count;
+    };
+    for (const auto shape : amrvis::qt::markerShapes) {
+        amrvis::qt::ImageView view;
+        view.resize(200, 200);
+        view.show();
+        view.setImage(solidImage(64, 64));
+        amrvis::qt::PointOverlay overlay;
+        overlay.points = {{32.0, 32.0}};
+        overlay.color = Qt::red;
+        overlay.size = 9.0F;
+        overlay.shape = shape;
+        view.setPointOverlays({overlay});
+        QApplication::processEvents();
+        // Under image_view_pan_hidpi the viewport must really be scaled, or
+        // this compares two ratio-1 pictures and passes without testing.
+        if (qgetenv("QT_SCALE_FACTOR") == "2") {
+            require(view.viewport()->devicePixelRatioF() == 2.0,
+                "QT_SCALE_FACTOR=2 did not scale the viewport");
+        }
+        const auto exported = marked(view.composedImage(1.0));
+        const auto shown = marked(view.viewport()->grab().toImage());
+        require(4 * shown < 5 * exported && 5 * shown > 4 * exported,
+            "a marker's size on screen differs from its exported size");
+    }
+}
+
 // Move the pointer over a scene point and report which tile and raster pixel
 // the view named, or -1 when it stayed silent.
 struct TileProbe {
@@ -743,6 +940,10 @@ int main(int argc, char* argv[])
     fullyVisibleSceneIgnoresPan();
     arrowKeysRequestPanOnlyWhenFocusedWithAnImage();
     tearingDownTheSceneForgetsThePointTally();
+    markerShapesPaintDistinctFixedSizeStamps();
+    markersLookAsPaintingThemDirectlyDoes();
+    translucentMarkersAreOneLayer();
+    markerShapesKeepTheirSizeOnHighDpiViewports();
     tilesShareOnePlacedScene();
     clearingAnAbsentTileLeavesTheViewAlone();
     fitFramesTheCanvasNotTheTilesOnShow();

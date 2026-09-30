@@ -24,14 +24,15 @@ struct ParticleColorRange {
     return std::isfinite(value) && (!logarithmic || value > 0.0);
 }
 
-// The range of the placeable values across the samples that carry an
-// attribute; none when there is no such value.
-[[nodiscard]] inline std::optional<ParticleColorRange> particleValueRange(
-    std::span<const ParticleSample> samples, bool logarithmic) noexcept
+// The range of the placeable values across the samples `colored` accepts;
+// none when there is no such value.
+template <class Colored>
+[[nodiscard]] std::optional<ParticleColorRange> particleValueRange(
+    std::span<const ParticleSample> samples, bool logarithmic, Colored colored)
 {
     std::optional<ParticleColorRange> range;
     for (const auto& sample : samples) {
-        if (!sample.attribute) {
+        if (!colored(sample)) {
             continue;
         }
         for (const auto& point : sample.points) {
@@ -47,6 +48,14 @@ struct ParticleColorRange {
         }
     }
     return range;
+}
+
+// Likewise across every sample that carries an attribute.
+[[nodiscard]] inline std::optional<ParticleColorRange> particleValueRange(
+    std::span<const ParticleSample> samples, bool logarithmic)
+{
+    return particleValueRange(samples, logarithmic,
+        [](const ParticleSample& sample) { return sample.attribute.has_value(); });
 }
 
 // The palette slot a value takes, through the mapping the slices use

@@ -139,16 +139,22 @@ std::vector<std::string> ParticleController::attributeNames() const
     return names;
 }
 
+bool ParticleController::sampleColored(const ParticleSample& sample) const
+{
+    const auto& attribute = m_settings.coloring.attribute;
+    return !attribute.empty() && sample.attribute
+        && findParticleAttribute(sample.species, attribute) == sample.attribute;
+}
+
 std::optional<ParticleColorRange> ParticleController::colorRange() const
 {
     const auto& coloring = m_settings.coloring;
-    if (coloring.attribute.empty()
-        || std::none_of(m_samples.begin(), m_samples.end(),
-            [](const auto& sample) { return sample.attribute.has_value(); })) {
+    const auto colored = [this](const ParticleSample& sample) { return sampleColored(sample); };
+    if (std::none_of(m_samples.begin(), m_samples.end(), colored)) {
         return std::nullopt;
     }
     return coloring.range ? coloring.range
-                          : particleValueRange(m_samples, coloring.logarithmic);
+                          : particleValueRange(m_samples, coloring.logarithmic, colored);
 }
 
 const Palette& ParticleController::colorPalette() const

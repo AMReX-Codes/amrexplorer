@@ -107,8 +107,11 @@ public:
     // The component names any species of the dataset has, in discovery order;
     // empty when its session cannot read attributes.
     [[nodiscard]] std::vector<std::string> attributeNames() const;
+    // Whether a sample's values are the chosen attribute's for its species:
+    // ones read for another attribute stay uncolored until reloaded.
+    [[nodiscard]] bool sampleColored(const ParticleSample& sample) const;
     // The range the loaded samples are colored over: the fixed one, or the
-    // span of their values. None unless some sample carries the attribute.
+    // span of their values. None unless some sample is colored.
     [[nodiscard]] std::optional<ParticleColorRange> colorRange() const;
     [[nodiscard]] const Palette& colorPalette() const;
 

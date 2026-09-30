@@ -814,6 +814,16 @@ int main(int argc, char** argv)
                 && &controller.colorPalette()
                     == &amrvis::builtinPalette(amrvis::qt::builtinPalettes[4]),
             "the fixed range or the colormap was not used");
+        // Switched to another attribute before new samples land, the loaded
+        // ones -- read for mass -- must not be colored or labeled as it.
+        controller.restoreSelection({"ions"}, 1.0, 0, true, "temperature");
+        require(!controller.colorRange()
+                && !controller.sampleColored(controller.samples().front()),
+            "samples read for one attribute were colored as another");
+        controller.restoreSelection({"ions"}, 1.0, 0, true, "mass");
+        require(controller.colorRange() == fixed.range
+                && controller.sampleColored(controller.samples().front()),
+            "samples read for the attribute were not colored as it");
 
         session->attributesSupported = false;
         require(controller.attributeNames().empty(),

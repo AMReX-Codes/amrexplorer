@@ -652,7 +652,7 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
         overlay.size
             = static_cast<float>(m_particleController->settings().pointSize);
         // Each drawn point's value, read only when this sample is colored.
-        const bool colored = colorRange && sample.attribute;
+        const bool colored = colorRange && m_particleController->sampleColored(sample);
         std::vector<double> values;
         // Colored: one batch per palette slot, in the species' alpha and
         // shape. Values past the range take its end colors; one the scale

@@ -1129,6 +1129,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     }
     m_probeLabel->clear();
     primary().colorBar->clearRange();
+    updateParticleColorBar();
     const auto generation = ++m_generation;
     m_metadataStopSource.request_stop();
     m_metadataStopSource = StopSource{};

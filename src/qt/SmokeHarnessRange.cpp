@@ -569,7 +569,7 @@ Outcome dispatchRange(Context& context)
         // slot and the bar spans 1 to 8. The next sequence frame, masses 10
         // to 80, loads its particles from the frame spec, which must carry
         // the attribute, and the bar must follow; back to species colors, the
-        // bar goes away.
+        // bar goes away, as it does when another dataset opens.
         const std::filesystem::path first(argv[2]);
         const std::filesystem::path second(argv[3]);
         struct Progress {
@@ -634,7 +634,7 @@ Outcome dispatchRange(Context& context)
                 static_cast<void>(window);
             });
         QObject::connect(poll, &QTimer::timeout, &application,
-            [&window, &application, poll, progress, fail, applyColorBy, colored] {
+            [&window, &application, poll, progress, fail, applyColorBy, colored, first] {
                 if (++progress->attempts > 500) {
                     fail("the particle coloring never settled");
                     return;
@@ -671,6 +671,23 @@ Outcome dispatchRange(Context& context)
                     if (window.panelExportImageForTest(2).width()
                         >= progress->coloredExportWidth) {
                         fail("the export did not carry the particle color bar");
+                        return;
+                    }
+                    if (!applyColorBy(QStringLiteral("mass"))) {
+                        fail("the dialog no longer offers mass");
+                        return;
+                    }
+                    progress->phase = 5;
+                    break;
+                case 5:
+                    if (!colored(10.0)) {
+                        return;
+                    }
+                    // Another dataset takes the particles away, and the bar
+                    // with them, at once rather than at the next redraw.
+                    window.openDataset(first);
+                    if (window.particleColorBarRangeForTest()) {
+                        fail("opening another dataset left the particle color bar up");
                         return;
                     }
                     poll->stop();

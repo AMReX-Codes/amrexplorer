@@ -598,7 +598,12 @@ void ParticleController::showDialog(QWidget* parent)
         rangeMinimum->setEnabled(colored && fixedRange->isChecked());
         rangeMaximum->setEnabled(colored && fixedRange->isChecked());
     };
-    connect(colorBy, &QComboBox::currentIndexChanged, dialog, refreshColorControls);
+    // A fixed range belongs to the attribute it was set for.
+    connect(colorBy, &QComboBox::currentIndexChanged, dialog,
+        [fixedRange, refreshColorControls] {
+            fixedRange->setChecked(false);
+            refreshColorControls();
+        });
     connect(fixedRange, &QCheckBox::toggled, dialog, refreshColorControls);
     refreshColorControls();
 

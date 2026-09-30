@@ -974,6 +974,36 @@ int main(int argc, char** argv)
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     }
 
+    // A fixed range belongs to the attribute it was set for: choosing another
+    // in the dialog unticks it rather than coloring the new one over it.
+    {
+        current = session;
+        ParticleController controller(hooks());
+        controller.configureForDataset(false);
+        ParticleController::Coloring byMass;
+        byMass.attribute = "mass";
+        byMass.range = ParticleColorRange{0.0, 1.0};
+        controller.applySelection({"ions"}, 1.0, 3, 0, false, byMass);
+        QWidget host;
+        controller.showDialog(&host);
+        auto* dialog = host.findChild<QDialog*>(QStringLiteral("particlesDialog"));
+        require(dialog != nullptr, "the dialog was not shown");
+        auto* colorBy = dialog->findChild<QComboBox*>(QStringLiteral("particleColorBy"));
+        auto* fixed = dialog->findChild<QCheckBox*>(
+            QStringLiteral("particleColorFixedRange"));
+        require(fixed->isChecked(), "the dialog did not show the fixed range");
+        colorBy->setCurrentIndex(colorBy->findData(QStringLiteral("charge")));
+        require(!fixed->isChecked(), "a fixed range carried over to another attribute");
+        dialog->findChild<QDialogButtonBox*>(QStringLiteral("particlesDialogButtons"))
+            ->button(QDialogButtonBox::Apply)->click();
+        require(controller.settings().coloring.attribute == "charge"
+                && !controller.settings().coloring.range,
+            "Apply kept the old attribute's fixed range");
+        controller.closeDialog();
+        QCoreApplication::processEvents();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+
     std::cout << "particle controller tests passed\n";
     return 0;
 }

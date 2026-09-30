@@ -672,8 +672,12 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
                 if (bySlot[slot].empty()) {
                     continue;
                 }
-                PointOverlay batch = overlay;
+                // The style alone: copying the overlay would copy all its
+                // points per slot, to replace them at once.
+                PointOverlay batch;
                 batch.points = std::move(bySlot[slot]);
+                batch.size = overlay.size;
+                batch.shape = overlay.shape;
                 batch.color = QColor::fromRgb(palette.slotArgb(
                     Palette::paletteStart + static_cast<int>(slot)));
                 batch.color.setAlpha(overlay.color.alpha());

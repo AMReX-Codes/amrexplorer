@@ -584,6 +584,9 @@ public:
     [[nodiscard]] QSize panelExportSizeForTest(int normal) const;
     // A panel as Export Image composes it, color bars included.
     [[nodiscard]] QImage panelExportImageForTest(int normal) const;
+    // One animation frame of a panel: the first call freezes layout, as a
+    // movie's first frame does, and later calls reuse it.
+    [[nodiscard]] QImage panelMovieFrameForTest(int normal, ExportLayout& layout) const;
     void panStepActiveViewForTest(const QPointF& direction);
     // A panel's view transform scale (m11, m22) and whether it sits on a
     // virtual canvas, for panels other than the active one.
@@ -610,6 +613,8 @@ public:
     void setParticleSelectionForTest(
         std::vector<std::string> species, double fraction,
         std::uint64_t seed = 0);
+    // Colors the selected particles by an attribute, the rest as they are.
+    void setParticleColorAttributeForTest(const std::string& attribute);
     [[nodiscard]] std::uint64_t particleSeedForTest() const noexcept;
     [[nodiscard]] double particleFractionForTest() const noexcept;
     void setParticlePointSizeForTest(int pointSize);

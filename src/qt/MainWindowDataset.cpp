@@ -604,11 +604,17 @@ QImage MainWindow::composeExportFrame(const ImageView* view, const ExportOptions
                                (state->displayLogarithmic ? tr(" (log)") : QString()),
                            state->displayMinimum, state->displayMaximum);
     // The particles' scale beside it while they are colored; they are drawn
-    // on the primary's panels only.
+    // on the primary's panels only. A movie keeps room for it whenever an
+    // attribute is chosen: its layout freezes on the first frame, which may
+    // have no usable values.
     std::optional<ColorBarWidget> particleBar;
+    const auto& coloring = m_particleController->settings().coloring;
     const auto particleRange = m_particleController->colorRange();
-    if (particleRange && state->layer == 0) {
-        const auto& coloring = m_particleController->settings().coloring;
+    const bool coloredMovie = frozenLayout != nullptr && !coloring.attribute.empty()
+        && primary().session && primary().session->supportsParticleAttributes();
+    if (state->layer == 0 && (particleRange || coloredMovie)) {
+        // Until a frame has values, a range to measure the labels by.
+        const auto range = particleRange.value_or(ParticleColorRange{1.0, 10.0});
         particleBar.emplace();
         particleBar->setPalette(&m_particleController->colorPalette());
         particleBar->setNumberFormat(options.colorBarNumberFormat.isEmpty()
@@ -616,14 +622,16 @@ QImage MainWindow::composeExportFrame(const ImageView* view, const ExportOptions
         particleBar->setLogarithmic(coloring.logarithmic);
         particleBar->setFieldRange(QString::fromStdString(coloring.attribute)
                 + (coloring.logarithmic ? tr(" (log)") : QString()),
-            particleRange->minimum, particleRange->maximum);
+            range.minimum, range.maximum);
     }
-    const ColorBarWidget* secondaryBar = particleBar ? &*particleBar : nullptr;
+    const ColorBarWidget* reservedBar = particleBar ? &*particleBar : nullptr;
+    // Painted only from a frame's own values.
+    const ColorBarWidget* secondaryBar = particleRange ? reservedBar : nullptr;
     ExportLayout localLayout;
     auto& layout = frozenLayout != nullptr ? *frozenLayout : localLayout;
     if (layout.dataRect.isEmpty()) {
         layout = makeExportLayout(view->composedImageSize(scaleFactor), panelOptions, axes,
-                                  &colorBar, frozenLayout != nullptr, secondaryBar);
+                                  &colorBar, frozenLayout != nullptr, reservedBar);
     } else if (!exportAspectMatches(view->displaySize(), layout)) {
         throw std::runtime_error(
             tr("The aspect ratio of panel %1 changed. "

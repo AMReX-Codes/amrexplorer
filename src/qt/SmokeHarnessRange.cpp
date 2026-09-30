@@ -704,6 +704,88 @@ Outcome dispatchRange(Context& context)
             window.openSequence({first, second});
         });
     } else if (argc == 4
+        && std::string_view(argv[1]) == "--particle-color-movie-smoke-test") {
+        // A movie freezes its layout on the first frame. That frame's masses
+        // are all NaN, so it has no particle range, yet the layout must keep
+        // room for the particle scale, which the next frame (masses 1 to 8)
+        // paints there.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        struct Progress {
+            int phase = 0;
+            int attempts = 0;
+            amrvis::qt::ExportLayout layout;
+        };
+        auto progress = std::make_shared<Progress>();
+        auto* poll = new QTimer(&window);
+        poll->setInterval(10);
+        const auto fail = [&application, poll](const char* message) {
+            poll->stop();
+            qCritical("%s", message);
+            application.exit(1);
+        };
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, poll, progress](int index) {
+                if (index == 0 && progress->phase == 0) {
+                    window.setParticleSelectionForTest({"Tracer"}, 1.0, 0);
+                    window.setParticleColorAttributeForTest("mass");
+                    progress->phase = 1;
+                    poll->start();
+                } else if (index == 1 && progress->phase == 2) {
+                    progress->phase = 3;
+                    poll->start();
+                }
+            });
+        QObject::connect(poll, &QTimer::timeout, &application,
+            [&window, &application, poll, progress, fail] {
+                if (++progress->attempts > 500) {
+                    fail("the particle movie frames never settled");
+                    return;
+                }
+                if (window.particleLoadingForTest()
+                    || window.particleSampleCountForTest() == 0) {
+                    return;
+                }
+                if (progress->phase == 1) {
+                    if (window.particleColorBarRangeForTest()) {
+                        fail("NaN masses produced a particle range");
+                        return;
+                    }
+                    static_cast<void>(window.panelMovieFrameForTest(2, progress->layout));
+                    if (progress->layout.secondaryColorBarRect.isEmpty()) {
+                        fail("the movie layout kept no room for the particle scale");
+                        return;
+                    }
+                    poll->stop();
+                    progress->phase = 2;
+                    window.stepSequence(1);
+                } else if (progress->phase == 3) {
+                    if (!window.particleColorBarRangeForTest()) {
+                        return;
+                    }
+                    const auto frame = window.panelMovieFrameForTest(2, progress->layout);
+                    const auto& rect = progress->layout.secondaryColorBarRect;
+                    int painted = 0;
+                    for (int y = rect.top(); y <= rect.bottom(); ++y) {
+                        for (int x = rect.left(); x <= rect.right(); ++x) {
+                            painted += frame.pixelColor(x, y).alpha() > 0 ? 1 : 0;
+                        }
+                    }
+                    if (painted <= rect.height()) {
+                        fail("the movie's later frame did not paint the particle scale");
+                        return;
+                    }
+                    poll->stop();
+                    window.close();
+                    application.exit(0);
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [fail] { fail("a sequence frame failed"); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
         && std::string_view(argv[1]) == "--particle-dialog-smoke-test") {
         // The particles dialog is modeless with an Apply button: settings are
         // meant to be tried against the image, so the dialog must not block the

@@ -651,13 +651,15 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
         overlay.shape = m_particleController->shapeFor(sample.species.name);
         overlay.size
             = static_cast<float>(m_particleController->settings().pointSize);
+        // Each drawn point's value, read only when this sample is colored.
+        const bool colored = colorRange && sample.attribute;
         std::vector<double> values;
         // Colored: one batch per palette slot, in the species' alpha and
         // shape. Values past the range take its end colors; one the scale
         // cannot place (not finite, or not positive on a log scale) keeps the
         // species color.
         const auto addBatches = [&] {
-            if (!colorRange || !sample.attribute) {
+            if (!colored) {
                 overlays.push_back(std::move(overlay));
                 return;
             }
@@ -706,7 +708,9 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
                         particle.position[xAxis], particle.position[yAxis],
                         particle.position[normalAxis], levelSlabs)) {
                     overlay.points.emplace_back(point->x(), point->y());
-                    values.push_back(particle.value);
+                    if (colored) {
+                        values.push_back(particle.value);
+                    }
                 }
             }
             addBatches();
@@ -715,9 +719,13 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
         const auto projected = projectParticlePoints(
             sample.points, *state.plane, dimension, state.normal, levelSlabs);
         overlay.points.reserve(projected.size());
-        values.reserve(projected.size());
+        if (colored) {
+            values.reserve(projected.size());
+        }
         for (const auto& point : projected) {
-            values.push_back(point.value);
+            if (colored) {
+                values.push_back(point.value);
+            }
             if (spherical) {
                 // projectParticlePoints returns r-theta scene coords (y flipped
                 // from height to 0). Recover the plane pixel and re-map through

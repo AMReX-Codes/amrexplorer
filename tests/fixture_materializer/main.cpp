@@ -298,9 +298,9 @@ void writeFab(const std::filesystem::path& path, BlockRecord& block,
 
 // Adds one small native AMReX particle species so the Qt slice and sequence
 // smoke tests exercise particle discovery, binary reads, and point overlays.
-// Its one real component, mass, is the particle's id times --scale, so
-// coloring by it spreads the particles over the scale, and frames of a
-// sequence can carry different mass ranges.
+// Its one real component, mass, is the particle's id times --mass-scale
+// (--scale when that is absent), so coloring by it spreads the particles over
+// the scale, and frames of a sequence can carry different mass ranges.
 void writeParticles(const std::filesystem::path& root, int dimension, double scale)
 {
     constexpr int particleCount = 8;

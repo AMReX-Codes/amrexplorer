@@ -805,8 +805,9 @@ chosen:
   range spans the values of the particles loaded.
 
 A particle color bar appears in the **Color Scale** dock, labeled with the
-component's name. Each particle keeps its species' alpha and shape. Coloring
-over a remote connection needs a server from the same release or later.
+component's name, and beside the field's color bar in image and animation
+exports. Each particle keeps its species' alpha and shape. Coloring over a
+remote connection needs a server from the same release or later.
 
 The same particles stay selected as you step through the frames of a sequence,
 and for a given seed a lower percentage thins the same set of particles rather

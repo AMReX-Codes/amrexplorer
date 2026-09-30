@@ -42,9 +42,12 @@ struct ExportLayout {
     QSize canvasSize;
     QRect dataRect;
     QRect colorBarRect;
+    // A second scale right of the first (the particles'), when one was given.
+    QRect secondaryColorBarRect;
     QFont font;
     std::array<QString, 2> axisFormats;
     std::optional<ColorBarWidget::NumberPresentation> colorBarPresentation;
+    std::optional<ColorBarWidget::NumberPresentation> secondaryColorBarPresentation;
     int labelWidth = 0;
     int verticalLabelWidth = 0;
     int dotsPerMeter = 0;
@@ -63,11 +66,13 @@ exportAxes(const RealBox& displayRegion, int dimension, int normal, int coordina
 [[nodiscard]] ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options,
                                             const std::array<ExportAxis, 2>& axes = {},
                                             const ColorBarWidget* colorBar = nullptr,
-                                            bool reserveLabelGrowth = true);
+                                            bool reserveLabelGrowth = true,
+                                            const ColorBarWidget* secondaryColorBar = nullptr);
 // rasterSize is the frame's on-screen footprint (raster times any display
 // stretch), which is what the frozen layout was measured from.
 [[nodiscard]] bool exportAspectMatches(QSizeF rasterSize, const ExportLayout& layout);
 [[nodiscard]] QImage composeExportImage(const QImage& raster, const std::array<ExportAxis, 2>& axes,
                                         const ExportOptions& options, const ExportLayout& layout,
-                                        const ColorBarWidget* colorBar);
+                                        const ColorBarWidget* colorBar,
+                                        const ColorBarWidget* secondaryColorBar = nullptr);
 } // namespace amrvis::qt

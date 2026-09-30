@@ -603,11 +603,27 @@ QImage MainWindow::composeExportFrame(const ImageView* view, const ExportOptions
     colorBar.setFieldRange(state->fieldName +
                                (state->displayLogarithmic ? tr(" (log)") : QString()),
                            state->displayMinimum, state->displayMaximum);
+    // The particles' scale beside it while they are colored; they are drawn
+    // on the primary's panels only.
+    std::optional<ColorBarWidget> particleBar;
+    const auto particleRange = m_particleController->colorRange();
+    if (particleRange && state->layer == 0) {
+        const auto& coloring = m_particleController->settings().coloring;
+        particleBar.emplace();
+        particleBar->setPalette(&m_particleController->colorPalette());
+        particleBar->setNumberFormat(options.colorBarNumberFormat.isEmpty()
+            ? options.numberFormat : options.colorBarNumberFormat);
+        particleBar->setLogarithmic(coloring.logarithmic);
+        particleBar->setFieldRange(QString::fromStdString(coloring.attribute)
+                + (coloring.logarithmic ? tr(" (log)") : QString()),
+            particleRange->minimum, particleRange->maximum);
+    }
+    const ColorBarWidget* secondaryBar = particleBar ? &*particleBar : nullptr;
     ExportLayout localLayout;
     auto& layout = frozenLayout != nullptr ? *frozenLayout : localLayout;
     if (layout.dataRect.isEmpty()) {
         layout = makeExportLayout(view->composedImageSize(scaleFactor), panelOptions, axes,
-                                  &colorBar, frozenLayout != nullptr);
+                                  &colorBar, frozenLayout != nullptr, secondaryBar);
     } else if (!exportAspectMatches(view->displaySize(), layout)) {
         throw std::runtime_error(
             tr("The aspect ratio of panel %1 changed. "
@@ -616,9 +632,12 @@ QImage MainWindow::composeExportFrame(const ImageView* view, const ExportOptions
                 .toStdString());
     }
     colorBar.setFont(layout.font);
+    if (particleBar) {
+        particleBar->setFont(layout.font);
+    }
     return composeExportImage(
         view->composedImage(layout.dataRect.size(), &layout.font, panelOptions.includeAxes),
-        axes, panelOptions, layout, &colorBar);
+        axes, panelOptions, layout, &colorBar, secondaryBar);
 }
 
 void MainWindow::exportAnimation()

@@ -574,6 +574,7 @@ Outcome dispatchRange(Context& context)
         struct Progress {
             int phase = 0;
             int attempts = 0;
+            int coloredExportWidth = 0;
         };
         auto progress = std::make_shared<Progress>();
         auto* poll = new QTimer(&window);
@@ -645,6 +646,8 @@ Outcome dispatchRange(Context& context)
                     if (!colored()) {
                         return;
                     }
+                    // Exports carry the particle scale beside the field's.
+                    progress->coloredExportWidth = window.panelExportImageForTest(2).width();
                     poll->stop();
                     progress->phase = 2;
                     window.stepSequence(1);
@@ -662,6 +665,11 @@ Outcome dispatchRange(Context& context)
                 case 4:
                     if (window.particleColorBarRangeForTest()
                         || window.particleOverlayColorCountForTest() != 1) {
+                        return;
+                    }
+                    if (window.panelExportImageForTest(2).width()
+                        >= progress->coloredExportWidth) {
+                        fail("the export did not carry the particle color bar");
                         return;
                     }
                     poll->stop();

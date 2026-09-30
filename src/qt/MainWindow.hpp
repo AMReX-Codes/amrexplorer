@@ -582,6 +582,8 @@ public:
     [[nodiscard]] QSize panelTileImageSizeForTest(int normal, int tile) const;
     [[nodiscard]] QRectF panelCanvasRectForTest(int normal) const;
     [[nodiscard]] QSize panelExportSizeForTest(int normal) const;
+    // A panel as Export Image composes it, color bars included.
+    [[nodiscard]] QImage panelExportImageForTest(int normal) const;
     void panStepActiveViewForTest(const QPointF& direction);
     // A panel's view transform scale (m11, m22) and whether it sits on a
     // virtual canvas, for panels other than the active one.

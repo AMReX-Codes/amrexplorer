@@ -791,6 +791,15 @@ QSize MainWindow::panelExportSizeForTest(int normal) const
     return view == nullptr ? QSize() : view->composedImageSize(1.0);
 }
 
+QImage MainWindow::panelExportImageForTest(int normal) const
+{
+    if (normal < 0 || normal > 2) {
+        return {};
+    }
+    return composeExportFrame(primary().planeViews[static_cast<std::size_t>(normal)].view,
+        exportOptions(true, false, false), 1.0);
+}
+
 std::pair<qreal, qreal> MainWindow::panelTransformScaleForTest(int normal) const
 {
     if (normal < 0 || normal > 2) {

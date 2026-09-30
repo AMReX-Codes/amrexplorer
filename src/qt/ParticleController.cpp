@@ -87,7 +87,7 @@ ParticleController::ParticleController(Hooks hooks, QObject* parent)
 
 QAction* ParticleController::createAction(QObject* parent)
 {
-    auto* action = new QAction(tr("Par&ticles..."), parent);
+    auto* action = new QAction(tr("&Particles..."), parent);
     action->setObjectName(QStringLiteral("particlesAction"));
     action->setEnabled(false);
     m_action = action;

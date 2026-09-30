@@ -653,7 +653,9 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
             = static_cast<float>(m_particleController->settings().pointSize);
         std::vector<double> values;
         // Colored: one batch per palette slot, in the species' alpha and
-        // shape; a value off the scale keeps the species color.
+        // shape. Values past the range take its end colors; one the scale
+        // cannot place (not finite, or not positive on a log scale) keeps the
+        // species color.
         const auto addBatches = [&] {
             if (!colorRange || !sample.attribute) {
                 overlays.push_back(std::move(overlay));
@@ -751,8 +753,9 @@ void MainWindow::updateParticleColorBar()
     const auto& coloring = m_particleController->settings().coloring;
     m_particleColorBar->setPalette(&m_particleController->colorPalette());
     m_particleColorBar->setLogarithmic(coloring.logarithmic);
-    m_particleColorBar->setFieldRange(
-        QString::fromStdString(coloring.attribute), range->minimum, range->maximum);
+    m_particleColorBar->setFieldRange(QString::fromStdString(coloring.attribute)
+            + (coloring.logarithmic ? tr(" (log)") : QString()),
+        range->minimum, range->maximum);
 }
 
 void MainWindow::showKeyboardMouseReference()

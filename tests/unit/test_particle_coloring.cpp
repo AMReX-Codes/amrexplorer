@@ -34,7 +34,6 @@ amrvis::ParticleSample sample(std::vector<double> values, bool withAttribute = t
 int main()
 {
     using amrvis::qt::ParticleColorRange;
-    using amrvis::qt::particleColorFraction;
     using amrvis::qt::particleValueRange;
     constexpr auto nan = std::numeric_limits<double>::quiet_NaN();
     constexpr auto infinity = std::numeric_limits<double>::infinity();
@@ -50,22 +49,26 @@ int main()
             && !particleValueRange(std::vector{sample({1.0}, false)}, false),
         "a range came from nothing placeable");
 
-    // Placement: linear and log, clamped, the middle of a flat range, none
-    // for what cannot be placed.
-    const ParticleColorRange linear{0.0, 10.0};
-    require(particleColorFraction(2.5, linear, false) == 0.25
-            && particleColorFraction(-5.0, linear, false) == 0.0
-            && particleColorFraction(50.0, linear, false) == 1.0,
-        "a linear value is misplaced");
-    const ParticleColorRange decades{1.0, 100.0};
-    require(particleColorFraction(10.0, decades, true) == 0.5,
-        "a log value is misplaced");
-    require(particleColorFraction(7.0, ParticleColorRange{7.0, 7.0}, false) == 0.5,
+    // Slots through the slices' mapping: truncated, the maximum in the last
+    // slot, the middle for a flat range, none for what cannot be placed. A
+    // range whose span overflows a double still maps.
+    constexpr int slots = 253;
+    const amrvis::qt::ParticleColorScale linear(ParticleColorRange{0.0, 10.0}, false, slots);
+    require(linear.slot(2.5) == 63 && linear.slot(-5.0) == 0 && linear.slot(10.0) == 252
+            && linear.slot(50.0) == 252,
+        "a linear value is in the wrong slot");
+    const amrvis::qt::ParticleColorScale decades(ParticleColorRange{1.0, 100.0}, true, slots);
+    require(decades.slot(10.0) == 126, "a log value is in the wrong slot");
+    require(amrvis::qt::ParticleColorScale(ParticleColorRange{7.0, 7.0}, false, slots).slot(7.0)
+            == 126,
         "a flat range does not place its value in the middle");
-    require(!particleColorFraction(nan, linear, false)
-            && !particleColorFraction(infinity, linear, false)
-            && !particleColorFraction(0.0, decades, true)
-            && !particleColorFraction(-1.0, decades, true),
+    const amrvis::qt::ParticleColorScale extreme(
+        ParticleColorRange{-1.0e308, 1.0e308}, false, slots);
+    require(extreme.slot(0.0) == 126 && extreme.slot(1.0e308) == 252
+            && extreme.slot(-1.0e308) == 0,
+        "a range spanning past the largest double is misplaced");
+    require(!linear.slot(nan) && !linear.slot(infinity) && !decades.slot(0.0)
+            && !decades.slot(-1.0),
         "an unplaceable value was placed");
 
     std::cout << "particle coloring tests passed\n";

@@ -658,15 +658,15 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
             }
             std::array<std::vector<QPointF>, Palette::colorSlots> bySlot;
             std::vector<QPointF> unplaced;
+            const ParticleColorScale scale(
+                *colorRange, coloring.logarithmic, Palette::colorSlots);
             for (std::size_t i = 0; i < overlay.points.size(); ++i) {
-                const auto fraction = particleColorFraction(
-                    values[i], *colorRange, coloring.logarithmic);
-                if (!fraction) {
+                const auto slot = scale.slot(values[i]);
+                if (!slot) {
                     unplaced.push_back(overlay.points[i]);
                     continue;
                 }
-                bySlot[static_cast<std::size_t>(
-                    *fraction * (Palette::colorSlots - 1))].push_back(overlay.points[i]);
+                bySlot[static_cast<std::size_t>(*slot)].push_back(overlay.points[i]);
             }
             for (std::size_t slot = 0; slot < bySlot.size(); ++slot) {
                 if (bySlot[slot].empty()) {

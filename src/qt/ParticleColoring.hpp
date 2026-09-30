@@ -1,5 +1,6 @@
 #pragma once
 
+#include <amrexplorer/core/ValueMapping.hpp>
 #include <amrexplorer/io/ParticleReader.hpp>
 
 #include <algorithm>
@@ -48,22 +49,39 @@ struct ParticleColorRange {
     return range;
 }
 
-// Where a value falls on the scale, clamped to [0, 1]; the middle for a flat
-// range; none for a value that cannot be placed, which is drawn in its
-// species' own color.
-[[nodiscard]] inline std::optional<double> particleColorFraction(
-    double value, const ParticleColorRange& range, bool logarithmic) noexcept
-{
-    if (!particleValuePlaceable(value, logarithmic)) {
+// The palette slot a value takes, through the mapping the slices use
+// (core/ValueMapping.hpp); a flat range puts every value in the middle.
+class ParticleColorScale {
+public:
+    ParticleColorScale(const ParticleColorRange& range, bool logarithmic,
+        int slotCount) noexcept
+        : m_resolved(resolveValueRange(range.minimum, range.maximum, logarithmic))
+        , m_flat(std::isfinite(range.minimum) && range.minimum == range.maximum)
+        , m_logarithmic(logarithmic)
+        , m_slotCount(slotCount)
+    {
+    }
+
+    // None for a value it cannot place, which keeps its species' color.
+    [[nodiscard]] std::optional<int> slot(double value) const noexcept
+    {
+        if (!particleValuePlaceable(value, m_logarithmic)) {
+            return std::nullopt;
+        }
+        if (m_resolved) {
+            return valueSlot(value, *m_resolved, m_slotCount);
+        }
+        if (m_flat) {
+            return (m_slotCount - 1) / 2;
+        }
         return std::nullopt;
     }
-    const auto map = [logarithmic](double v) { return logarithmic ? std::log10(v) : v; };
-    const auto lower = map(range.minimum);
-    const auto upper = map(range.maximum);
-    if (!(upper > lower)) {
-        return 0.5;
-    }
-    return std::clamp((map(value) - lower) / (upper - lower), 0.0, 1.0);
-}
+
+private:
+    std::optional<ResolvedValueRange> m_resolved;
+    bool m_flat = false;
+    bool m_logarithmic = false;
+    int m_slotCount = 1;
+};
 
 } // namespace amrvis::qt

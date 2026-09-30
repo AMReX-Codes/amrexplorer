@@ -901,6 +901,45 @@ int main(int argc, char** argv)
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     }
 
+    // Back on species colors the fixed range is not in use, so a bad one left
+    // behind -- its controls now disabled -- must not block Apply.
+    {
+        current = session;
+        ParticleController controller(hooks());
+        controller.configureForDataset(false);
+        controller.restoreSelection({"ions"}, 1.0, 0, true);
+        QWidget host;
+        controller.showDialog(&host);
+        auto* dialog = host.findChild<QDialog*>(QStringLiteral("particlesDialog"));
+        require(dialog != nullptr, "the dialog was not shown");
+        auto* colorBy = dialog->findChild<QComboBox*>(QStringLiteral("particleColorBy"));
+        colorBy->setCurrentIndex(colorBy->findData(QStringLiteral("mass")));
+        dialog->findChild<QCheckBox*>(QStringLiteral("particleColorFixedRange"))
+            ->setChecked(true);
+        dialog->findChild<QDoubleSpinBox*>(QStringLiteral("particleColorMinimum"))
+            ->setValue(5.0);
+        dialog->findChild<QDoubleSpinBox*>(QStringLiteral("particleColorMaximum"))
+            ->setValue(1.0);
+        colorBy->setCurrentIndex(0);
+        // A warning would be modal; close it, and remember it came.
+        bool warned = false;
+        QTimer::singleShot(0, [&warned] {
+            if (auto* modal = QApplication::activeModalWidget()) {
+                warned = true;
+                modal->close();
+            }
+        });
+        dialog->findChild<QDialogButtonBox*>(QStringLiteral("particlesDialogButtons"))
+            ->button(QDialogButtonBox::Apply)->click();
+        QCoreApplication::processEvents();
+        require(!warned, "an unused fixed range blocked Apply");
+        require(controller.settings().coloring.attribute.empty(),
+            "Apply did not return to species colors");
+        controller.closeDialog();
+        QCoreApplication::processEvents();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+
     std::cout << "particle controller tests passed\n";
     return 0;
 }

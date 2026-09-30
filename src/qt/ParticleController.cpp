@@ -642,7 +642,9 @@ void ParticleController::showDialog(QWidget* parent)
             newColoring.attribute = colorBy->currentData().toString().toStdString();
             newColoring.palette = colormap->currentIndex();
             newColoring.logarithmic = logarithmic->isChecked();
-            if (fixedRange->isChecked()) {
+            // Only a range in use is checked: on species colors its controls
+            // are disabled and could not be corrected.
+            if (!newColoring.attribute.empty() && fixedRange->isChecked()) {
                 newColoring.range = ParticleColorRange{
                     rangeMinimum->value(), rangeMaximum->value()};
                 if (!(newColoring.range->maximum > newColoring.range->minimum)

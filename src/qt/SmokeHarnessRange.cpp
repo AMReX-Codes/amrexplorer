@@ -708,7 +708,8 @@ Outcome dispatchRange(Context& context)
         // A movie freezes its layout on the first frame. That frame's masses
         // are all NaN, so it has no particle range, yet the layout must keep
         // room for the particle scale, which the next frame (masses 1 to 8)
-        // paints there.
+        // paints there -- but only when some selected species has the
+        // attribute.
         const std::filesystem::path first(argv[2]);
         const std::filesystem::path second(argv[3]);
         struct Progress {
@@ -725,9 +726,26 @@ Outcome dispatchRange(Context& context)
             application.exit(1);
         };
         QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
-            &application, [&window, poll, progress](int index) {
+            &application, [&window, poll, progress, fail](int index) {
                 if (index == 0 && progress->phase == 0) {
+                    // No room is kept for a scale nothing could paint: with no
+                    // species selected, or none that has the attribute.
+                    const auto keepsRoom = [&window] {
+                        amrvis::qt::ExportLayout fresh;
+                        static_cast<void>(window.panelMovieFrameForTest(2, fresh));
+                        return !fresh.secondaryColorBarRect.isEmpty();
+                    };
+                    window.setParticleColorAttributeForTest("mass");
+                    if (keepsRoom()) {
+                        fail("a movie kept room for particles with no species selected");
+                        return;
+                    }
                     window.setParticleSelectionForTest({"Tracer"}, 1.0, 0);
+                    window.setParticleColorAttributeForTest("density");
+                    if (keepsRoom()) {
+                        fail("a movie kept room for an attribute no species has");
+                        return;
+                    }
                     window.setParticleColorAttributeForTest("mass");
                     progress->phase = 1;
                     poll->start();

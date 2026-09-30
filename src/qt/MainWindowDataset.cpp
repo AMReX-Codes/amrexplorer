@@ -604,14 +604,26 @@ QImage MainWindow::composeExportFrame(const ImageView* view, const ExportOptions
                                (state->displayLogarithmic ? tr(" (log)") : QString()),
                            state->displayMinimum, state->displayMaximum);
     // The particles' scale beside it while they are colored; they are drawn
-    // on the primary's panels only. A movie keeps room for it whenever an
-    // attribute is chosen: its layout freezes on the first frame, which may
-    // have no usable values.
+    // on the primary's panels only. A movie keeps room for it whenever a
+    // selected species has the chosen attribute: its layout freezes on the
+    // first frame, which may have no usable values.
     std::optional<ColorBarWidget> particleBar;
     const auto& coloring = m_particleController->settings().coloring;
     const auto particleRange = m_particleController->colorRange();
+    const auto& selectedSpecies = m_particleController->settings().species;
+    const auto someSpeciesHasIt = [&] {
+        for (const auto& species : primary().session->particleSpecies()) {
+            if (std::find(selectedSpecies.begin(), selectedSpecies.end(), species.name)
+                    != selectedSpecies.end()
+                && findParticleAttribute(species, coloring.attribute)) {
+                return true;
+            }
+        }
+        return false;
+    };
     const bool coloredMovie = frozenLayout != nullptr && !coloring.attribute.empty()
-        && primary().session && primary().session->supportsParticleAttributes();
+        && primary().session && primary().session->supportsParticleAttributes()
+        && someSpeciesHasIt();
     if (state->layer == 0 && (particleRange || coloredMovie)) {
         // Until a frame has values, a range to measure the labels by.
         const auto range = particleRange.value_or(ParticleColorRange{1.0, 10.0});

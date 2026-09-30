@@ -644,6 +644,11 @@ QImage MainWindow::composeExportFrame(const ImageView* view, const ExportOptions
     if (layout.dataRect.isEmpty()) {
         layout = makeExportLayout(view->composedImageSize(scaleFactor), panelOptions, axes,
                                   &colorBar, frozenLayout != nullptr, reservedBar);
+        // Room measured with the stand-in range, but no labels from it: each
+        // later frame labels its bar from its own values.
+        if (!particleRange) {
+            layout.secondaryColorBarPresentation.reset();
+        }
     } else if (!exportAspectMatches(view->displaySize(), layout)) {
         throw std::runtime_error(
             tr("The aspect ratio of panel %1 changed. "

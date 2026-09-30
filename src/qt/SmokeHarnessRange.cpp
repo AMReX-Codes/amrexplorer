@@ -774,6 +774,12 @@ Outcome dispatchRange(Context& context)
                         fail("the movie layout kept no room for the particle scale");
                         return;
                     }
+                    // Its labels must come from real values, not the stand-in
+                    // range the room was measured with.
+                    if (progress->layout.secondaryColorBarPresentation) {
+                        fail("the movie froze particle labels from a stand-in range");
+                        return;
+                    }
                     poll->stop();
                     progress->phase = 2;
                     window.stepSequence(1);

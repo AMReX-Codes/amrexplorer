@@ -14,7 +14,7 @@
 #                 export-quit |
 #                 contour-sync | raster-zoom | rubber-zoom-sync |
 #                 particle-visible-range | particle-dialog | particle-color |
-#                 particle-color-movie |
+#                 particle-color-movie | particle-bar-format |
 #                 particle-settings-reset | particle-slice-cells |
 #                 rubber-zoom-local | rubber-overzoom | pan-zoom |
 #                 range-cache | fab-zoom | cache-budget |
@@ -398,6 +398,10 @@ elseif(MODE STREQUAL "particle-color")
         --scale 10)
     run_or_die("${AMREXPLORER_QT}" --particle-color-smoke-test
         "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "particle-bar-format")
+    # Two processes on the one config directory cleared above.
+    run_or_die("${AMREXPLORER_QT}" --particle-bar-format-smoke-test save)
+    run_or_die("${AMREXPLORER_QT}" --particle-bar-format-smoke-test load)
 elseif(MODE STREQUAL "particle-color-movie")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000" --mass-scale nan)
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")

@@ -35,6 +35,8 @@ public:
     void setNumberFormat(QString format);
     void setLogarithmic(bool logarithmic);
     void clearRange();
+    // The authored number format, before resolving against the range.
+    [[nodiscard]] const QString& numberFormat() const noexcept { return m_numberFormat; }
     // The range on show, if any.
     [[nodiscard]] std::optional<std::pair<double, double>> fieldRange() const
     {

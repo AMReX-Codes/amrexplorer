@@ -2029,6 +2029,18 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_particle_color_movie_smoke_3d PROPERTIES TIMEOUT 30)
+    # A saved number format reaches the particle color bar at startup.
+    add_test(
+        NAME qt_particle_bar_format_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_particle_bar_format"
+            -DMODE=particle-bar-format
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_particle_bar_format_smoke PROPERTIES TIMEOUT 30)
     # A plain open and a sequence open are both dataset changes, so both reset
     # every particle setting rather than carrying the previous dataset's
     # species, subset, seed, point size, and colors into the new one.

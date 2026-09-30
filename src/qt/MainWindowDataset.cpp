@@ -179,6 +179,7 @@ void MainWindow::restoreSettings()
             : defaultNumberFormat();
         primary().range->setNumberFormat(m_numberFormat);
         primary().colorBar->setNumberFormat(m_numberFormat);
+        m_particleColorBar->setNumberFormat(m_numberFormat);
     }
     m_animationPanel->setSpeedValue(
         settings.value(QStringLiteral("animation/speed"), 300).toInt());

@@ -1548,6 +1548,11 @@ bool MainWindow::particleOverlaysUseShapeForTest(MarkerShape shape)
     return found;
 }
 
+QString MainWindow::particleColorBarNumberFormatForTest() const
+{
+    return m_particleColorBar->numberFormat();
+}
+
 std::optional<std::pair<double, double>> MainWindow::particleColorBarRangeForTest() const
 {
     // The widget's own, so a bar left stale by a redraw path shows here.

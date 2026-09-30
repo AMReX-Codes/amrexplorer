@@ -562,6 +562,23 @@ Outcome dispatchRange(Context& context)
         QTimer::singleShot(0, &window, [&window, path] {
             window.openDataset(path);
         });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--particle-bar-format-smoke-test") {
+        // "save" stores a number format; "load", a second process on the same
+        // settings, must start the particle color bar in it, as the field's.
+        const auto format = QStringLiteral("%.3e");
+        if (std::string_view(argv[2]) == "save") {
+            auto settings = amrvis::qt::makeSettings();
+            settings.setValue(QStringLiteral("numberFormat"), format);
+            settings.sync();
+            return {true, 0};
+        }
+        if (window.particleColorBarNumberFormatForTest() != format) {
+            qCritical("the particle color bar started in '%s'",
+                qPrintable(window.particleColorBarNumberFormatForTest()));
+            return {true, 1};
+        }
+        return {true, 0};
     } else if (argc == 4
         && std::string_view(argv[1]) == "--particle-color-smoke-test") {
         // Color by an attribute through the dialog: the fixture's mass is the

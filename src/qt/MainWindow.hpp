@@ -629,6 +629,7 @@ public:
     [[nodiscard]] bool particleOverlaysUseColorForTest(
         const QColor& color);
     [[nodiscard]] bool particleOverlaysUseShapeForTest(MarkerShape shape);
+    [[nodiscard]] QString particleColorBarNumberFormatForTest() const;
     // The particle color bar's range while it is shown.
     [[nodiscard]] std::optional<std::pair<double, double>>
     particleColorBarRangeForTest() const;

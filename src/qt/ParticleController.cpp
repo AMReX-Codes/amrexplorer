@@ -539,7 +539,13 @@ void ParticleController::showDialog(QWidget* parent)
     for (const auto& name : attributeNames()) {
         colorBy->addItem(QString::fromStdString(name), QString::fromStdString(name));
     }
-    const auto storedAttribute = colorBy->findData(QString::fromStdString(coloring.attribute));
+    // One this frame lacks stays listed, so an Apply for something else
+    // keeps it for the frames that have it.
+    const auto stored = QString::fromStdString(coloring.attribute);
+    if (!stored.isEmpty() && colorBy->findData(stored) < 0) {
+        colorBy->addItem(tr("%1 (not in this frame)").arg(stored), stored);
+    }
+    const auto storedAttribute = colorBy->findData(stored);
     colorBy->setCurrentIndex(std::max(storedAttribute, 0));
     if (!dataset->supportsParticleAttributes()) {
         colorBy->setToolTip(tr("The server's protocol predates particle attributes."));

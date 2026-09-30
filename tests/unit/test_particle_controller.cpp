@@ -940,6 +940,30 @@ int main(int argc, char** argv)
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     }
 
+    // An attribute this frame's species lack stays chosen: another frame of
+    // the sequence may have it, and an Apply for something else must not
+    // drop the coloring from every frame.
+    {
+        current = session;
+        ParticleController controller(hooks());
+        controller.configureForDataset(false);
+        controller.restoreSelection({"ions"}, 1.0, 0, true, "density");
+        QWidget host;
+        controller.showDialog(&host);
+        auto* dialog = host.findChild<QDialog*>(QStringLiteral("particlesDialog"));
+        require(dialog != nullptr, "the dialog was not shown");
+        auto* colorBy = dialog->findChild<QComboBox*>(QStringLiteral("particleColorBy"));
+        require(colorBy->currentData().toString() == QStringLiteral("density"),
+            "the dialog does not show an attribute this frame lacks");
+        dialog->findChild<QDialogButtonBox*>(QStringLiteral("particlesDialogButtons"))
+            ->button(QDialogButtonBox::Apply)->click();
+        require(controller.settings().coloring.attribute == "density",
+            "Apply dropped an attribute this frame lacks");
+        controller.closeDialog();
+        QCoreApplication::processEvents();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+
     std::cout << "particle controller tests passed\n";
     return 0;
 }

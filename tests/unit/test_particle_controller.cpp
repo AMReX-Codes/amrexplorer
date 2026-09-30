@@ -9,6 +9,7 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSpinBox>
@@ -859,6 +860,42 @@ int main(int argc, char** argv)
                 && applied.logarithmic && !applied.range,
             "Apply did not store the coloring");
         require(observed.selection == 1, "the new attribute did not reload");
+        controller.closeDialog();
+        QCoreApplication::processEvents();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+
+    // A fixed range keeps a bound's full precision: a mass in kilograms sits
+    // near 1e-30.
+    {
+        current = session;
+        ParticleController controller(hooks());
+        controller.configureForDataset(false);
+        controller.restoreSelection({"ions"}, 1.0, 0, true);
+        QWidget host;
+        controller.showDialog(&host);
+        auto* dialog = host.findChild<QDialog*>(QStringLiteral("particlesDialog"));
+        require(dialog != nullptr, "the dialog was not shown");
+        auto* colorBy = dialog->findChild<QComboBox*>(QStringLiteral("particleColorBy"));
+        auto* fixed = dialog->findChild<QCheckBox*>(
+            QStringLiteral("particleColorFixedRange"));
+        auto* minimum = dialog->findChild<QDoubleSpinBox*>(
+            QStringLiteral("particleColorMinimum"));
+        auto* maximum = dialog->findChild<QDoubleSpinBox*>(
+            QStringLiteral("particleColorMaximum"));
+        require(colorBy != nullptr && fixed != nullptr && minimum != nullptr
+                && maximum != nullptr,
+            "the dialog has no fixed-range controls");
+        colorBy->setCurrentIndex(colorBy->findData(QStringLiteral("mass")));
+        fixed->setChecked(true);
+        minimum->setValue(1.0e-30);
+        maximum->setValue(2.0e-30);
+        require(minimum->value() == 1.0e-30 && maximum->value() == 2.0e-30,
+            "a small fixed-range bound was rounded");
+        dialog->findChild<QDialogButtonBox*>(QStringLiteral("particlesDialogButtons"))
+            ->button(QDialogButtonBox::Apply)->click();
+        require(controller.settings().coloring.range == ParticleColorRange{1.0e-30, 2.0e-30},
+            "a small fixed range was not stored");
         controller.closeDialog();
         QCoreApplication::processEvents();
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);

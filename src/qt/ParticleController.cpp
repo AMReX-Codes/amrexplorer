@@ -565,7 +565,6 @@ void ParticleController::showDialog(QWidget* parent)
     for (auto* bound : {rangeMinimum, rangeMaximum}) {
         bound->setRange(-std::numeric_limits<double>::max(),
             std::numeric_limits<double>::max());
-        bound->setDecimals(std::numeric_limits<double>::max_digits10);
     }
     rangeMinimum->setValue(shownRange ? shownRange->minimum : 0.0);
     rangeMaximum->setValue(shownRange ? shownRange->maximum : 1.0);

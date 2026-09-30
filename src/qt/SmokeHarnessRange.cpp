@@ -566,9 +566,10 @@ Outcome dispatchRange(Context& context)
         && std::string_view(argv[1]) == "--particle-color-smoke-test") {
         // Color by an attribute through the dialog: the fixture's mass is the
         // particle id, 1 to 8, so each of the 8 particles lands on its own
-        // slot and the bar spans 1 to 8. The next sequence frame loads its
-        // particles from the frame spec, which must carry the attribute; back
-        // to species colors, the bar goes away.
+        // slot and the bar spans 1 to 8. The next sequence frame, masses 10
+        // to 80, loads its particles from the frame spec, which must carry
+        // the attribute, and the bar must follow; back to species colors, the
+        // bar goes away.
         const std::filesystem::path first(argv[2]);
         const std::filesystem::path second(argv[3]);
         struct Progress {
@@ -612,9 +613,9 @@ Outcome dispatchRange(Context& context)
             buttons->button(QDialogButtonBox::Ok)->click();
             return true;
         };
-        const auto colored = [&window] {
+        const auto colored = [&window](double lightest) {
             return window.particleColorBarRangeForTest()
-                    == std::optional<std::pair<double, double>>{{1.0, 8.0}}
+                    == std::optional<std::pair<double, double>>{{lightest, 8.0 * lightest}}
                 && window.particleOverlayColorCountForTest() == 8;
         };
         QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
@@ -643,7 +644,7 @@ Outcome dispatchRange(Context& context)
                 }
                 switch (progress->phase) {
                 case 1:
-                    if (!colored()) {
+                    if (!colored(1.0)) {
                         return;
                     }
                     // Exports carry the particle scale beside the field's.
@@ -653,7 +654,7 @@ Outcome dispatchRange(Context& context)
                     window.stepSequence(1);
                     break;
                 case 3:
-                    if (!colored()) {
+                    if (!colored(10.0)) {
                         return;
                     }
                     if (!applyColorBy(QString())) {

@@ -298,9 +298,10 @@ void writeFab(const std::filesystem::path& path, BlockRecord& block,
 
 // Adds one small native AMReX particle species so the Qt slice and sequence
 // smoke tests exercise particle discovery, binary reads, and point overlays.
-// Its one real component, mass, is the particle's id, so coloring by it
-// spreads the particles over the scale.
-void writeParticles(const std::filesystem::path& root, int dimension)
+// Its one real component, mass, is the particle's id times --scale, so
+// coloring by it spreads the particles over the scale, and frames of a
+// sequence can carry different mass ranges.
+void writeParticles(const std::filesystem::path& root, int dimension, double scale)
 {
     constexpr int particleCount = 8;
     const auto species = root / "Tracer";
@@ -336,7 +337,7 @@ void writeParticles(const std::filesystem::path& root, int dimension)
         data.write(reinterpret_cast<const char*>(positions),
             static_cast<std::streamsize>(
                 static_cast<std::size_t>(dimension) * sizeof(double)));
-        const auto mass = static_cast<double>(id);
+        const auto mass = static_cast<double>(id) * scale;
         data.write(reinterpret_cast<const char*>(&mass), sizeof(mass));
     }
     require(static_cast<bool>(data),
@@ -377,8 +378,8 @@ int main(int argc, char* argv[])
     std::optional<std::string> newTime;
     bool omitStatistics = false;
     bool nonFiniteValues = false;
-    // Multiplies the synthesized field values so successive frames of a
-    // sequence can carry different ranges (used by the range-cache test).
+    // Multiplies the synthesized field values, and the particles' mass, so
+    // successive frames of a sequence can carry different ranges.
     double scale = 1.0;
     std::optional<double> domainUpperX;
     // Takes a field out of the Header's list, leaving the stored components
@@ -519,6 +520,6 @@ int main(int argc, char* argv[])
             }
         }
     }
-    writeParticles(destination, header.dimension);
+    writeParticles(destination, header.dimension, scale);
     return 0;
 }

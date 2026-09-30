@@ -393,7 +393,8 @@ elseif(MODE STREQUAL "particle-dialog")
         "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "particle-color")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
-    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5"
+        --scale 10)
     run_or_die("${AMREXPLORER_QT}" --particle-color-smoke-test
         "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "particle-slice-cells")

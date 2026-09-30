@@ -593,6 +593,9 @@ void MainWindow::updateOverlays()
 
 void MainWindow::updateParticleOverlay(PlaneViewState& state)
 {
+    // In every view's redraw, not only updateParticleOverlays: a frame's
+    // samples are drawn view by view, and the bar must follow them.
+    updateParticleColorBar();
     std::vector<PointOverlay> overlays;
     // Particles are the primary's; a companion's tile carries none.
     if (!primary().session || state.layer != 0 || !state.view->hasImage()
@@ -734,6 +737,11 @@ void MainWindow::updateParticleOverlays()
     for (auto* state : currentViews()) {
         updateParticleOverlay(*state);
     }
+    updateParticleColorBar();
+}
+
+void MainWindow::updateParticleColorBar()
+{
     const auto range = m_particleController->colorRange();
     m_particleColorBar->setVisible(range.has_value());
     if (!range) {

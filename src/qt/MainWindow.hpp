@@ -1243,6 +1243,8 @@ private:
     // the plane mapping are the host's, the settings and samples are its.
     void updateParticleOverlay(PlaneViewState& state);
     void updateParticleOverlays();
+    // The particle color bar, from the loaded samples.
+    void updateParticleColorBar();
     void applyContourSettings(DisplayMode mode, int count, int uField, int vField,
         int wField, int contourColor);
     void showNumberFormatDialog();

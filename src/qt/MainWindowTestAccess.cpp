@@ -1532,11 +1532,11 @@ bool MainWindow::particleOverlaysUseShapeForTest(MarkerShape shape)
 
 std::optional<std::pair<double, double>> MainWindow::particleColorBarRangeForTest() const
 {
-    const auto range = m_particleController->colorRange();
-    if (!m_particleColorBar->isVisibleTo(this) || !range) {
+    // The widget's own, so a bar left stale by a redraw path shows here.
+    if (!m_particleColorBar->isVisibleTo(this)) {
         return std::nullopt;
     }
-    return std::pair{range->minimum, range->maximum};
+    return m_particleColorBar->fieldRange();
 }
 
 std::size_t MainWindow::particleOverlayColorCountForTest()

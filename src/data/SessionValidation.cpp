@@ -286,17 +286,28 @@ void validateSessionRangeRequest(
 
 void validateSessionParticleRequest(const DatasetMetadata& metadata,
     const std::vector<ParticleSpeciesMetadata>& species,
-    const std::string& name, double fraction)
+    const std::string& name, double fraction,
+    const std::optional<ParticleAttribute>& attribute)
 {
     static_cast<void>(metadata);
-    if (name.empty()
-        || std::none_of(species.begin(), species.end(),
-            [&](const auto& entry) { return entry.name == name; })) {
+    const auto known = name.empty() ? species.end()
+        : std::find_if(species.begin(), species.end(),
+            [&](const auto& entry) { return entry.name == name; });
+    if (known == species.end()) {
         throw std::invalid_argument("particle species is unavailable");
     }
     if (!std::isfinite(fraction) || !(fraction > 0.0) || fraction > 1.0) {
         throw std::invalid_argument(
             "particle sample fraction must be in (0, 1]");
+    }
+    if (attribute) {
+        const auto count = attribute->kind == ParticleAttribute::Kind::Int
+            ? known->intComponentCount
+            : known->realComponentCount;
+        if (attribute->index < 0 || attribute->index >= count) {
+            throw std::invalid_argument(
+                "particle attribute is not one of the species' components");
+        }
     }
 }
 

@@ -113,7 +113,8 @@ implementations, interchangeable to everything above them:
 The GUI opens one or the other and is otherwise agnostic to where the data lives.
 Capabilities a session may lack are asked for before they are offered
 (`supportsVolumeRendering`, `supportsVolumeOrientation`,
-`supportsDerivedFields`, `supportsMappedGrid`); a
+`supportsDerivedFields`, `supportsMappedGrid`, and
+`supportsParticleAttributes`, which a remote session answers from protocol 1.9); a
 mapped-grid plotfile's node positions come through `requestMappedGridPlane`,
 computed by the local session and, over protocol 1.7, fetched whole from the
 server by the remote one. The warp itself always runs on the client.

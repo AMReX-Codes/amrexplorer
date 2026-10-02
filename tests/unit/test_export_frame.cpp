@@ -412,6 +412,44 @@ int main(int argc, char** argv) {
     options.transparentBackground = true;
     require(composeExportImage(raster, xy, options, plain, nullptr) == raster,
             "transparent unannotated export changed the raster");
+    // A second scale (the particles') goes right of the first, widens the
+    // canvas by its own width, and is painted there, clear of the data.
+    {
+        ExportOptions barOptions;
+        barOptions.font = QFont(QStringLiteral("Sans Serif"));
+        barOptions.transparentBackground = true;
+        ColorBarWidget field;
+        field.setFieldRange("density", 0.0, 1.0);
+        ColorBarWidget particles;
+        particles.setFieldRange("mass", 1.0, 8.0);
+        const auto single = makeExportLayout(raster.size(), barOptions, xy, &field, false);
+        const auto both = makeExportLayout(raster.size(), barOptions, xy, &field, false,
+                                           &particles);
+        require(single.secondaryColorBarRect.isEmpty()
+                    && both.secondaryColorBarRect.left() > both.colorBarRect.right()
+                    && both.secondaryColorBarRect.height() == both.colorBarRect.height()
+                    && both.canvasSize.width() > single.canvasSize.width()
+                    && both.canvasSize.width() == both.secondaryColorBarRect.right() + 1,
+                "the second color bar is not laid out right of the first");
+        field.setFont(both.font);
+        particles.setFont(both.font);
+        const auto frame = composeExportImage(raster, xy, barOptions, both, &field, &particles);
+        require(frame.copy(both.dataRect) == raster, "the second color bar painted over data");
+        int painted = 0;
+        for (int y = both.secondaryColorBarRect.top(); y <= both.secondaryColorBarRect.bottom();
+             ++y) {
+            for (int x = both.secondaryColorBarRect.left();
+                 x <= both.secondaryColorBarRect.right(); ++x) {
+                painted += frame.pixelColor(x, y).alpha() > 0 ? 1 : 0;
+            }
+        }
+        require(painted > both.secondaryColorBarRect.height(),
+                "the second color bar was not painted");
+        // A frozen layout without room for it leaves the frame as it was.
+        require(composeExportImage(raster, xy, barOptions, single, &field, &particles)
+                    == composeExportImage(raster, xy, barOptions, single, &field),
+                "a second color bar painted where the layout kept no room");
+    }
     if (argc == 2) {
         const auto preview = composeExportImage(raster, xy, compactOptions, compact, &compactBar);
         require(preview.save(QString::fromLocal8Bit(argv[1])), "could not save preview");

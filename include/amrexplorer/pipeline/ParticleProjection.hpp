@@ -12,6 +12,8 @@ namespace amrvis {
 struct ParticlePixel {
     double x = 0.0;
     double y = 0.0;
+    // The particle's attribute value, carried through the projection.
+    double value = 0.0;
 };
 
 // The half-open physical span the slice plane's cell occupies on the plane

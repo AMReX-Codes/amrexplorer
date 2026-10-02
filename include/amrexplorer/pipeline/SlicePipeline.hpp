@@ -205,6 +205,8 @@ struct FrameSliceSpec {
     std::vector<std::string> particleSpecies;
     double particleFraction = 1.0;
     std::uint64_t particleSeed = 0;
+    // The component the particles are colored by; empty for solid colors.
+    std::string particleAttribute;
     // Fields to compute rather than read (core/DerivedField.hpp), installed by
     // the session executeFrameLoad opens. A definition this frame cannot
     // resolve is left out of it rather than failing the load, and the session
@@ -394,11 +396,15 @@ void rewarpDisplayImage(SliceDisplayResult& result);
 
 // Loads the selected particle species in dataset discovery order. Unknown
 // names are ignored, matching the behavior needed when a plotfile sequence
-// frame does not contain every species selected on another frame.
+// frame does not contain every species selected on another frame. With an
+// attribute name, each species that has a component of that name reads it;
+// the others, and every species of a session that cannot read attributes,
+// are sampled without one.
 [[nodiscard]] std::vector<ParticleSample> loadParticleSamples(
     DatasetSession& dataset,
     std::span<const std::string> selectedSpecies, double fraction,
-    std::uint64_t seed, StopToken cancellation = {});
+    std::uint64_t seed, StopToken cancellation = {},
+    const std::string& attributeName = {});
 
 // Opens one plotfile on a worker thread and renders the slice(s) described
 // by spec — one per ortho view for 3-D, the single y-normal view for 2-D.

@@ -488,12 +488,22 @@ public:
         return codec::fromWire(*payload);
     }
 
+    // A 1.8 server has no attribute to send.
+    [[nodiscard]] bool supportsParticleAttributes() const noexcept
+    {
+        return m_selectedMinorVersion >= particleAttributeMinorVersion;
+    }
+
     ParticleSample requestParticleSample(DatasetId dataset,
         const std::string& species, double fraction, std::uint64_t seed,
-        StopToken cancellation)
+        StopToken cancellation, std::optional<ParticleAttribute> attribute)
     {
+        if (attribute && !supportsParticleAttributes()) {
+            throw std::logic_error(
+                "particle attributes require protocol 1.9");
+        }
         const auto response = transact(
-            codec::toWire(dataset, species, fraction, seed),
+            codec::toWire(dataset, species, fraction, seed, attribute),
             PayloadKind::ParticleSampleResponse, cancellation,
             ResponseWait::Indefinite);
         const auto* payload = response->payload.AsParticleSampleResponse();
@@ -958,10 +968,15 @@ std::optional<ValueRange> Connection::requestRange(DatasetId dataset,
 
 ParticleSample Connection::requestParticleSample(DatasetId dataset,
     const std::string& species, double fraction, std::uint64_t seed,
-    StopToken cancellation)
+    StopToken cancellation, std::optional<ParticleAttribute> attribute)
 {
     return m_impl->requestParticleSample(
-        dataset, species, fraction, seed, cancellation);
+        dataset, species, fraction, seed, cancellation, attribute);
+}
+
+bool Connection::supportsParticleAttributes() const noexcept
+{
+    return m_impl->supportsParticleAttributes();
 }
 
 CacheMetrics Connection::clearCache(

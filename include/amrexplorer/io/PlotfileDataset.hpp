@@ -65,7 +65,8 @@ public:
     [[nodiscard]] ParticleSample requestParticleSample(
         const std::string& species, double fraction, std::uint64_t seed = 0,
         StopToken cancellation = {},
-        std::size_t maximumPoints = std::numeric_limits<std::size_t>::max()) const;
+        std::size_t maximumPoints = std::numeric_limits<std::size_t>::max(),
+        std::optional<ParticleAttribute> attribute = std::nullopt) const;
     [[nodiscard]] const std::filesystem::path& dataRoot() const noexcept;
 
     // Whether this field is computed from others rather than read.

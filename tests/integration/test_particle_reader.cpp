@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -158,6 +159,18 @@ int main(int argc, char* argv[])
         require(all.points[2].position[0] == 3.0
                 && all.points[2].position[1] == 6.0,
             "particle position was decoded incorrectly");
+        // mass is 0.25 id, so each particle's value is its own.
+        const auto masses = amrvis::readParticleSample(root, "Tracer", 1.0, 0,
+            {}, std::numeric_limits<std::size_t>::max(),
+            amrvis::ParticleAttribute{amrvis::ParticleAttribute::Kind::Real, 0});
+        require(species.front().realComponentNames
+                == std::vector<std::string>{"mass"},
+            "the real component name was not kept");
+        require(masses.points.size() == ids.size(), "the mass sample omitted particles");
+        for (const auto& point : masses.points) {
+            require(point.value == 0.25 * point.position[0],
+                "a particle's mass was not its own");
+        }
         bool sampleLimitRejected = false;
         try {
             static_cast<void>(amrvis::readParticleSample(

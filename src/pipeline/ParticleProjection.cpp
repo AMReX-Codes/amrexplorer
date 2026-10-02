@@ -143,7 +143,8 @@ projectParticlePoints(std::span<const ParticlePoint> particles,
         projected.push_back(
             {.x = (x - region.lower[xAxis]) / xExtent * plane.width,
              .y = plane.height
-                  - (y - region.lower[yAxis]) / yExtent * plane.height});
+                  - (y - region.lower[yAxis]) / yExtent * plane.height,
+             .value = particle.value});
     }
     return projected;
 }

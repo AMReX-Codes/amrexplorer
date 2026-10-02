@@ -298,7 +298,10 @@ void writeFab(const std::filesystem::path& path, BlockRecord& block,
 
 // Adds one small native AMReX particle species so the Qt slice and sequence
 // smoke tests exercise particle discovery, binary reads, and point overlays.
-void writeParticles(const std::filesystem::path& root, int dimension)
+// Its one real component, mass, is the particle's id times --mass-scale
+// (--scale when that is absent), so coloring by it spreads the particles over
+// the scale, and frames of a sequence can carry different mass ranges.
+void writeParticles(const std::filesystem::path& root, int dimension, double scale)
 {
     constexpr int particleCount = 8;
     const auto species = root / "Tracer";
@@ -309,7 +312,7 @@ void writeParticles(const std::filesystem::path& root, int dimension)
             "could not create the fixture particle Header");
         header << "Version_Two_Dot_Zero_double\n"
                << dimension << '\n'
-               << "0\n"
+               << "1\nmass\n"
                << "0\n"
                << "1\n"
                << particleCount << '\n'
@@ -334,6 +337,8 @@ void writeParticles(const std::filesystem::path& root, int dimension)
         data.write(reinterpret_cast<const char*>(positions),
             static_cast<std::streamsize>(
                 static_cast<std::size_t>(dimension) * sizeof(double)));
+        const auto mass = static_cast<double>(id) * scale;
+        data.write(reinterpret_cast<const char*>(&mass), sizeof(mass));
     }
     require(static_cast<bool>(data),
         "could not write the fixture particle data");
@@ -364,18 +369,21 @@ void writeHeaderWithoutStatistics(const std::filesystem::path& path,
 
 int main(int argc, char* argv[])
 {
-    require(argc >= 3 && argc <= 12,
+    require(argc >= 3 && argc <= 14,
         "usage: fixture_materializer <sourceFixtureDir> <destDir> "
         "[newTime] [--no-statistics] [--non-finite] [--scale <factor>] "
-        "[--domain-upper-x <value>] [--drop-field <name>]");
+        "[--mass-scale <factor>] [--domain-upper-x <value>] [--drop-field <name>]");
     const std::filesystem::path source(argv[1]);
     const std::filesystem::path destination(argv[2]);
     std::optional<std::string> newTime;
     bool omitStatistics = false;
     bool nonFiniteValues = false;
-    // Multiplies the synthesized field values so successive frames of a
-    // sequence can carry different ranges (used by the range-cache test).
+    // Multiplies the synthesized field values, and the particles' mass, so
+    // successive frames of a sequence can carry different ranges.
     double scale = 1.0;
+    // The particles' mass multiplier alone, defaulting to --scale; "nan"
+    // gives a frame whose masses cannot be placed on a color scale.
+    std::optional<double> massScale;
     std::optional<double> domainUpperX;
     // Takes a field out of the Header's list, leaving the stored components
     // alone: what a frame that simply does not carry that field looks like.
@@ -399,6 +407,13 @@ int main(int argc, char* argv[])
                 scale = std::stod(factor);
             } catch (const std::exception&) {
                 require(false, "--scale factor is not a number");
+            }
+        } else if (value == "--mass-scale") {
+            require(argument + 1 < argc, "--mass-scale requires a factor argument");
+            try {
+                massScale = std::stod(argv[++argument]);
+            } catch (const std::exception&) {
+                require(false, "--mass-scale factor is not a number");
             }
         } else if (value == "--drop-field") {
             require(argument + 1 < argc, "--drop-field requires a name");
@@ -515,6 +530,6 @@ int main(int argc, char* argv[])
             }
         }
     }
-    writeParticles(destination, header.dimension);
+    writeParticles(destination, header.dimension, massScale.value_or(scale));
     return 0;
 }

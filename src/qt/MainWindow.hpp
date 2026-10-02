@@ -582,6 +582,11 @@ public:
     [[nodiscard]] QSize panelTileImageSizeForTest(int normal, int tile) const;
     [[nodiscard]] QRectF panelCanvasRectForTest(int normal) const;
     [[nodiscard]] QSize panelExportSizeForTest(int normal) const;
+    // A panel as Export Image composes it, color bars included.
+    [[nodiscard]] QImage panelExportImageForTest(int normal) const;
+    // One animation frame of a panel: the first call freezes layout, as a
+    // movie's first frame does, and later calls reuse it.
+    [[nodiscard]] QImage panelMovieFrameForTest(int normal, ExportLayout& layout) const;
     void panStepActiveViewForTest(const QPointF& direction);
     // A panel's view transform scale (m11, m22) and whether it sits on a
     // virtual canvas, for panels other than the active one.
@@ -608,6 +613,8 @@ public:
     void setParticleSelectionForTest(
         std::vector<std::string> species, double fraction,
         std::uint64_t seed = 0);
+    // Colors the selected particles by an attribute, the rest as they are.
+    void setParticleColorAttributeForTest(const std::string& attribute);
     [[nodiscard]] std::uint64_t particleSeedForTest() const noexcept;
     [[nodiscard]] double particleFractionForTest() const noexcept;
     void setParticlePointSizeForTest(int pointSize);
@@ -622,6 +629,12 @@ public:
     [[nodiscard]] bool particleOverlaysUseColorForTest(
         const QColor& color);
     [[nodiscard]] bool particleOverlaysUseShapeForTest(MarkerShape shape);
+    [[nodiscard]] QString particleColorBarNumberFormatForTest() const;
+    // The particle color bar's range while it is shown.
+    [[nodiscard]] std::optional<std::pair<double, double>>
+    particleColorBarRangeForTest() const;
+    // The distinct colors the drawn particle batches use.
+    [[nodiscard]] std::size_t particleOverlayColorCountForTest();
     [[nodiscard]] std::size_t particleSampleCountForTest() const;
     // Point batches (one per drawn species) and the points in them: the
     // slice-cell filter thins the batches without emptying them.
@@ -1236,6 +1249,8 @@ private:
     // the plane mapping are the host's, the settings and samples are its.
     void updateParticleOverlay(PlaneViewState& state);
     void updateParticleOverlays();
+    // The particle color bar, from the loaded samples.
+    void updateParticleColorBar();
     void applyContourSettings(DisplayMode mode, int count, int uField, int vField,
         int wField, int contourColor);
     void showNumberFormatDialog();
@@ -1748,6 +1763,7 @@ private:
     QDockWidget* m_metadataDock = nullptr;
     QDockWidget* m_diagnosticsDock = nullptr;
     QDockWidget* m_colorBarDock = nullptr;
+    ColorBarWidget* m_particleColorBar = nullptr;
     QDockWidget* m_animationDock = nullptr;
     // *Why* the Animation panel currently applies, so
     // updateAnimationDockVisibility can act on the transition rather than

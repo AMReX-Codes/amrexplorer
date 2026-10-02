@@ -562,6 +562,270 @@ Outcome dispatchRange(Context& context)
         QTimer::singleShot(0, &window, [&window, path] {
             window.openDataset(path);
         });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--particle-bar-format-smoke-test") {
+        // "save" stores a number format; "load", a second process on the same
+        // settings, must start the particle color bar in it, as the field's.
+        const auto format = QStringLiteral("%.3e");
+        if (std::string_view(argv[2]) == "save") {
+            auto settings = amrvis::qt::makeSettings();
+            settings.setValue(QStringLiteral("numberFormat"), format);
+            settings.sync();
+            return {true, 0};
+        }
+        if (window.particleColorBarNumberFormatForTest() != format) {
+            qCritical("the particle color bar started in '%s'",
+                qPrintable(window.particleColorBarNumberFormatForTest()));
+            return {true, 1};
+        }
+        return {true, 0};
+    } else if (argc == 4
+        && std::string_view(argv[1]) == "--particle-color-smoke-test") {
+        // Color by an attribute through the dialog: the fixture's mass is the
+        // particle id, 1 to 8, so each of the 8 particles lands on its own
+        // slot and the bar spans 1 to 8. The next sequence frame, masses 10
+        // to 80, loads its particles from the frame spec, which must carry
+        // the attribute, and the bar must follow; back to species colors, the
+        // bar goes away, as it does when another dataset opens.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        struct Progress {
+            int phase = 0;
+            int attempts = 0;
+            int coloredExportWidth = 0;
+        };
+        auto progress = std::make_shared<Progress>();
+        auto* poll = new QTimer(&window);
+        poll->setInterval(10);
+        const auto fail = [&application, poll](const char* message) {
+            poll->stop();
+            qCritical("%s", message);
+            application.exit(1);
+        };
+        const auto applyColorBy = [&window](const QString& name) {
+            auto* action = window.findChild<QAction*>(QStringLiteral("particlesAction"));
+            if (action == nullptr || !action->isEnabled()) {
+                return false;
+            }
+            action->trigger();
+            QDialog* dialog = nullptr;
+            for (auto* candidate : window.findChildren<QDialog*>(
+                     QStringLiteral("particlesDialog"))) {
+                if (candidate->isVisible()) {
+                    dialog = candidate;
+                }
+            }
+            auto* colorBy = dialog != nullptr
+                ? dialog->findChild<QComboBox*>(QStringLiteral("particleColorBy"))
+                : nullptr;
+            auto* buttons = dialog != nullptr
+                ? dialog->findChild<QDialogButtonBox*>(
+                      QStringLiteral("particlesDialogButtons"))
+                : nullptr;
+            if (colorBy == nullptr || buttons == nullptr
+                || colorBy->findData(name) < 0) {
+                return false;
+            }
+            colorBy->setCurrentIndex(colorBy->findData(name));
+            buttons->button(QDialogButtonBox::Ok)->click();
+            return true;
+        };
+        const auto colored = [&window](double lightest) {
+            return window.particleColorBarRangeForTest()
+                    == std::optional<std::pair<double, double>>{{lightest, 8.0 * lightest}}
+                && window.particleOverlayColorCountForTest() == 8;
+        };
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, poll, progress, fail, applyColorBy](int index) {
+                if (index == 0 && progress->phase == 0) {
+                    if (!applyColorBy(QStringLiteral("mass"))) {
+                        fail("the dialog offers no mass to color by");
+                        return;
+                    }
+                    progress->phase = 1;
+                    poll->start();
+                } else if (index == 1 && progress->phase == 2) {
+                    progress->phase = 3;
+                    poll->start();
+                }
+                static_cast<void>(window);
+            });
+        QObject::connect(poll, &QTimer::timeout, &application,
+            [&window, &application, poll, progress, fail, applyColorBy, colored, first] {
+                if (++progress->attempts > 500) {
+                    fail("the particle coloring never settled");
+                    return;
+                }
+                if (window.particleLoadingForTest()) {
+                    return;
+                }
+                switch (progress->phase) {
+                case 1:
+                    if (!colored(1.0)) {
+                        return;
+                    }
+                    // Exports carry the particle scale beside the field's.
+                    progress->coloredExportWidth = window.panelExportImageForTest(2).width();
+                    poll->stop();
+                    progress->phase = 2;
+                    window.stepSequence(1);
+                    break;
+                case 3:
+                    if (!colored(10.0)) {
+                        return;
+                    }
+                    if (!applyColorBy(QString())) {
+                        fail("the dialog did not offer species colors");
+                        return;
+                    }
+                    progress->phase = 4;
+                    break;
+                case 4:
+                    if (window.particleColorBarRangeForTest()
+                        || window.particleOverlayColorCountForTest() != 1) {
+                        return;
+                    }
+                    if (window.panelExportImageForTest(2).width()
+                        >= progress->coloredExportWidth) {
+                        fail("the export did not carry the particle color bar");
+                        return;
+                    }
+                    if (!applyColorBy(QStringLiteral("mass"))) {
+                        fail("the dialog no longer offers mass");
+                        return;
+                    }
+                    progress->phase = 5;
+                    break;
+                case 5:
+                    if (!colored(10.0)) {
+                        return;
+                    }
+                    // Another dataset takes the particles away, and the bar
+                    // with them, at once rather than at the next redraw.
+                    window.openDataset(first);
+                    if (window.particleColorBarRangeForTest()) {
+                        fail("opening another dataset left the particle color bar up");
+                        return;
+                    }
+                    poll->stop();
+                    window.close();
+                    application.exit(0);
+                    break;
+                default:
+                    break;
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [fail] { fail("a sequence frame failed"); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
+        && std::string_view(argv[1]) == "--particle-color-movie-smoke-test") {
+        // A movie freezes its layout on the first frame. That frame's masses
+        // are all NaN, so it has no particle range, yet the layout must keep
+        // room for the particle scale, which the next frame (masses 1 to 8)
+        // paints there -- but only when some selected species has the
+        // attribute.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        struct Progress {
+            int phase = 0;
+            int attempts = 0;
+            amrvis::qt::ExportLayout layout;
+        };
+        auto progress = std::make_shared<Progress>();
+        auto* poll = new QTimer(&window);
+        poll->setInterval(10);
+        const auto fail = [&application, poll](const char* message) {
+            poll->stop();
+            qCritical("%s", message);
+            application.exit(1);
+        };
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, poll, progress, fail](int index) {
+                if (index == 0 && progress->phase == 0) {
+                    // No room is kept for a scale nothing could paint: with no
+                    // species selected, or none that has the attribute.
+                    const auto keepsRoom = [&window] {
+                        amrvis::qt::ExportLayout fresh;
+                        static_cast<void>(window.panelMovieFrameForTest(2, fresh));
+                        return !fresh.secondaryColorBarRect.isEmpty();
+                    };
+                    window.setParticleColorAttributeForTest("mass");
+                    if (keepsRoom()) {
+                        fail("a movie kept room for particles with no species selected");
+                        return;
+                    }
+                    window.setParticleSelectionForTest({"Tracer"}, 1.0, 0);
+                    window.setParticleColorAttributeForTest("density");
+                    if (keepsRoom()) {
+                        fail("a movie kept room for an attribute no species has");
+                        return;
+                    }
+                    window.setParticleColorAttributeForTest("mass");
+                    progress->phase = 1;
+                    poll->start();
+                } else if (index == 1 && progress->phase == 2) {
+                    progress->phase = 3;
+                    poll->start();
+                }
+            });
+        QObject::connect(poll, &QTimer::timeout, &application,
+            [&window, &application, poll, progress, fail] {
+                if (++progress->attempts > 500) {
+                    fail("the particle movie frames never settled");
+                    return;
+                }
+                if (window.particleLoadingForTest()
+                    || window.particleSampleCountForTest() == 0) {
+                    return;
+                }
+                if (progress->phase == 1) {
+                    if (window.particleColorBarRangeForTest()) {
+                        fail("NaN masses produced a particle range");
+                        return;
+                    }
+                    static_cast<void>(window.panelMovieFrameForTest(2, progress->layout));
+                    if (progress->layout.secondaryColorBarRect.isEmpty()) {
+                        fail("the movie layout kept no room for the particle scale");
+                        return;
+                    }
+                    // Its labels must come from real values, not the stand-in
+                    // range the room was measured with.
+                    if (progress->layout.secondaryColorBarPresentation) {
+                        fail("the movie froze particle labels from a stand-in range");
+                        return;
+                    }
+                    poll->stop();
+                    progress->phase = 2;
+                    window.stepSequence(1);
+                } else if (progress->phase == 3) {
+                    if (!window.particleColorBarRangeForTest()) {
+                        return;
+                    }
+                    const auto frame = window.panelMovieFrameForTest(2, progress->layout);
+                    const auto& rect = progress->layout.secondaryColorBarRect;
+                    int painted = 0;
+                    for (int y = rect.top(); y <= rect.bottom(); ++y) {
+                        for (int x = rect.left(); x <= rect.right(); ++x) {
+                            painted += frame.pixelColor(x, y).alpha() > 0 ? 1 : 0;
+                        }
+                    }
+                    if (painted <= rect.height()) {
+                        fail("the movie's later frame did not paint the particle scale");
+                        return;
+                    }
+                    poll->stop();
+                    window.close();
+                    application.exit(0);
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [fail] { fail("a sequence frame failed"); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
     } else if (argc == 4
         && std::string_view(argv[1]) == "--particle-dialog-smoke-test") {
         // The particles dialog is modeless with an Apply button: settings are

@@ -1,0 +1,3 @@
+# Payloads written by AMReX itself, checked in as test fixtures.
+tests/data/**/DATA_* binary
+tests/data/**/Cell_D_* binary

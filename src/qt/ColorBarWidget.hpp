@@ -5,6 +5,9 @@
 #include <QString>
 #include <QWidget>
 
+#include <optional>
+#include <utility>
+
 namespace amrvis {
 class Palette;
 }
@@ -32,6 +35,13 @@ public:
     void setNumberFormat(QString format);
     void setLogarithmic(bool logarithmic);
     void clearRange();
+    // The authored number format, before resolving against the range.
+    [[nodiscard]] const QString& numberFormat() const noexcept { return m_numberFormat; }
+    // The range on show, if any.
+    [[nodiscard]] std::optional<std::pair<double, double>> fieldRange() const
+    {
+        return m_hasRange ? std::optional{std::pair{m_minimum, m_maximum}} : std::nullopt;
+    }
 
     // Label value at a fraction of the bar (0 = maximum, 1 = minimum).
     [[nodiscard]] static double tickValue(

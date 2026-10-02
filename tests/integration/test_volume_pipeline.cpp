@@ -213,10 +213,11 @@ public:
     }
     [[nodiscard]] amrvis::ParticleSample requestParticleSample(
         const std::string& species, double fraction, std::uint64_t seed,
-        amrvis::StopToken cancellation = {}) override
+        amrvis::StopToken cancellation = {},
+        std::optional<amrvis::ParticleAttribute> attribute = std::nullopt) override
     {
         return m_inner->requestParticleSample(
-            species, fraction, seed, cancellation);
+            species, fraction, seed, cancellation, attribute);
     }
     [[nodiscard]] bool supportsVolumeRendering() const noexcept override
     {

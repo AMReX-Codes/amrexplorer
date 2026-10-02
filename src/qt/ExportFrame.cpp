@@ -137,7 +137,7 @@ std::vector<ExportTick> exportTicks(const ExportAxis& axis, int pixelLength, int
 
 ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options,
                               const std::array<ExportAxis, 2>& axes, const ColorBarWidget* colorBar,
-                              bool reserveLabelGrowth) {
+                              bool reserveLabelGrowth, const ColorBarWidget* secondaryColorBar) {
     ExportLayout layout;
     if (rasterSize.isEmpty()) {
         return layout;
@@ -214,18 +214,18 @@ ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options,
         const int right = options.includeAxes ? xOverhang + gap : 0;
         layout.dataRect = QRect(QPoint(left, top), rasterSize);
         int width = left + rasterSize.width() + right;
-        if (options.includeColorBar) {
-            // Color values have their own precision budget, independent of
-            // the spatial axes. Movies allow the full compact notation at
-            // that precision even if the first frame has short tick labels.
-            const auto presentation = colorBar != nullptr
-                ? colorBar->exportPresentation(fm, QRect(0, 0, 0, rasterSize.height()))
+        // Color values have their own precision budget, independent of the
+        // spatial axes. Movies allow the full compact notation at that
+        // precision even if the first frame has short tick labels.
+        const auto barWidthFor = [&](const ColorBarWidget* bar) {
+            const auto presentation = bar != nullptr
+                ? bar->exportPresentation(fm, QRect(0, 0, 0, rasterSize.height()))
                 : ColorBarWidget::NumberPresentation{
                     options.numberFormat, options.numberFormat, false};
             const int maximumLabelWidth = labelBudget(glyphWidth,
                 formatDigits(presentation.tickFormat));
-            const int labels = colorBar != nullptr
-                ? colorBar->exportLabelWidth(fm, maximumLabelWidth, rasterSize.height()) : 0;
+            const int labels = bar != nullptr
+                ? bar->exportLabelWidth(fm, maximumLabelWidth, rasterSize.height()) : 0;
             int barWidth = ColorBarWidget::exportWidth(fm,
                 std::max(labels, reserveLabelGrowth ? maximumLabelWidth : 0));
             if (reserveLabelGrowth && presentation.offsetLine) {
@@ -235,11 +235,19 @@ ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options,
                     ColorBarWidget::exportWidth(fm,
                         labelBudget(glyphWidth, formatDigits(presentation.valueFormat))));
             }
+            return barWidth;
+        };
+        if (options.includeColorBar) {
             // The color scale is beside the data, above the x tick labels.
             // Their endpoint overhang must not become an inter-panel gutter.
-            layout.colorBarRect =
-                QRect(left + rasterSize.width() + gap, top, barWidth, rasterSize.height());
+            layout.colorBarRect = QRect(left + rasterSize.width() + gap, top,
+                barWidthFor(colorBar), rasterSize.height());
             width = std::max(width, layout.colorBarRect.right() + 1);
+            if (secondaryColorBar != nullptr) {
+                layout.secondaryColorBarRect = QRect(layout.colorBarRect.right() + 1 + gap,
+                    top, barWidthFor(secondaryColorBar), rasterSize.height());
+                width = std::max(width, layout.secondaryColorBarRect.right() + 1);
+            }
         }
         layout.canvasSize = QSize(width, top + rasterSize.height() + bottom);
         // Long labels need wider margins, but must not keep enlarging the
@@ -260,6 +268,10 @@ ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options,
     if (options.includeColorBar && colorBar != nullptr) {
         layout.colorBarPresentation = colorBar->exportPresentation(
             QFontMetrics(layout.font), layout.colorBarRect);
+    }
+    if (options.includeColorBar && secondaryColorBar != nullptr) {
+        layout.secondaryColorBarPresentation = secondaryColorBar->exportPresentation(
+            QFontMetrics(layout.font), layout.secondaryColorBarRect);
     }
     layout.dotsPerMeter =
         static_cast<int>(std::lround(layout.font.pixelSize() * 72.0 / (11.0 * 0.0254)));
@@ -293,7 +305,8 @@ bool exportAspectMatches(QSizeF rasterSize, const ExportLayout& layout) {
 
 QImage composeExportImage(const QImage& raster, const std::array<ExportAxis, 2>& axes,
                           const ExportOptions& options, const ExportLayout& layout,
-                          const ColorBarWidget* colorBar) {
+                          const ColorBarWidget* colorBar,
+                          const ColorBarWidget* secondaryColorBar) {
     if (raster.isNull() || raster.size() != layout.dataRect.size()) {
         return {};
     }
@@ -318,6 +331,14 @@ QImage composeExportImage(const QImage& raster, const std::array<ExportAxis, 2>&
     if (options.includeColorBar && colorBar != nullptr) {
         colorBar->paintBar(&painter, layout.colorBarRect, true, true,
             layout.colorBarPresentation ? &*layout.colorBarPresentation : nullptr);
+    }
+    // Only where the layout reserved room: a frozen movie layout keeps its
+    // first frame's width.
+    if (options.includeColorBar && secondaryColorBar != nullptr
+        && !layout.secondaryColorBarRect.isEmpty()) {
+        secondaryColorBar->paintBar(&painter, layout.secondaryColorBarRect, true, true,
+            layout.secondaryColorBarPresentation ? &*layout.secondaryColorBarPresentation
+                                                 : nullptr);
     }
     if (!options.includeAxes) {
         return result;

@@ -791,6 +791,24 @@ QSize MainWindow::panelExportSizeForTest(int normal) const
     return view == nullptr ? QSize() : view->composedImageSize(1.0);
 }
 
+QImage MainWindow::panelMovieFrameForTest(int normal, ExportLayout& layout) const
+{
+    if (normal < 0 || normal > 2) {
+        return {};
+    }
+    return composeExportFrame(primary().planeViews[static_cast<std::size_t>(normal)].view,
+        exportOptions(true, false, true), 1.0, &layout);
+}
+
+QImage MainWindow::panelExportImageForTest(int normal) const
+{
+    if (normal < 0 || normal > 2) {
+        return {};
+    }
+    return composeExportFrame(primary().planeViews[static_cast<std::size_t>(normal)].view,
+        exportOptions(true, false, false), 1.0);
+}
+
 std::pair<qreal, qreal> MainWindow::panelTransformScaleForTest(int normal) const
 {
     if (normal < 0 || normal > 2) {
@@ -1439,6 +1457,15 @@ void MainWindow::setParticleSelectionForTest(
         settings.pointSize, seed, settings.sliceCellsOnly);
 }
 
+void MainWindow::setParticleColorAttributeForTest(const std::string& attribute)
+{
+    const auto settings = m_particleController->settings();
+    auto coloring = settings.coloring;
+    coloring.attribute = attribute;
+    m_particleController->applySelection(settings.species, settings.fraction,
+        settings.pointSize, settings.seed, settings.sliceCellsOnly, coloring);
+}
+
 std::uint64_t MainWindow::particleSeedForTest() const noexcept
 {
     return m_particleController->settings().seed;
@@ -1519,6 +1546,33 @@ bool MainWindow::particleOverlaysUseShapeForTest(MarkerShape shape)
         }
     }
     return found;
+}
+
+QString MainWindow::particleColorBarNumberFormatForTest() const
+{
+    return m_particleColorBar->numberFormat();
+}
+
+std::optional<std::pair<double, double>> MainWindow::particleColorBarRangeForTest() const
+{
+    // The widget's own, so a bar left stale by a redraw path shows here.
+    if (!m_particleColorBar->isVisibleTo(this)) {
+        return std::nullopt;
+    }
+    return m_particleColorBar->fieldRange();
+}
+
+std::size_t MainWindow::particleOverlayColorCountForTest()
+{
+    std::vector<QRgb> colors;
+    for (const auto* state : currentViews()) {
+        for (const auto& color : state->view->pointOverlayColors()) {
+            if (std::find(colors.begin(), colors.end(), color.rgba()) == colors.end()) {
+                colors.push_back(color.rgba());
+            }
+        }
+    }
+    return colors.size();
 }
 
 std::size_t MainWindow::particleSampleCountForTest() const

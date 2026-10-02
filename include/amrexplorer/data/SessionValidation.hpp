@@ -19,7 +19,8 @@ void validateSessionRangeRequest(
     const DatasetMetadata& metadata, const RangeRequest& request);
 void validateSessionParticleRequest(const DatasetMetadata& metadata,
     const std::vector<ParticleSpeciesMetadata>& species,
-    const std::string& name, double fraction);
+    const std::string& name, double fraction,
+    const std::optional<ParticleAttribute>& attribute = std::nullopt);
 void validateSessionVolumeRequest(const DatasetMetadata& metadata,
     DatasetId dataset, const VolumeRenderRequest& request);
 

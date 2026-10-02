@@ -2357,6 +2357,7 @@ void MainWindow::prepareSequence(std::size_t frameCount)
     // A sequence is a different dataset, so it starts from defaults exactly as
     // a plain open does.
     m_particleController->resetSettings();
+    updateParticleColorBar();
     m_remoteSequenceConnectionGeneration = 0;
     // A mapped view's canvas and window belong to the outgoing dataset.
     for (auto* state : allViewStates()) {
@@ -2759,6 +2760,7 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     }
     spec.particleFraction = particles.fraction;
     spec.particleSeed = particles.seed;
+    spec.particleAttribute = particles.coloring.attribute;
     spec.includeGridBoxes = m_boxesAction->isChecked();
     const auto views = primaryViews();
     spec.visibleRegions.reserve(views.size());

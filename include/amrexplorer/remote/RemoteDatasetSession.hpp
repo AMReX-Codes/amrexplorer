@@ -75,9 +75,12 @@ public:
         const RangeRequest& request, StopToken cancellation = {}) override;
     [[nodiscard]] bool rangeAvailable(
         const RangeRequest& request) const noexcept override;
+    // False against a server that predates protocol 1.9.
+    [[nodiscard]] bool supportsParticleAttributes() const noexcept override;
     [[nodiscard]] ParticleSample requestParticleSample(
         const std::string& species, double fraction, std::uint64_t seed,
-        StopToken cancellation = {}) override;
+        StopToken cancellation = {},
+        std::optional<ParticleAttribute> attribute = std::nullopt) override;
 
     [[nodiscard]] CacheMetrics cacheMetrics() const override;
     [[nodiscard]] bool setCacheBudget(std::uint64_t bytes) override;

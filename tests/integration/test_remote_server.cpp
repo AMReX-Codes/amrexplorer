@@ -724,6 +724,28 @@ int main(int argc, char* argv[])
             "the refusals closed a session that should have survived them");
     }
 
+    // Protocol 1.9: a particle attribute. A 1.8 peer that sends one anyway is
+    // told about the version, not about its dataset.
+    {
+        auto olderSocket = connectTo("127.0.0.1", server.port());
+        auto olderHello = helloRequest(server.token());
+        olderHello.maximumMinorVersion = 8;
+        auto olderEnvelope = exchange(olderSocket, 1,
+            codec::toWire(olderHello), defaultMaximumFrameBytes, 8);
+        const auto olderInfo = codec::fromWire(
+            *olderEnvelope->payload.AsHelloResponse());
+        require(olderInfo.selectedMinorVersion == 8,
+            "server did not negotiate down to a 1.8 peer");
+        olderEnvelope = exchange(olderSocket, 2,
+            codec::toWire(DatasetId{1}, "Tracer", 1.0, 0,
+                ParticleAttribute{ParticleAttribute::Kind::Real, 0}),
+            olderInfo.maximumFrameBytes, 8);
+        require(codec::inspect(*olderEnvelope).payload == PayloadKind::ErrorResponse
+                && codec::fromWire(*olderEnvelope->payload.AsErrorResponse()).code
+                    == ErrorCode::UnsupportedProtocol,
+            "a 1.8 peer's particle attribute was not refused by version");
+    }
+
     // Pin the actual fields sent by a negotiated server, including narrowing
     // and overflow for a 1.4 peer. A matching encoder/decoder bug must not be
     // able to hide behind a successful round trip.

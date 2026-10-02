@@ -791,6 +791,24 @@ Below the species list are the settings that apply to all of them:
 - **Only particles in cells the slice crosses** narrows each panel to the
   particles lying inside the cells that panel is showing. 3-D data only.
 
+### Coloring by an attribute
+
+**Color by** colors every particle by one of its components, such as mass or
+temperature, instead of by species. The list holds every component name any
+species has; a species without the chosen one keeps its own color. Once one is
+chosen:
+
+- **Colormap** picks the palette, separate from the slice's.
+- **Log scale** spaces the colors by decade. Values at or below zero keep the
+  species color.
+- **Fixed range** colors over the minimum and maximum you enter. Unticked, the
+  range spans the values of the particles loaded.
+
+A particle color bar appears in the **Color Scale** dock, labeled with the
+component's name, and beside the field's color bar in image and animation
+exports. Each particle keeps its species' alpha and shape. Coloring over a
+remote connection needs a server from the same release or later.
+
 The same particles stay selected as you step through the frames of a sequence,
 and for a given seed a lower percentage thins the same set of particles rather
 than replacing it.
@@ -808,9 +826,9 @@ level's spacing, and on a mapped grid it is the cell's own faces, which follow
 the terrain; where a panel shows no data it shows no particles either.
 
 Particle settings are not saved between sessions. Species selection, colors,
-shapes, subset percentage, seed, point size, and the slice-cell filter all reset
-when a new dataset or sequence is opened; they carry across the frames of an
-open sequence.
+shapes, subset percentage, seed, point size, the slice-cell filter, and the
+coloring all reset when a new dataset or sequence is opened; they carry across
+the frames of an open sequence.
 
 ## 2-D spherical coordinates
 

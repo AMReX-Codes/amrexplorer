@@ -138,12 +138,14 @@ Bytes encode(std::uint64_t requestId, Payload payload,
 [[nodiscard]] DatasetPage fromWire(const fb::DatasetPageResponseT& value);
 
 [[nodiscard]] fb::ParticleSampleRequestT toWire(DatasetId dataset,
-    const std::string& species, double fraction, std::uint64_t seed);
+    const std::string& species, double fraction, std::uint64_t seed,
+    std::optional<ParticleAttribute> attribute = std::nullopt);
 struct ParticleSampleRequestData {
     DatasetId dataset;
     std::string species;
     double fraction = 0.0;
     std::uint64_t seed = 0;
+    std::optional<ParticleAttribute> attribute;
 };
 [[nodiscard]] ParticleSampleRequestData fromWire(
     const fb::ParticleSampleRequestT& value);

@@ -720,7 +720,7 @@ int main()
     }
 
     ParticleSample sample;
-    sample.species = {"electrons", 3, 0, 0, 4, ParticleRealPrecision::Double};
+    sample.species = {"electrons", 3, 0, 0, 4, ParticleRealPrecision::Double, {}, {}};
     sample.points.push_back({1, Real3{{0.25, 0.5, 0.75}}});
     auto particleWire = codec::toWire(sample, CacheMetrics{});
     const auto particleDecoded = codec::fromWire(particleWire);
@@ -736,6 +736,56 @@ int main()
     particleWire.positions[2] = std::numeric_limits<double>::infinity();
     requireRejected([&] { static_cast<void>(codec::fromWire(particleWire)); },
         "an infinite particle position was accepted");
+
+    // Protocol 1.9: component names and one attribute value per point.
+    {
+        using Kind = ParticleAttribute::Kind;
+        ParticleSample valued;
+        valued.species = {"ions", 3, 2, 1, 4, ParticleRealPrecision::Double,
+            {"mass", "temperature"}, {"charge"}};
+        valued.attribute = ParticleAttribute{Kind::Real, 1};
+        valued.points.push_back({7, Real3{{0.25, 0.5, 0.75}}, 300.0});
+        valued.points.push_back({8, Real3{{0.5, 0.5, 0.5}},
+            std::numeric_limits<double>::quiet_NaN()});
+        auto valuedWire = codec::toWire(valued, CacheMetrics{});
+        const auto valuedDecoded = codec::fromWire(valuedWire);
+        require(valuedDecoded.species == valued.species
+                && valuedDecoded.attribute == valued.attribute
+                && valuedDecoded.points.size() == 2
+                && valuedDecoded.points[0].value == 300.0
+                && std::isnan(valuedDecoded.points[1].value),
+            "a valued particle sample did not round-trip");
+        valuedWire.values.pop_back();
+        requireRejected([&] { static_cast<void>(codec::fromWire(valuedWire)); },
+            "particle values that do not match the ids were accepted");
+        valuedWire = codec::toWire(valued, CacheMetrics{});
+        valuedWire.attribute.reset();
+        requireRejected([&] { static_cast<void>(codec::fromWire(valuedWire)); },
+            "particle values without an attribute were accepted");
+        valuedWire = codec::toWire(valued, CacheMetrics{});
+        valuedWire.attribute->index = -1;
+        requireRejected([&] { static_cast<void>(codec::fromWire(valuedWire)); },
+            "a negative particle attribute index was accepted");
+        valuedWire = codec::toWire(valued, CacheMetrics{});
+        valuedWire.species->real_component_names.pop_back();
+        requireRejected([&] { static_cast<void>(codec::fromWire(valuedWire)); },
+            "particle component names that miss a component were accepted");
+        // A 1.8 server names nothing, which is not an inconsistency.
+        valuedWire = codec::toWire(valued, CacheMetrics{});
+        valuedWire.species->real_component_names.clear();
+        valuedWire.species->int_component_names.clear();
+        require(codec::fromWire(valuedWire).species.realComponentNames.empty(),
+            "an unnamed species from an older server was refused");
+
+        const auto request = codec::fromWire(codec::toWire(DatasetId{3}, "ions",
+            0.5, 9, ParticleAttribute{Kind::Int, 0}));
+        require(request.attribute == ParticleAttribute{Kind::Int, 0}
+                && request.species == "ions" && request.seed == 9,
+            "a particle request's attribute did not round-trip");
+        require(!codec::fromWire(codec::toWire(DatasetId{3}, "ions", 0.5, 9))
+                     .attribute,
+            "a particle request without an attribute gained one");
+    }
 
     // Protocol 1.2: a rendered-frame request round-trips with and without
     // an explicit range, a frame round-trips, and the converters refuse what

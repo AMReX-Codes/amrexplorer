@@ -337,7 +337,8 @@ if(TARGET amrexplorer_remote)
     )
     add_test(NAME remote_session
         COMMAND test_remote_session "${remote_server_fixture_dir}"
-            "${remote_server_fixture_mapped_dir}")
+            "${remote_server_fixture_mapped_dir}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_soa_particles")
     set_tests_properties(remote_session PROPERTIES
         FIXTURES_REQUIRED "remote_server_materialized;remote_server_mapped_materialized"
         TIMEOUT 30)
@@ -472,6 +473,18 @@ target_link_libraries(
 add_test(
     NAME particle_reader
     COMMAND test_particle_reader "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+)
+
+add_executable(test_particle_reader_amrex_soa
+    integration/test_particle_reader_amrex_soa.cpp)
+target_link_libraries(
+    test_particle_reader_amrex_soa
+    PRIVATE amrexplorer::pipeline amrexplorer::warnings
+)
+add_test(
+    NAME particle_reader_amrex_soa
+    COMMAND test_particle_reader_amrex_soa
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_soa_particles"
 )
 
 add_executable(test_dataset_extract integration/test_dataset_extract.cpp)
@@ -847,10 +860,19 @@ if(TARGET amrexplorer_qt)
             "$<TARGET_FILE:test_range_controller>")
     set_tests_properties(range_controller PROPERTIES TIMEOUT 60)
 
+    add_executable(test_particle_coloring unit/test_particle_coloring.cpp)
+    target_include_directories(test_particle_coloring
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_particle_coloring
+        PRIVATE amrexplorer::io amrexplorer::warnings)
+    add_test(NAME particle_coloring COMMAND test_particle_coloring)
+
     add_executable(test_particle_controller
         unit/test_particle_controller.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp"
         "${PROJECT_SOURCE_DIR}/src/qt/ParticleController.cpp"
         "${PROJECT_SOURCE_DIR}/src/qt/ParticleController.hpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ScientificDoubleSpinBox.cpp"
     )
     set_target_properties(test_particle_controller PROPERTIES AUTOMOC ON)
     target_include_directories(test_particle_controller
@@ -1981,6 +2003,44 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_particle_dialog_smoke_3d PROPERTIES TIMEOUT 30)
+    # Coloring by an attribute spreads the particles over the scale, shows the
+    # particle color bar, and carries into the next sequence frame.
+    add_test(
+        NAME qt_particle_color_smoke_3d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_particle_color_3d"
+            -DMODE=particle-color
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_particle_color_smoke_3d PROPERTIES TIMEOUT 30)
+    # A movie's layout, frozen on a first frame with no usable particle
+    # values, keeps room for the particle scale its later frames paint.
+    add_test(
+        NAME qt_particle_color_movie_smoke_3d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_particle_color_movie_3d"
+            -DMODE=particle-color-movie
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_particle_color_movie_smoke_3d PROPERTIES TIMEOUT 30)
+    # A saved number format reaches the particle color bar at startup.
+    add_test(
+        NAME qt_particle_bar_format_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_particle_bar_format"
+            -DMODE=particle-bar-format
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_particle_bar_format_smoke PROPERTIES TIMEOUT 30)
     # A plain open and a sequence open are both dataset changes, so both reset
     # every particle setting rather than carrying the previous dataset's
     # species, subset, seed, point size, and colors into the new one.

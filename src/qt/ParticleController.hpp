@@ -1,10 +1,12 @@
 #pragma once
 
 #include "MarkerShape.hpp"
+#include "ParticleColoring.hpp"
 
 #include <amrexplorer/core/StopToken.hpp>
 #include <amrexplorer/data/DatasetSession.hpp>
 #include <amrexplorer/io/ParticleReader.hpp>
+#include <amrexplorer/render2d/Palette.hpp>
 
 #include <QColor>
 #include <QObject>
@@ -13,6 +15,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -41,6 +44,20 @@ class ParticleController final : public QObject {
 
 public:
     static constexpr int defaultPointSize = 3;
+    // Viridis, in builtinPalettes order.
+    static constexpr int defaultColorPalette = 2;
+
+    // Coloring by one attribute, shared by every species with a component of
+    // that name; the others keep their own color.
+    struct Coloring {
+        // Empty: every species in its own color.
+        std::string attribute;
+        int palette = defaultColorPalette;
+        bool logarithmic = false;
+        // None autoscales over the loaded values.
+        std::optional<ParticleColorRange> range;
+        friend bool operator==(const Coloring&, const Coloring&) = default;
+    };
 
     struct Settings {
         // False until the user (or a restored frame spec) has chosen species:
@@ -56,6 +73,7 @@ public:
         bool sliceCellsOnly = false;
         std::unordered_map<std::string, QColor> colors;
         std::unordered_map<std::string, MarkerShape> shapes;
+        Coloring coloring;
     };
 
     struct Hooks {
@@ -86,6 +104,16 @@ public:
     [[nodiscard]] QColor colorFor(const std::string& species) const;
     // Likewise the marker; a circle when it has none.
     [[nodiscard]] MarkerShape shapeFor(const std::string& species) const;
+    // The component names any species of the dataset has, in discovery order;
+    // empty when its session cannot read attributes.
+    [[nodiscard]] std::vector<std::string> attributeNames() const;
+    // Whether a sample's values are the chosen attribute's for its species:
+    // ones read for another attribute stay uncolored until reloaded.
+    [[nodiscard]] bool sampleColored(const ParticleSample& sample) const;
+    // The range the loaded samples are colored over: the fixed one, or the
+    // span of their values. None unless some sample is colored.
+    [[nodiscard]] std::optional<ParticleColorRange> colorRange() const;
+    [[nodiscard]] const Palette& colorPalette() const;
 
     // The dialog's and the tests' entry point: installs the selection. A
     // change to the sampled identities (species, fraction, seed) emits
@@ -93,13 +121,20 @@ public:
     // size, the slice-cell filter) only emits overlaysChanged.
     void applySelection(std::vector<std::string> species, double fraction,
         int pointSize, std::uint64_t seed, bool sliceCellsOnly);
+    // Likewise with the coloring; a new attribute is a new sample, the rest
+    // only redraws.
+    void applySelection(std::vector<std::string> species, double fraction,
+        int pointSize, std::uint64_t seed, bool sliceCellsOnly,
+        Coloring coloring);
     void setColor(const std::string& species, const QColor& color);
     void setShape(const std::string& species, MarkerShape shape);
     // Reinstalls what a restored frame spec carries (species, fraction, seed,
-    // initialised), leaving the display settings -- colours, shapes, point
-    // size, the slice-cell filter -- alone.
+    // initialised, the color attribute), leaving the display settings --
+    // colours, shapes, point size, the slice-cell filter, the color scale --
+    // alone.
     void restoreSelection(std::vector<std::string> species, double fraction,
-        std::uint64_t seed, bool selectionInitialized);
+        std::uint64_t seed, bool selectionInitialized,
+        std::string colorAttribute = {});
     // Drops every setting back to its default: the shared reset for the two
     // paths that install a different dataset, a plain open and a sequence
     // open (a subset chosen to make one dense dataset legible must not

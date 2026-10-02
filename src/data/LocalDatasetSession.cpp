@@ -283,25 +283,26 @@ bool LocalDatasetSession::rangeAvailable(
 
 ParticleSample LocalDatasetSession::requestParticleSample(
     const std::string& species, double fraction, std::uint64_t seed,
-    StopToken cancellation)
+    StopToken cancellation, std::optional<ParticleAttribute> attribute)
 {
     validateSessionParticleRequest(
-        m_metadata, m_particleSpecies, species, fraction);
-    return requireDataset()->requestParticleSample(
-        species, fraction, seed, cancellation);
+        m_metadata, m_particleSpecies, species, fraction, attribute);
+    return requireDataset()->requestParticleSample(species, fraction, seed,
+        cancellation, std::numeric_limits<std::size_t>::max(), attribute);
 }
 
 ParticleSample LocalDatasetSession::requestParticleSample(
     const std::string& species, double fraction, std::uint64_t seed,
-    std::size_t maximumPoints, StopToken cancellation)
+    std::size_t maximumPoints, StopToken cancellation,
+    std::optional<ParticleAttribute> attribute)
 {
     // The bounded overload serves the remote path, whose species and fraction
     // arrive off the wire -- it needs this validation at least as much as the
     // local one above, which is the caller that already had it.
     validateSessionParticleRequest(
-        m_metadata, m_particleSpecies, species, fraction);
+        m_metadata, m_particleSpecies, species, fraction, attribute);
     return requireDataset()->requestParticleSample(
-        species, fraction, seed, cancellation, maximumPoints);
+        species, fraction, seed, cancellation, maximumPoints, attribute);
 }
 
 std::size_t LocalDatasetSession::storedFieldCount() const noexcept

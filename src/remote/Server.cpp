@@ -1001,9 +1001,14 @@ private:
                 "particle-sample payload is missing");
         }
         const auto request = codec::fromWire(*payload);
+        if (request.attribute
+            && m_selectedMinorVersion < particleAttributeMinorVersion) {
+            throw RemoteError(ErrorCode::UnsupportedProtocol,
+                "particle attributes require protocol 1.9");
+        }
         const auto dataset = requireDataset(request.dataset);
-        constexpr std::uint64_t bytesPerPoint
-            = sizeof(std::uint64_t) + 3 * sizeof(double);
+        const std::uint64_t bytesPerPoint = sizeof(std::uint64_t)
+            + 3 * sizeof(double) + (request.attribute ? sizeof(double) : 0);
         constexpr std::uint64_t particleResponseOverheadBytes = 512;
         const auto frameBytes
             = static_cast<std::uint64_t>(m_maximumFrameBytes.load());
@@ -1025,7 +1030,8 @@ private:
                 "particle sample cannot fit in one negotiated frame");
         }
         const auto sample = dataset->requestParticleSample(request.species,
-            request.fraction, request.seed, maximumPoints, cancellation);
+            request.fraction, request.seed, maximumPoints, cancellation,
+            request.attribute);
         if (!fitsResponse(static_cast<std::uint64_t>(sample.points.size())
                 * bytesPerPoint)) {
             throw RemoteError(ErrorCode::ResourceLimitExceeded,

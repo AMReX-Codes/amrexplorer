@@ -796,7 +796,8 @@ void recomputeContourPolylines(SliceDisplayResult& result)
 std::vector<ParticleSample> loadParticleSamples(
     DatasetSession& dataset,
     std::span<const std::string> selectedSpecies, double fraction,
-    std::uint64_t seed, StopToken cancellation)
+    std::uint64_t seed, StopToken cancellation,
+    const std::string& attributeName)
 {
     std::vector<ParticleSample> samples;
     samples.reserve(std::min(
@@ -807,7 +808,10 @@ std::vector<ParticleSample> loadParticleSamples(
             continue;
         }
         samples.push_back(dataset.requestParticleSample(
-            species.name, fraction, seed, cancellation));
+            species.name, fraction, seed, cancellation,
+            attributeName.empty() || !dataset.supportsParticleAttributes()
+                ? std::nullopt
+                : findParticleAttribute(species, attributeName)));
     }
     return samples;
 }
@@ -1059,7 +1063,7 @@ InitialSliceResult executeSessionFrameLoad(
     }
     result.particles = loadParticleSamples(*result.dataset,
         spec.particleSpecies, spec.particleFraction, spec.particleSeed,
-        cancellation);
+        cancellation, spec.particleAttribute);
     return result;
 }
 

@@ -83,9 +83,9 @@ std::string exceptionMessage(Function&& function)
 
 int main(int argc, char* argv[])
 {
-    if (argc != 3) {
+    if (argc != 4) {
         std::cerr << "usage: test_remote_session MATERIALIZED_PLOTFILE "
-                     "MATERIALIZED_MAPPED_PLOTFILE\n";
+                     "MATERIALIZED_MAPPED_PLOTFILE SOA_PARTICLE_PLOTFILE\n";
         return 2;
     }
     try {
@@ -123,6 +123,39 @@ int main(int argc, char* argv[])
         require(!dataset->supportsMappedGrid()
                 && !dataset->metadata().hasMappedGrid,
             "a plotfile without node positions claims a mapped grid remotely");
+
+        // Protocol 1.9: the catalog names the particle components, and a
+        // sample's attribute values equal the local session's.
+        {
+            auto soaRemote = amrvis::remote::RemoteDatasetSession::open(
+                connection, std::filesystem::path(argv[3]).string(),
+                16ULL * 1024ULL * 1024ULL);
+            amrvis::LocalDatasetSession soaLocal(
+                std::filesystem::path(argv[3]), amrvis::DatasetId{1004},
+                16ULL * 1024ULL * 1024ULL);
+            require(soaRemote->supportsParticleAttributes(),
+                "a current server does not offer particle attributes");
+            require(soaRemote->particleSpecies() == soaLocal.particleSpecies(),
+                "the remote particle catalog differs from the local one");
+            using Kind = amrvis::ParticleAttribute::Kind;
+            for (const auto attribute : {amrvis::ParticleAttribute{Kind::Real, 8},
+                     amrvis::ParticleAttribute{Kind::Int, 1}}) {
+                const auto remote = soaRemote->requestParticleSample(
+                    "particle0", 1.0, 5, {}, attribute);
+                const auto local = soaLocal.requestParticleSample(
+                    "particle0", 1.0, 5, {}, attribute);
+                require(remote.attribute == attribute
+                        && remote.points.size() == local.points.size()
+                        && !remote.points.empty(),
+                    "a remote attribute sample differs from the local one");
+                for (std::size_t i = 0; i < local.points.size(); ++i) {
+                    require(remote.points[i].id == local.points[i].id
+                            && remote.points[i].position == local.points[i].position
+                            && remote.points[i].value == local.points[i].value,
+                        "a remote particle's attribute differs from the local one");
+                }
+            }
+        }
 
         // Protocol 1.7: a mapped grid's node plane over the wire equals the
         // local session's, for each normal and for a sub-region at the

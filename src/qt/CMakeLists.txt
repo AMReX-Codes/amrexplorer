@@ -49,6 +49,7 @@ add_executable(amrexplorer_qt
     NumberFormat.hpp
     PaletteController.cpp
     PaletteController.hpp
+    ParticleColoring.hpp
     ParticleController.cpp
     ParticleController.hpp
     QtErrorText.hpp

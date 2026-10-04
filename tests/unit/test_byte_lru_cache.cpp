@@ -19,6 +19,29 @@ void require(bool condition, const char* message)
 
 } // namespace
 
+// Fail the map's key copy after the LRU node was successfully allocated.
+struct FailingKey {
+    int value = 0;
+    std::shared_ptr<int> copies;
+    FailingKey() = default;
+    FailingKey(int v, std::shared_ptr<int> count) : value(v), copies(std::move(count)) { }
+    FailingKey(const FailingKey& other) : value(other.value), copies(other.copies)
+    {
+        if (copies && --*copies == 0) {
+            throw std::bad_alloc();
+        }
+    }
+    FailingKey(FailingKey&&) = default;
+    FailingKey& operator=(FailingKey&&) = default;
+    bool operator==(const FailingKey& other) const { return value == other.value; }
+};
+struct FailingKeyHash {
+    std::size_t operator()(const FailingKey& key) const noexcept
+    {
+        return std::hash<int>{}(key.value);
+    }
+};
+
 int main()
 {
     amrvis::ByteLruCache<int, std::string> cache(100);
@@ -222,6 +245,89 @@ int main()
             "the cache exceeded its budget under concurrency");
         require(snapshot.hits + snapshot.misses > 0,
             "the stress test recorded no cache accesses");
+    }
+
+    {
+        auto budget = std::make_shared<amrvis::SharedCacheBudget>(100);
+        amrvis::ByteLruCache<int, std::string> blocks(1000);
+        amrvis::ByteLruCache<int, int> grids(1000);
+        blocks.setSharedBudget(budget);
+        grids.setSharedBudget(budget);
+        auto block = blocks.insertAndPin(1, std::make_shared<const std::string>("data"), 60);
+        require(budget->used() == 60, "shared charge missing");
+        bool rejected = false;
+        try {
+            [[maybe_unused]] auto grid = grids.insertAndPin(1, std::make_shared<const int>(3), 50);
+        } catch (const amrvis::CacheBudgetExceeded&) {
+            rejected = true;
+        }
+        require(rejected && budget->used() == 60, "cross-cache pinned limit bypassed");
+        block = {};
+        auto grid = grids.insertAndPin(1, std::make_shared<const int>(3), 50);
+        require(budget->used() == 50 && !blocks.findAndPin(1), "cross-cache reclaim failed");
+        auto escaped = grid.value();
+        grid = {};
+        grids.clearUnpinned();
+        require(budget->used() == 50, "escaped payload lost its charge");
+        escaped.reset();
+        require(budget->used() == 0, "escaped payload leaked its charge");
+        auto old = blocks.insertAndPin(2, std::make_shared<const std::string>("old"), 70);
+        old = {};
+        auto replacement = blocks.insertAndPin(3, std::make_shared<const std::string>("new"), 80);
+        require(budget->used() == 80 && !blocks.findAndPin(2),
+                "local shared-pressure eviction failed");
+        replacement = {};
+        blocks.clearUnpinned();
+        require(budget->used() == 0, "clear leaked a shared charge");
+        std::shared_ptr<const int> survivor;
+        {
+            amrvis::ByteLruCache<int, int> temporary(100);
+            temporary.setSharedBudget(budget);
+            auto handle = temporary.insertAndPin(1, std::make_shared<const int>(7), 100);
+            survivor = handle.value();
+        }
+        require(budget->used() == 100, "cache destruction released a live payload charge");
+        survivor.reset();
+        require(budget->used() == 0, "cache destruction leaked a charge");
+    }
+    {
+        auto budget = std::make_shared<amrvis::SharedCacheBudget>(100);
+        std::vector<std::thread> workers;
+        for (int index = 0; index < 4; ++index) {
+            workers.emplace_back([budget] {
+                amrvis::ByteLruCache<int, int> workerCache(100);
+                workerCache.setSharedBudget(budget);
+                for (int i = 0; i < 1000; ++i) {
+                    try {
+                        auto handle = workerCache.insertAndPin(i, std::make_shared<const int>(i), 30);
+                        require(budget->used() <= 100,
+                                "concurrent shared admission exceeded limit");
+                    } catch (const amrvis::CacheBudgetExceeded&) {
+                    }
+                }
+            });
+        }
+        for (auto& worker : workers) {
+            worker.join();
+        }
+        require(budget->used() == 0, "concurrent caches leaked shared bytes");
+    }
+
+    {
+        auto budget = std::make_shared<amrvis::SharedCacheBudget>(100);
+        amrvis::ByteLruCache<FailingKey, int, FailingKeyHash> failureCache(100);
+        failureCache.setSharedBudget(budget);
+        bool failed = false;
+        try {
+            [[maybe_unused]] auto value = failureCache.insertAndPin(
+                FailingKey(1, std::make_shared<int>(2)), std::make_shared<const int>(1), 100);
+        } catch (const std::bad_alloc&) {
+            failed = true;
+        }
+        require(failed && budget->used() == 0 && failureCache.metrics().pinnedBytes == 0,
+            "failed insertion leaked a shared reservation");
+        auto value = failureCache.insertAndPin(FailingKey(2, nullptr), std::make_shared<const int>(2), 100);
+        require(*value == 2 && budget->used() == 100, "failed insertion corrupted the cache");
     }
 
     return 0;

@@ -31,6 +31,7 @@ add_library(amrexplorer_remote
     Codec.hpp
     Connection.cpp
     Frame.cpp
+    MemoryLimit.cpp
     RemoteDatasetSession.cpp
     Server.cpp
     "${amrexplorer_wire_generated}"

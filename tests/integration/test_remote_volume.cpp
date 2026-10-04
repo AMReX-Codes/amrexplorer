@@ -118,6 +118,24 @@ int main(int argc, char* argv[])
         const auto remoteRequest = requestFor(*remote);
         auto localRequest = remoteRequest;
         localRequest.dataset = local->id();
+        // Both block and sampled-grid caches must participate in the same
+        // allowance. Retained grids compete with block data on the next read.
+        {
+            constexpr std::uint64_t sharedBytes = 16ULL * 1024ULL * 1024ULL;
+            auto sharedBudget = std::make_shared<amrvis::SharedCacheBudget>(sharedBytes);
+            auto sharedLocal = std::make_shared<amrvis::LocalDatasetSession>(
+                std::filesystem::path(argv[1]), amrvis::DatasetId{991}, sharedBytes);
+            sharedLocal->setSharedCacheBudget(sharedBudget);
+            static_cast<void>(sharedLocal->renderVolume(requestFor(*sharedLocal)));
+            const auto blocks = sharedLocal->cacheMetrics().residentBytes;
+            const auto grids = sharedLocal->volumeGridCacheMetrics().residentBytes;
+            require(grids > 0, "shared grid did not cache");
+            require(sharedBudget->used() == blocks + grids,
+                    "shared allowance did not charge both blocks and volume grids");
+            sharedLocal->close();
+            require(sharedBudget->used() == 0, "closing dataset leaked shared charges");
+        }
+
         const auto remoteFrame = remote->renderVolume(remoteRequest);
         const auto localFrame = local->renderVolume(localRequest);
         require(remoteFrame.width == 96 && remoteFrame.height == 80

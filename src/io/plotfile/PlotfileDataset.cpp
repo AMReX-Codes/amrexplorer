@@ -475,6 +475,10 @@ CacheMetrics PlotfileDataset::cacheMetrics() const
     return m_cache.metrics();
 }
 
+void PlotfileDataset::setSharedCacheBudget(std::shared_ptr<SharedCacheBudget> budget) {
+    m_cache.setSharedBudget(std::move(budget));
+}
+
 bool PlotfileDataset::setCacheBudget(std::uint64_t bytes)
 {
     if (m_mappedGrid) {

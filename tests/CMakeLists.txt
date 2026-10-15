@@ -199,6 +199,10 @@ if(TARGET amrexplorer_remote)
         RUN_SERIAL TRUE
         TIMEOUT 120)
 
+    add_executable(test_memory_limit unit/test_memory_limit.cpp)
+    target_link_libraries(test_memory_limit PRIVATE amrexplorer::remote amrexplorer::warnings)
+    add_test(NAME memory_limit COMMAND test_memory_limit)
+
     add_executable(test_remote_codec unit/test_remote_codec.cpp)
     target_include_directories(test_remote_codec PRIVATE
         "${PROJECT_SOURCE_DIR}/src/remote"

@@ -40,8 +40,8 @@ struct ServerOptions {
     // from. A grid is eight bytes per voxel.
     //
     // Each bounds one thing -- one grid, and one dataset's cache -- not the
-    // server's memory in total. The aggregate is these multiplied by
-    // maximumDatasets and maximumConnections, plus one transient grid per
+    // server's memory in total. Without totalCacheBytes, the aggregate is
+    // multiplied by maximumDatasets and maximumConnections, plus one transient grid per
     // request in flight, so an operator sizing a host has to do that
     // arithmetic rather than read either number as a ceiling.
     //
@@ -67,6 +67,10 @@ struct ServerOptions {
     // generates a fresh random token at construction; there is no way to
     // disable the check. See token().
     std::string sessionToken;
+    // Zero preserves client-selected per-dataset budgets. Nonzero enables
+    // automatic block sizing and a shared allowance across all block/grid
+    // caches and connections. This bounds cached payloads, not process RSS.
+    std::uint64_t totalCacheBytes = 0;
 };
 
 class Server {

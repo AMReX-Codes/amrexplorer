@@ -1,6 +1,7 @@
 #pragma once
 
 #include <amrexplorer/cache/CacheMetrics.hpp>
+#include <amrexplorer/cache/SharedCacheBudget.hpp>
 
 #include <cstdint>
 #include <functional>
@@ -111,6 +112,18 @@ public:
     {
     }
 
+    // Attach once, before the cache is published or populated.
+    void setSharedBudget(std::shared_ptr<SharedCacheBudget> budget) {
+        std::scoped_lock lock(m_state->mutex);
+        if (!m_state->entries.empty() || m_state->sharedBudget) {
+            throw std::logic_error("shared cache budget must be attached before use");
+        }
+        if (budget) {
+            budget->add(m_state);
+            m_state->sharedBudget = std::move(budget);
+        }
+    }
+
     [[nodiscard]] Handle findAndPin(const Key& key)
     {
         std::scoped_lock lock(m_state->mutex);
@@ -166,10 +179,51 @@ public:
         // If pinned entries alone already leave no room, the insert cannot
         // succeed regardless of eviction; fail before discarding unpinned data
         // that the doomed insert would otherwise evict for nothing.
-        if (m_state->metrics.pinnedBytes + bytes > m_state->metrics.budgetBytes) {
+        if (m_state->metrics.pinnedBytes > m_state->metrics.budgetBytes ||
+            bytes > m_state->metrics.budgetBytes - m_state->metrics.pinnedBytes) {
             throw CacheBudgetExceeded("cache budget is occupied by pinned entries");
         }
         evictFor(*m_state, bytes, doomed);
+
+        if (const auto& shared = m_state->sharedBudget) {
+            // Release evicted payloads before requesting their space again.
+            // In shared mode this occasionally frees memory under the local
+            // lock; cross-cache reclamation uses try_lock to avoid lock cycles.
+            doomed.clear();
+            bool reserved = shared->tryReserve(bytes);
+            if (!reserved) {
+                evictFor(*m_state, m_state->metrics.budgetBytes, doomed);
+                doomed.clear();
+                reserved = shared->reserveWithReclaim(bytes, m_state.get());
+            }
+            if (!reserved) {
+                throw CacheBudgetExceeded(
+                    "server cache budget is occupied by pinned or busy entries");
+            }
+            // Charge until the final payload reference goes away, including
+            // escaped value() references and handles surviving cache closure.
+            struct ChargedValue {
+                std::shared_ptr<SharedCacheBudget> budget;
+                std::uint64_t bytes;
+                std::shared_ptr<const Value> payload;
+                ~ChargedValue() {
+                    payload.reset();
+                    budget->release(bytes);
+                }
+            };
+            std::shared_ptr<ChargedValue> charged;
+            try {
+                charged = std::make_shared<ChargedValue>();
+            } catch (...) {
+                shared->release(bytes);
+                throw;
+            }
+            charged->budget = shared;
+            charged->bytes = bytes;
+            charged->payload = std::move(value);
+            const auto* payload = charged->payload.get();
+            value = std::shared_ptr<const Value>(std::move(charged), payload);
+        }
 
         // Publish first, account second. Both allocating steps -- the LRU node
         // and the map node -- happen before either byte counter moves, so a
@@ -253,12 +307,22 @@ private:
 
     using EntryMap = std::unordered_map<Key, Entry, Hash>;
 
-    struct State {
+    struct State : SharedCacheBudget::Participant {
         explicit State(std::uint64_t budgetBytes)
         {
             metrics.budgetBytes = budgetBytes;
         }
 
+        void reclaimUnpinned() override {
+            std::vector<std::shared_ptr<const Value>> doomed;
+            std::unique_lock lock(mutex, std::try_to_lock);
+            if (!lock.owns_lock()) {
+                return;
+            }
+            evictFor(*this, metrics.budgetBytes, doomed);
+        }
+
+        std::shared_ptr<SharedCacheBudget> sharedBudget;
         mutable std::mutex mutex;
         CacheMetrics metrics;
         std::list<Key> lru;
@@ -313,9 +377,9 @@ private:
         std::vector<std::shared_ptr<const Value>>& doomed)
     {
         auto it = state.lru.end();
-        while (it != state.lru.begin()
-            && state.metrics.residentBytes + incomingBytes
-                > state.metrics.budgetBytes) {
+        while (it != state.lru.begin() &&
+               (state.metrics.residentBytes > state.metrics.budgetBytes ||
+                incomingBytes > state.metrics.budgetBytes - state.metrics.residentBytes)) {
             const auto candidate = std::prev(it);
             const auto found = state.entries.find(*candidate);
             if (found != state.entries.end() && found->second.pinCount == 0) {

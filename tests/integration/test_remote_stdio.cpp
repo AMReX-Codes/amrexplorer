@@ -287,9 +287,8 @@ void inProcessOverSocketPair(const std::string& datasetPath)
 // The installed binary over pipes, as a wrapper script or a non-Linux sshd
 // would run it: distinct stdin and stdout, a ready line first, frames after,
 // exit 0 once the client hangs up.
-void subprocessOverPipes(
-    const std::string& datasetPath, const std::string& serverBinary)
-{
+void subprocessOverPipes(const std::string& datasetPath, const std::string& serverBinary,
+                         bool automaticCache = false) {
     using namespace amrvis::remote;
 
     int toServer[2] = {-1, -1};
@@ -304,6 +303,16 @@ void subprocessOverPipes(
         ::close(toServer[1]);
         ::close(fromServer[0]);
         ::close(fromServer[1]);
+        if (automaticCache) {
+            // Deterministic fallback on macOS; Linux may have a tighter
+            // cgroup limit, which the detector must still respect.
+            ::setenv("SLURM_MEM_PER_NODE", "1024", 1);
+            ::unsetenv("SLURM_MEM_PER_CPU");
+            ::execl(serverBinary.c_str(), serverBinary.c_str(), "--stdio",
+                    "--cache-memory-fraction", "0.5", "--threads", "2",
+                    static_cast<char*>(nullptr));
+            std::_Exit(127);
+        }
         ::execl(serverBinary.c_str(), serverBinary.c_str(), "--stdio",
             "--threads", "2", static_cast<char*>(nullptr));
         std::_Exit(127);
@@ -381,5 +390,6 @@ int main(int argc, char* argv[])
         std::filesystem::path(datasetPath).parent_path().c_str(), 1);
     inProcessOverSocketPair(datasetPath);
     subprocessOverPipes(datasetPath, argv[2]);
+    subprocessOverPipes(datasetPath, argv[2], true);
     return 0;
 }

@@ -7,7 +7,7 @@
 
 #include <amrexplorer/core/Geometry.hpp>
 #include <amrexplorer/core/Metadata.hpp>
-#include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/io/AmrDataset.hpp>
 
 #include <algorithm>
 #include <array>
@@ -28,7 +28,7 @@ namespace amrvis::detail {
 // (whose lookupBlockValue reads the payload) rejects a null one when built.
 struct LoadedBlock {
     IntBox validBox;
-    PlotfileDataset::BlockCache::Handle data;
+    AmrDataset::BlockCache::Handle data;
 };
 
 [[nodiscard]] inline bool intersects(

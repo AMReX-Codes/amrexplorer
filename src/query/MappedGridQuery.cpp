@@ -16,8 +16,8 @@
 
 namespace amrvis {
 
-MappedGridPlane queryMappedGridPlane(PlotfileDataset& data,
-    PlotfileDataset& grid, const MappedGridPlaneRequest& request,
+MappedGridPlane queryMappedGridPlane(AmrDataset& data,
+    AmrDataset& grid, const MappedGridPlaneRequest& request,
     StopToken cancellation)
 {
     const auto& metadata = data.metadata();

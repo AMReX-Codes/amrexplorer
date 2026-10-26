@@ -10,7 +10,7 @@
 
 namespace amrvis {
 
-class PlotfileDataset;
+class AmrDataset;
 
 inline constexpr int datasetPageMaxExtent = 512;
 
@@ -40,7 +40,7 @@ struct DatasetPage {
 };
 
 [[nodiscard]] DatasetPage extractDatasetPage(
-    PlotfileDataset& dataset, const DatasetPageRequest& request,
+    AmrDataset& dataset, const DatasetPageRequest& request,
     StopToken cancellation = {});
 
 } // namespace amrvis

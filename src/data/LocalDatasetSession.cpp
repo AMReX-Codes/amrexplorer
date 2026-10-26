@@ -106,7 +106,7 @@ std::size_t VolumeGridKeyHash::operator()(const VolumeGridKey& key) const noexce
 }
 
 LocalDatasetSession::LocalDatasetSession(
-    std::shared_ptr<PlotfileDataset> dataset)
+    std::shared_ptr<AmrDataset> dataset)
     : m_id(dataset ? dataset->id() : DatasetId{})
     , m_metadata(dataset ? dataset->metadata() : DatasetMetadata{})
     , m_metadataMetrics(
@@ -612,7 +612,7 @@ void LocalDatasetSession::close() noexcept
     }
 }
 
-std::shared_ptr<PlotfileDataset> LocalDatasetSession::requireDataset() const
+std::shared_ptr<AmrDataset> LocalDatasetSession::requireDataset() const
 {
     std::scoped_lock lock(m_mutex);
     if (!m_dataset) {

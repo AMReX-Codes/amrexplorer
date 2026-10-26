@@ -4,7 +4,7 @@
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/core/StopToken.hpp>
 #include <amrexplorer/core/Volume.hpp>
-#include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/io/AmrDataset.hpp>
 #include <amrexplorer/query/SliceQuery.hpp>
 
 #include <array>
@@ -40,7 +40,7 @@ struct VolumeQueryResult {
 
 class VolumeQuery {
 public:
-    explicit VolumeQuery(PlotfileDataset& dataset)
+    explicit VolumeQuery(AmrDataset& dataset)
         : m_dataset(dataset)
     {
     }
@@ -70,7 +70,7 @@ public:
         const VolumeSampleRequest& request, StopToken cancellation = {});
 
 private:
-    PlotfileDataset& m_dataset;
+    AmrDataset& m_dataset;
 };
 
 } // namespace amrvis

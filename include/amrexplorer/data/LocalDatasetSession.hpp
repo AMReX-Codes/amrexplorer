@@ -17,7 +17,7 @@
 
 namespace amrvis {
 
-class PlotfileDataset;
+class AmrDataset;
 
 // The sampled volume grids a local session keeps between renders (rotating
 // the camera re-casts a cached grid instead of re-reading the plotfile),
@@ -60,8 +60,8 @@ public:
     // `derivedFields` are passed straight to the dataset, which resolves them
     // against its stored field list and leaves out any that do not resolve,
     // reporting them through skippedDerivedFields() rather than failing the
-    // open (see PlotfileDataset).
-    explicit LocalDatasetSession(std::shared_ptr<PlotfileDataset> dataset);
+    // open (see AmrDataset).
+    explicit LocalDatasetSession(std::shared_ptr<AmrDataset> dataset);
     LocalDatasetSession(const std::filesystem::path& path, DatasetId id,
         std::uint64_t cacheBudgetBytes, StopToken cancellation = {},
         std::vector<DerivedFieldDefinition> derivedFields = {});
@@ -165,7 +165,7 @@ public:
     void close() noexcept override;
 
 private:
-    [[nodiscard]] std::shared_ptr<PlotfileDataset> requireDataset() const;
+    [[nodiscard]] std::shared_ptr<AmrDataset> requireDataset() const;
 
     DatasetId m_id;
     DatasetMetadata m_metadata;
@@ -176,7 +176,7 @@ private:
     std::vector<DerivedFieldSkip> m_skippedDerivedFields;
     std::vector<DerivedFieldDefinition> m_derivedFieldDefinitions;
     mutable std::mutex m_mutex;
-    std::shared_ptr<PlotfileDataset> m_dataset;
+    std::shared_ptr<AmrDataset> m_dataset;
     // File-scope ranges for a standalone FAB, by field. These are scanned out
     // of the payload rather than read from a statistic, and they never change,
     // so the scan happens once per field. Cached even when the answer is "no

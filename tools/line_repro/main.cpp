@@ -3,6 +3,7 @@
 // axes) and runs LineQuery under a watchdog so a hang is caught instead of
 // looping forever. Prints the geometry first (incl. |prob_lo|/cellSize, the
 // floating-point-cancellation danger ratio) so a stuck run still reports data.
+#include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/query/LineQuery.hpp>
 
 #include <algorithm>

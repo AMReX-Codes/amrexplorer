@@ -4,6 +4,7 @@
 // so the assertions compare a derived field's results against the same query
 // run on the fields it is computed from.
 #include <amrexplorer/data/LocalDatasetSession.hpp>
+#include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/query/LineQuery.hpp>
 #include <amrexplorer/query/SliceQuery.hpp>
 

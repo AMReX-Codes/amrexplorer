@@ -137,7 +137,7 @@ DerivedFieldInstallation installDerivedFields(DatasetMetadata& metadata,
     installation.programs.reserve(definitions.size());
     // Where the stored fields end, so a resolved input can be recognised as
     // derived (its id is storedCount + its program's index, which is how
-    // PlotfileDataset finds the program again), and the depth of each
+    // AmrDataset finds the program again), and the depth of each
     // installed program, for the chain bound below.
     const auto storedCount = metadata.fields.size();
     std::vector<std::size_t> depths;

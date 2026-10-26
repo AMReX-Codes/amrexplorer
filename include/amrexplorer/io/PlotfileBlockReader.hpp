@@ -65,7 +65,7 @@ public:
 // The number of samples a FAB box holds: the product of its extents,
 // overflow-checked, throwing BlockReadError on a non-positive extent or a
 // product that does not fit. Shared because the reader sizes a payload with it
-// and PlotfileDataset sizes a derived block with it, and the two must agree
+// and AmrDataset sizes a derived block with it, and the two must agree
 // about what a box holds.
 [[nodiscard]] std::uint64_t fabPointCount(const IntBox& box, int dimension);
 

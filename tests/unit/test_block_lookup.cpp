@@ -449,7 +449,7 @@ int main()
     // fill), and a missing payload are each refused there, so the per-hit
     // lookup carries no checks.
     {
-        amrvis::PlotfileDataset::BlockCache cache(1 << 20);
+        amrvis::AmrDataset::BlockCache cache(1 << 20);
         const auto pin = [&cache](int grid, const IntBox& box,
                              std::vector<double> values) {
             auto fab = std::make_shared<amrvis::FabBlock>();

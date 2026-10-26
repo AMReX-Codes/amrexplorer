@@ -2,7 +2,7 @@
 
 #include <amrexplorer/core/Metadata.hpp>
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
-#include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/io/AmrDataset.hpp>
 #include <amrexplorer/query/detail/BlockLookup.hpp>
 
 #include <algorithm>
@@ -15,7 +15,7 @@
 
 namespace amrvis {
 
-DatasetPage extractDatasetPage(PlotfileDataset& dataset,
+DatasetPage extractDatasetPage(AmrDataset& dataset,
     const DatasetPageRequest& request, StopToken cancellation)
 {
     const auto& metadata = dataset.metadata();

@@ -3,7 +3,7 @@
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/core/Result.hpp>
 #include <amrexplorer/core/StopToken.hpp>
-#include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/io/AmrDataset.hpp>
 
 #include <cstdint>
 #include <vector>
@@ -32,13 +32,13 @@ struct SliceQueryResult {
 
 class SliceQuery {
 public:
-    explicit SliceQuery(PlotfileDataset& dataset) : m_dataset(dataset) {}
+    explicit SliceQuery(AmrDataset& dataset) : m_dataset(dataset) {}
 
     [[nodiscard]] SliceQueryResult execute(
         const SliceRequest& request, StopToken cancellation = {});
 
 private:
-    PlotfileDataset& m_dataset;
+    AmrDataset& m_dataset;
 };
 
 } // namespace amrvis

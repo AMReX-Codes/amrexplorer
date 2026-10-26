@@ -1,9 +1,11 @@
 add_library(amrexplorer_io
+    AmrDataset.cpp
     FitsWriter.cpp
     plotfile/FabCatalog.cpp
     plotfile/PlotfileBlockReader.cpp
     plotfile/PlotfileDataset.cpp
     plotfile/PlotfileMetadataReader.cpp
+    plotfile/PlotfileSource.cpp
     plotfile/ParticleReader.cpp
     plotfile/StandaloneMetadataReader.cpp
 )

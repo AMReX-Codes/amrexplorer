@@ -1,3 +1,4 @@
+#include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/query/LineQuery.hpp>
 #include <amrexplorer/query/SliceQuery.hpp>
 

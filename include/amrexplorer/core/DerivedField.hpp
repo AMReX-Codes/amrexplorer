@@ -117,7 +117,7 @@ inline constexpr std::size_t maximumDerivedFieldCount = 256;
 
 // How long a chain of derived fields may depend on one another: a definition
 // reading a definition reading a definition. Evaluating a derived block
-// recurses once per link (PlotfileDataset::readDerivedBlock requests its
+// recurses once per link (AmrDataset::readDerivedBlock requests its
 // inputs, which may themselves be derived), and a definition list is as long
 // as its author cares to make it -- an imported one especially -- so without a
 // bound a long enough chain overflows the C++ stack of whichever worker

@@ -22,7 +22,8 @@ whole compute path can run — and be tested — headless.
   io            core         SessionValidation, ...)   render3d: VolumeRaycaster (data links it:
    |             |             |             |                    a session samples and renders)
   core         cache         core          remote      query:   SliceQuery, LineQuery, VolumeQuery, MappedGridQuery
-   |                          |                         io:      plotfile readers, FitsWriter
+   |                          |                         io:      AmrDataset over a BlockSource
+                                                                 (PlotfileSource), FitsWriter
 expression               expression                     core:    Geometry, Metadata, Request, Result,
                                                                  Volume, OrthoProjection, DerivedField
                                                         cache:   ByteLruCache
@@ -169,9 +170,10 @@ either should preserve its invariants.
 | A slice request end to end | `src/pipeline/SlicePipeline.cpp` → `src/query/SliceQuery.cpp` |
 | A volume frame end to end | `src/pipeline/VolumePipeline.cpp` → `src/data/LocalDatasetSession.cpp` (`renderVolume`) → `src/query/VolumeQuery.cpp` → `src/render3d/VolumeRaycaster.cpp`; the camera math both the view and the caster use is `include/amrexplorer/core/OrthoProjection.hpp` |
 | Plotfile reading / hardening | `src/io/plotfile/`, `include/amrexplorer/io/detail/FabHeaderParsing.hpp` |
+| Adding a file format | `include/amrexplorer/io/BlockSource.hpp` (what a format implements) → `src/io/AmrDataset.cpp` (the block cache, IO lock and derived fields every format shares); `PlotfileSource` is the reference implementation |
 | A mapped-grid slice end to end | `src/qt/MainWindowInteraction.cpp` (`updateMappedDemand`: the window on screen, at its device pixels) → `src/pipeline/SlicePipeline.cpp` (`applyMappedGrid`) → `src/query/MappedGridQuery.cpp` (node positions for the slice) → `src/render2d/MappedGridWarp.cpp` (quads rasterized into that window with coverage antialiasing, source index) → `src/qt/MappedGeometry.hpp` (where the window lands on the panel's physical canvas; with a companion, the layer's band of `PairLayout` in `src/qt/PairGeometry.hpp`) and `src/qt/PlaneMapping.hpp` (overlays and the probe map through it) |
 | The spherical R-Z view end to end | the same loop over `applyDisplayCoordinates` → `applySphericalWarp` in `src/pipeline/SlicePipeline.cpp` → `src/render2d/SphericalWarp.cpp` (`warpSphericalRZ`, the sector's cells subdivided along θ and rasterized through `include/amrexplorer/render2d/detail/QuadRasterizer.hpp`, the core `MappedGridWarp.cpp` shares) → `MappedGeometry.hpp`; the probe and overlays keep the analytic (R, Z) ↔ (r, θ) arms of `PlaneMapping.hpp` |
-| A derived field end to end | `include/amrexplorer/core/DerivedField.hpp` (resolve a definition against a dataset) → `src/io/plotfile/PlotfileDataset.cpp` (`readDerivedBlock`) → `src/expression/Expression.cpp`. Installed when the dataset is opened, so above `PlotfileDataset` a derived field is an ordinary `FieldId` |
+| A derived field end to end | `include/amrexplorer/core/DerivedField.hpp` (resolve a definition against a dataset) → `src/io/AmrDataset.cpp` (`readDerivedBlock`) → `src/expression/Expression.cpp`. Installed when the dataset is opened, so above `AmrDataset` a derived field is an ordinary `FieldId` |
 | The remote protocol | `src/remote/Codec.hpp`, `Frame.cpp` (Channel/Socket), `Server.cpp`, `Connection.cpp` |
 | Response validation | `src/data/SessionValidation.cpp` |
 | The GUI ↔ worker handoff | `src/qt/MainWindowSlice.cpp` (request/arrival), `SequenceController` |

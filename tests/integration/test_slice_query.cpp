@@ -1,6 +1,7 @@
 #include <amrexplorer/query/SliceQuery.hpp>
 
 #include <amrexplorer/io/PlotfileBlockReader.hpp>  // ReadCancelled
+#include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>  // readMultiFab
 
 #include <array>

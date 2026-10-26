@@ -4,6 +4,7 @@
 // budget, sub-regions and the grid geometry; a two-level fixture pins the
 // composition (fine over coarse, ExactLevel, a coarser maximum level).
 
+#include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/query/VolumeQuery.hpp>
 
 #include <array>

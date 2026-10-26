@@ -10,6 +10,7 @@
 // with imax = jmax = kmax = 4 on the domain [0,1]^3, dx = 0.25.
 
 #include <amrexplorer/data/LocalDatasetSession.hpp>
+#include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
 #include <amrexplorer/render2d/MappedGridWarp.hpp>
 

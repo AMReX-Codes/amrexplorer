@@ -3,7 +3,7 @@
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/core/Result.hpp>
 #include <amrexplorer/core/StopToken.hpp>
-#include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/io/AmrDataset.hpp>
 #include <amrexplorer/query/SliceQuery.hpp>
 
 #include <cstdint>
@@ -17,13 +17,13 @@ struct LineQueryResult {
 
 class LineQuery {
 public:
-    explicit LineQuery(PlotfileDataset& dataset) : m_dataset(dataset) {}
+    explicit LineQuery(AmrDataset& dataset) : m_dataset(dataset) {}
 
     [[nodiscard]] LineQueryResult execute(
         const LineRequest& request, StopToken cancellation = {});
 
 private:
-    PlotfileDataset& m_dataset;
+    AmrDataset& m_dataset;
 };
 
 } // namespace amrvis

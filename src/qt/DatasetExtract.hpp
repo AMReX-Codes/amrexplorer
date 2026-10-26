@@ -5,7 +5,7 @@
 // page-bounded contract.
 
 #include <amrexplorer/data/DatasetPage.hpp>
-#include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/io/AmrDataset.hpp>
 
 namespace amrvis::qt {
 
@@ -13,7 +13,7 @@ inline constexpr int datasetExtractMaxExtent = datasetPageMaxExtent;
 using DatasetLevelExtract = DatasetPage;
 
 [[nodiscard]] inline DatasetLevelExtract extractDatasetLevel(
-    PlotfileDataset& dataset, FieldId field, int levelIndex,
+    AmrDataset& dataset, FieldId field, int levelIndex,
     const RealBox& region, int normalAxis, double slicePosition,
     int maxExtent, StopToken cancellation = {})
 {

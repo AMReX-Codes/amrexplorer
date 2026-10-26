@@ -728,7 +728,7 @@ MainWindow::MainWindow(QWidget* parent)
                 linePlotWindow->close();
             }
             ++m_generation;
-            m_datasetPath = m_sequenceController->framePath(index);
+            m_datasetPath = m_sequenceController->frameLocation(index).path;
             m_animationPanel->setSequenceFrame(index);
         });
     connect(m_sequenceController, &SequenceController::loadActivityChanged,

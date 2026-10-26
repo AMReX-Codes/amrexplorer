@@ -451,7 +451,7 @@ int main(int argc, char* argv[])
             // Datasets are the connection's own: opened here, on this socket.
             writeFrame(socket,
                 codec::encode(2,
-                    codec::toWire(OpenDatasetData{path, 16ULL << 20, {}}), 7),
+                    codec::toWire(OpenDatasetData{path, 16ULL << 20, {}, std::nullopt}), 7),
                 defaultMaximumFrameBytes);
             response = readFrame(socket, defaultMaximumFrameBytes);
             require(response.has_value(), "the server closed on a 1.7 open");

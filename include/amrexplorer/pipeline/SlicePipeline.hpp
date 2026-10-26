@@ -7,6 +7,7 @@
 #include <amrexplorer/core/Result.hpp>
 #include <amrexplorer/core/StopToken.hpp>
 #include <amrexplorer/data/DatasetSession.hpp>
+#include <amrexplorer/io/DatasetLocation.hpp>
 #include <amrexplorer/io/ParticleReader.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 #include <amrexplorer/pipeline/DisplayMode.hpp>
@@ -414,7 +415,7 @@ void rewarpDisplayImage(SliceDisplayResult& result);
 // composite slice that exceeds it is retried at a lower maximum level, with
 // the fallback recorded on the result.
 [[nodiscard]] InitialSliceResult executeFrameLoad(
-    const std::filesystem::path& path, DatasetId datasetId,
+    const DatasetLocation& location, DatasetId datasetId,
     const FrameSliceSpec& spec, std::uint64_t cacheBudgetBytes,
     StopToken cancellation,
     std::optional<PlotfileMetadataResult> preparedMetadata = std::nullopt,

@@ -317,8 +317,14 @@ void checkConverted(const fb::DirectoryListingT& wire,
         const auto& entry = result.entries[index];
         const auto& wireEntry = *wire.entries[index];
         if (entry.name != wireEntry.name || entry.path != wireEntry.path
-            || entry.isPlotfile != wireEntry.is_plotfile) {
+            || entry.isPlotfile != wireEntry.is_plotfile
+            || entry.isOpenPmd != wireEntry.is_openpmd
+            || entry.isFile != wireEntry.is_file) {
             fail("DirectoryListing converter did not carry an entry over");
+        }
+        if ((entry.isFile && !entry.isOpenPmd)
+            || (entry.isPlotfile && entry.isOpenPmd)) {
+            fail("DirectoryListing converter accepted an entry of no single kind");
         }
         // The converter's own predicate, so its removal from fromWire shows
         // here, and the properties spelled out, so its weakening does too:

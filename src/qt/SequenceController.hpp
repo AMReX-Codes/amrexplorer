@@ -28,7 +28,7 @@ class SequenceController final : public QObject {
 
 public:
     using FrameLoader = std::function<InitialSliceResult(
-        const std::filesystem::path&, DatasetId, const FrameSliceSpec&,
+        const DatasetLocation&, DatasetId, const FrameSliceSpec&,
         StopToken)>;
 
     struct Hooks {
@@ -46,10 +46,11 @@ public:
 
     SequenceController(Hooks hooks, QObject* parent = nullptr);
 
-    // Takes ownership of a validated, sorted, deduplicated frame list and
-    // navigates to frame 0. The host performs validation and its own UI
-    // setup before calling.
-    void open(std::vector<std::filesystem::path> frames,
+    // Takes ownership of a validated, ordered, deduplicated frame list --
+    // plotfiles, or the iterations of an openPMD series -- and navigates to
+    // frame 0. The host performs validation and its own UI setup before
+    // calling.
+    void open(std::vector<DatasetLocation> frames,
         FrameLoader loader = {});
     // Drops the sequence and cancels the in-flight load and prefetch. The
     // host hides its sequence UI itself.
@@ -81,7 +82,7 @@ public:
     {
         return m_lastFrameSwitchMs;
     }
-    [[nodiscard]] const std::filesystem::path& framePath(int index) const
+    [[nodiscard]] const DatasetLocation& frameLocation(int index) const
     {
         return m_frames[static_cast<std::size_t>(index)];
     }
@@ -134,7 +135,7 @@ private:
     void discardPrefetch();
 
     Hooks m_hooks;
-    std::vector<std::filesystem::path> m_frames;
+    std::vector<DatasetLocation> m_frames;
     FrameLoader m_loader;
     int m_index = -1;
     bool m_inFlight = false;

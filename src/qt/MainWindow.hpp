@@ -135,6 +135,10 @@ public:
     // the plotfile directories, sorted by name; requires at least two valid
     // plotfiles. Opening a single dataset closes the sequence again.
     void openSequence(const std::vector<std::filesystem::path>& frames);
+    // Opens the iterations of a local openPMD series as a sequence, one frame
+    // per iteration: what an open does with a series that has more than one.
+    void openSeriesSequence(const std::filesystem::path& series,
+        const std::vector<std::uint64_t>& iterations);
     // Show a second 3-D plotfile beside the open one: the two must share a
     // plane (see PairGeometry). The companion is a secondary load onto the
     // installed dataset; it is closed again by closeCompanion, by any other
@@ -197,6 +201,14 @@ public:
     [[nodiscard]] bool activeViewSliceMatchesSessionForTest() const;
     // The sequence frame waiting in the prefetch slot, if any.
     [[nodiscard]] std::optional<int> prefetchedSequenceFrameForTest() const;
+    // The open sequence's frames: how many, and the openPMD iteration each
+    // names (none for a plotfile frame).
+    [[nodiscard]] int sequenceFrameCountForTest() const;
+    [[nodiscard]] std::optional<std::uint64_t> sequenceFrameIterationForTest(
+        int index) const;
+    // The level-0 step of the dataset on screen, or -1 when there is none:
+    // for an openPMD frame, the iteration it was read from.
+    [[nodiscard]] int displayedStepForTest() const;
     // The slot an idle frame-slider press-and-release lands in, which must not
     // restart a frame that is already on screen.
     void requestSequenceFrameForTest(int index) { goToSequenceFrame(index); }
@@ -1208,10 +1220,12 @@ private:
         const std::shared_ptr<remote::Connection>& connection,
         const std::string& remotePath,
         const std::vector<DerivedFieldDefinition>& derivedFields,
-        StopToken cancellation);
+        StopToken cancellation,
+        std::optional<std::uint64_t> iteration = std::nullopt);
+    // `frame` names a server path, and for an openPMD series an iteration.
     [[nodiscard]] static InitialSliceResult loadRemoteFrame(
         const std::shared_ptr<remote::Connection>& connection,
-        const std::string& remotePath, std::uint64_t connectionGeneration,
+        const DatasetLocation& frame, std::uint64_t connectionGeneration,
         const FrameSliceSpec& spec, StopToken cancellation);
     [[nodiscard]] bool derivedFieldsReachNextLoad() const;
     // Whether the session on screen was opened with the list the editor now
@@ -1643,6 +1657,9 @@ private:
     // Establishes the shared local/remote sequence invariants after the frame
     // list has been validated.
     void prepareSequence(std::size_t frameCount);
+    // The remote sequence itself, over the installed connection: plotfile
+    // paths (openRemoteSequence) or a series' iterations.
+    void openRemoteFrames(std::vector<DatasetLocation> frames);
     void closeSequence();
     void goToSequenceFrame(int index, bool forceRestart = false);
     void toggleSequencePlayback();

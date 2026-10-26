@@ -36,6 +36,12 @@ public:
         const noexcept = 0;
     // The format's own version string, as the UI's Format field shows it.
     [[nodiscard]] virtual const std::string& fileVersion() const noexcept = 0;
+    // Every iteration of the series this source is one iteration of, in
+    // order; empty for a format without iterations.
+    [[nodiscard]] virtual std::vector<std::uint64_t> seriesIterations() const
+    {
+        return {};
+    }
     [[nodiscard]] virtual const std::vector<ParticleSpeciesMetadata>&
     particleSpecies() const noexcept = 0;
     [[nodiscard]] virtual ParticleSample readParticleSample(

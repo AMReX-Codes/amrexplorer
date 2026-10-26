@@ -6,9 +6,11 @@
 #endif
 
 #include <amrexplorer/data/LocalDatasetSession.hpp>
+#include <amrexplorer/io/OpenPmd.hpp>
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -19,6 +21,7 @@
 #include <exception>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -227,15 +230,40 @@ bool isPlotfileDirectory(const std::filesystem::path& directory)
         && std::filesystem::is_directory(directory / "Level_0", error);
 }
 
-// The directory listing a browsing client sees: subdirectories only (files
-// are not navigable and plotfiles are directories), sorted by name, the
-// first maximumDirectoryEntries of them with the truncated flag set when
-// more exist. Path resolution is the dataset-open one, so what a user
-// browses to is what a typed path opens. The scan keeps only the names it
-// will return; the per-entry plotfile stats are spent on those. Entries that
-// cannot be stat'ed are skipped rather than failing the whole listing.
-RemoteDirectoryListing listServerDirectory(
-    const std::string& requestedPath, StopToken cancellation)
+// The name a series stored one file (or one .bp directory) per iteration
+// lists under: the name with its trailing iteration number replaced by %T,
+// which is also the pattern openPMD-api opens the whole series by
+// ("diag_000100.h5" -> "diag_%T.h5"). None for a name without one.
+std::optional<std::string> seriesPattern(const std::string& name)
+{
+    const auto extension = std::filesystem::path(name).extension().string();
+    const auto stem = std::string_view(name).substr(
+        0, name.size() - extension.size());
+    std::size_t digits = 0;
+    while (digits < stem.size()
+        && std::isdigit(static_cast<unsigned char>(
+            stem[stem.size() - 1 - digits]))) {
+        ++digits;
+    }
+    if (digits == 0) {
+        return std::nullopt;
+    }
+    return std::string(stem.substr(0, stem.size() - digits)) + "%T"
+        + extension;
+}
+
+// The directory listing a browsing client sees, sorted by name, the first
+// maximumDirectoryEntries entries with the truncated flag set when more
+// exist: subdirectories, and -- for a client that negotiated 1.10, from a
+// server that reads openPMD -- openPMD series. Files numbered as one series
+// (diag_000100.h5, diag_000200.h5, ...) are one entry, their %T pattern, so
+// a run's output is one line rather than thousands. Path resolution is the
+// dataset-open one, so what a user browses to is what a typed path opens.
+// The scan keeps only the names it will return; the per-entry plotfile
+// stats are spent on those. Entries that cannot be stat'ed are skipped
+// rather than failing the whole listing.
+RemoteDirectoryListing listServerDirectory(const std::string& requestedPath,
+    StopToken cancellation, bool listOpenPmd)
 {
     std::error_code error;
     auto path = std::filesystem::path(
@@ -255,10 +283,21 @@ RemoteDirectoryListing listServerDirectory(
     listing.path = path.string();
     listing.parentPath = path.has_parent_path() ? path.parent_path().string()
                                                 : listing.path;
-    // The smallest maximumDirectoryEntries names, kept as a max-heap while
-    // scanning, so memory and work are bounded by the cap rather than by the
-    // directory, and the scan stays cancellable at every entry.
+    // The smallest maximumDirectoryEntries directory names, kept as a
+    // max-heap while scanning, so memory and work are bounded by the cap
+    // rather than by the directory, and the scan stays cancellable at every
+    // entry.
     std::vector<std::string> names;
+    // The openPMD series by the name they list under, each with how many
+    // files (or directories) it gathers and the one name it has when that is
+    // just one. Bounded the same way: past the cap, a new series is left out
+    // and the listing marked truncated.
+    struct Series {
+        std::size_t members = 0;
+        std::string onlyName;
+        bool isFile = false;
+    };
+    std::map<std::string, Series> series;
     for (std::filesystem::directory_iterator entries(path,
              std::filesystem::directory_options::skip_permission_denied,
              error),
@@ -268,10 +307,27 @@ RemoteDirectoryListing listServerDirectory(
             throw ReadCancelled();
         }
         std::error_code entryError;
-        if (!entries->is_directory(entryError) || entryError) {
+        const bool directory = entries->is_directory(entryError) && !entryError;
+        auto name = entries->path().filename().string();
+        if (listOpenPmd && isOpenPmdSeriesPath(name)) {
+            const bool file = !directory
+                && entries->is_regular_file(entryError) && !entryError;
+            if (directory || file) {
+                const auto key = seriesPattern(name).value_or(name);
+                const auto found = series.find(key);
+                if (found != series.end()) {
+                    ++found->second.members;
+                } else if (series.size() == maximumDirectoryEntries) {
+                    listing.truncated = true;
+                } else {
+                    series.emplace(key, Series{1, name, file});
+                }
+            }
             continue;
         }
-        auto name = entries->path().filename().string();
+        if (!directory) {
+            continue;
+        }
         if (names.size() == maximumDirectoryEntries) {
             listing.truncated = true;
             if (!(name < names.front())) {
@@ -288,7 +344,7 @@ RemoteDirectoryListing listServerDirectory(
             "could not read " + listing.path + ": " + error.message());
     }
     std::sort_heap(names.begin(), names.end());
-    listing.entries.reserve(names.size());
+    listing.entries.reserve(names.size() + series.size());
     for (auto& name : names) {
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
@@ -296,7 +352,21 @@ RemoteDirectoryListing listServerDirectory(
         auto subdirectory = path / name;
         const bool plotfile = isPlotfileDirectory(subdirectory);
         listing.entries.push_back(
-            {std::move(name), subdirectory.string(), plotfile});
+            {std::move(name), subdirectory.string(), plotfile, false, false});
+    }
+    for (auto& [key, found] : series) {
+        // One member is listed as itself: a lone numbered file is just a
+        // file, and its own name opens exactly it.
+        auto name = found.members == 1 ? found.onlyName : key;
+        auto entryPath = (path / name).string();
+        listing.entries.push_back({std::move(name), std::move(entryPath),
+            false, true, found.isFile || found.members > 1});
+    }
+    std::sort(listing.entries.begin(), listing.entries.end(),
+        [](const auto& a, const auto& b) { return a.name < b.name; });
+    if (listing.entries.size() > maximumDirectoryEntries) {
+        listing.entries.resize(maximumDirectoryEntries);
+        listing.truncated = true;
     }
     return listing;
 }
@@ -619,6 +689,11 @@ private:
             throw RemoteError(ErrorCode::UnsupportedProtocol,
                 "derived fields require protocol 1.4");
         }
+        if (request->has_iteration
+            && m_selectedMinorVersion < seriesIterationMinorVersion) {
+            throw RemoteError(ErrorCode::UnsupportedProtocol,
+                "openPMD iterations require protocol 1.10");
+        }
         // Decoded before the reservation below: this is what bounds the
         // definition list a client sent (codec::fromWire), and an over-cap list
         // should be refused before anything is reserved or allocated for it.
@@ -645,8 +720,9 @@ private:
             // failing the open -- a list written for another dataset must not
             // make this one unopenable.
             dataset = std::make_shared<LocalDatasetSession>(
-                resolveDatasetPath(open.path), id, open.cacheBudgetBytes,
-                cancellation, std::move(open.derivedFields));
+                DatasetLocation{resolveDatasetPath(open.path), open.iteration},
+                id, open.cacheBudgetBytes, cancellation,
+                std::move(open.derivedFields));
             // The operator's number, on its own. The constructor has just
             // seeded the grid pool from cache_budget_bytes, which is the
             // client's *block* cache budget -- a different pool holding
@@ -675,6 +751,9 @@ private:
                 opened.catalog.fields.size() - dataset->storedFieldCount());
             opened.derivedFieldSkips = dataset->skippedDerivedFields();
             opened.mappedGridComponentNames = dataset->mappedGridComponentNames();
+            if (m_selectedMinorVersion >= seriesIterationMinorVersion) {
+                opened.seriesIterations = dataset->seriesIterations();
+            }
             opened.fileRangeAvailable.reserve(opened.catalog.fields.size());
             opened.levelRangeAvailable.reserve(opened.catalog.fields.size()
                 * opened.catalog.levels.size());
@@ -1065,7 +1144,9 @@ private:
                 "directory browsing requires protocol 1.1");
         }
         send(envelope.request_id,
-            codec::toWire(listServerDirectory(request->path, cancellation)));
+            codec::toWire(listServerDirectory(request->path, cancellation,
+                m_selectedMinorVersion >= seriesIterationMinorVersion
+                    && openPmdSupported())));
     }
 
     void setCacheBudget(const codec::NativeEnvelope& envelope)

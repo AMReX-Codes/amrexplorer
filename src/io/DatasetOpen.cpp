@@ -6,17 +6,21 @@
 
 namespace amrvis {
 
-std::shared_ptr<AmrDataset> openDataset(const std::filesystem::path& path,
+std::shared_ptr<AmrDataset> openDataset(const DatasetLocation& location,
     DatasetId id, std::uint64_t cacheBudgetBytes, StopToken cancellation,
     std::vector<DerivedFieldDefinition> derivedFields)
 {
-    if (isOpenPmdSeriesPath(path)) {
-        auto metadata = readOpenPmdMetadata(path, cancellation);
+    if (isOpenPmdSeriesPath(location.path)) {
+        auto metadata = readOpenPmdMetadata(location, cancellation);
         return std::make_shared<AmrDataset>(std::move(metadata.source), id,
             cacheBudgetBytes, std::move(derivedFields));
     }
-    return std::make_shared<PlotfileDataset>(
-        path, id, cacheBudgetBytes, cancellation, std::move(derivedFields));
+    if (location.iteration) {
+        throw MetadataReadError("'" + location.path.string()
+            + "' is not an openPMD series, so it has no iterations");
+    }
+    return std::make_shared<PlotfileDataset>(location.path, id,
+        cacheBudgetBytes, cancellation, std::move(derivedFields));
 }
 
 std::shared_ptr<AmrDataset> openDataset(std::filesystem::path dataRoot,

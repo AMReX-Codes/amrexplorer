@@ -19,11 +19,13 @@ public:
     // `derivedFields` are installed by the server on the session it opens
     // (protocol 1.4). A non-empty list against a peer that predates it is
     // refused here, before the connection is used, so the refusal cannot be
-    // mistaken for a peer that stopped speaking the protocol.
+    // mistaken for a peer that stopped speaking the protocol. An `iteration`
+    // (protocol 1.10) is refused the same way.
     [[nodiscard]] static std::shared_ptr<RemoteDatasetSession> open(
         std::shared_ptr<Connection> connection, const std::string& path,
         std::uint64_t cacheBudgetBytes, StopToken cancellation = {},
-        std::vector<DerivedFieldDefinition> derivedFields = {});
+        std::vector<DerivedFieldDefinition> derivedFields = {},
+        std::optional<std::uint64_t> iteration = std::nullopt);
 
     ~RemoteDatasetSession() override;
 
@@ -32,6 +34,10 @@ public:
     [[nodiscard]] const MetadataReadMetrics& metadataReadMetrics()
         const noexcept override;
     [[nodiscard]] const std::string& fileVersion() const noexcept override;
+    [[nodiscard]] std::vector<std::uint64_t> seriesIterations() const override
+    {
+        return m_seriesIterations;
+    }
     [[nodiscard]] const std::vector<ParticleSpeciesMetadata>& particleSpecies()
         const noexcept override;
     [[nodiscard]] std::optional<std::uint32_t> maximumResponseBytes()
@@ -89,10 +95,16 @@ public:
 
     [[nodiscard]] std::shared_ptr<Connection> connection() const noexcept;
     [[nodiscard]] const std::string& remotePath() const noexcept;
+    // The openPMD iteration this session was opened at, if one was named.
+    [[nodiscard]] std::optional<std::uint64_t> iteration() const noexcept
+    {
+        return m_iteration;
+    }
 
 private:
     RemoteDatasetSession(std::shared_ptr<Connection> connection,
-        std::string path, OpenedDataset opened,
+        std::string path, std::optional<std::uint64_t> iteration,
+        OpenedDataset opened,
         std::vector<DerivedFieldDefinition> derivedFields);
     void requireOpen() const;
 
@@ -110,6 +122,8 @@ private:
 
     std::shared_ptr<Connection> m_connection;
     std::string m_path;
+    std::optional<std::uint64_t> m_iteration;
+    std::vector<std::uint64_t> m_seriesIterations;
     DatasetId m_id;
     DatasetMetadata m_metadata;
     MetadataReadMetrics m_metadataMetrics;

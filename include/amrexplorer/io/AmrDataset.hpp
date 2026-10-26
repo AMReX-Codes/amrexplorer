@@ -58,6 +58,8 @@ public:
     [[nodiscard]] const DatasetMetadata& metadata() const noexcept;
     [[nodiscard]] const MetadataReadMetrics& metadataReadMetrics() const noexcept;
     [[nodiscard]] const std::string& fileVersion() const noexcept;
+    // The source's (BlockSource::seriesIterations).
+    [[nodiscard]] std::vector<std::uint64_t> seriesIterations() const;
     [[nodiscard]] DatasetId id() const noexcept;
     [[nodiscard]] const std::vector<ParticleSpeciesMetadata>& particleSpecies()
         const noexcept;

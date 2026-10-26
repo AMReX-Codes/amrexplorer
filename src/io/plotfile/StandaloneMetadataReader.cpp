@@ -118,7 +118,8 @@ PlotfileMetadataResult StandaloneMetadataReader::readFab(
         MetadataReadMetrics{1, headerBytes, 0, 0},
         "FAB",
         nullptr,
-        nullptr
+        nullptr,
+        {}
     };
 }
 
@@ -169,7 +170,7 @@ PlotfileMetadataResult makeSelectedFabMetadata(
     metadata->physicalDomain = sampleBounds(level, storedBox, source.dimension);
     validateStandalone(*metadata);
     return {std::shared_ptr<const DatasetMetadata>(std::move(metadata)),
-        MetadataReadMetrics{}, "FAB", nullptr, nullptr};
+        MetadataReadMetrics{}, "FAB", nullptr, nullptr, {}};
 }
 
 PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
@@ -228,8 +229,22 @@ PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
         MetadataReadMetrics{1, index.bytesRead, 0, 0},
         "VisMF-" + std::to_string(index.version),
         nullptr,
-        nullptr
+        nullptr,
+        {}
     };
+}
+
+PlotfileMetadataResult readDatasetMetadata(
+    const DatasetLocation& location, StopToken cancellation)
+{
+    if (isOpenPmdSeriesPath(location.path)) {
+        return readOpenPmdMetadata(location, cancellation);
+    }
+    if (location.iteration) {
+        throw MetadataReadError("'" + location.path.string()
+            + "' is not an openPMD series, so it has no iterations");
+    }
+    return readDatasetMetadata(location.path, cancellation);
 }
 
 PlotfileMetadataResult readDatasetMetadata(const std::filesystem::path& path,

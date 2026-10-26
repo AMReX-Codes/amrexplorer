@@ -5,6 +5,8 @@
 
 #include <amrexplorer/io/BlockSource.hpp>
 
+#include "OpenPmdSeries.hpp"
+
 #include <openPMD/openPMD.hpp>
 
 #include <array>
@@ -12,6 +14,7 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,17 +24,32 @@ namespace amrvis {
 // how meshes map onto levels and fields).
 class OpenPmdSource final : public BlockSource {
 public:
-    explicit OpenPmdSource(
-        const std::filesystem::path& path, StopToken cancellation = {});
+    // Reads `iteration`, or the series' first when there is none.
+    OpenPmdSource(const std::filesystem::path& path,
+        std::optional<std::uint64_t> iteration = std::nullopt,
+        StopToken cancellation = {});
+
+    // Every iteration in the series, in order.
+    [[nodiscard]] const std::vector<std::uint64_t>& iterations() const noexcept;
 
     [[nodiscard]] std::shared_ptr<const DatasetMetadata> metadata()
         const noexcept override;
     [[nodiscard]] const MetadataReadMetrics& metadataReadMetrics()
         const noexcept override;
     [[nodiscard]] const std::string& fileVersion() const noexcept override;
-    // Particles are not read yet (docs/openpmd-plan.md, phase 3).
+    [[nodiscard]] std::vector<std::uint64_t> seriesIterations() const override
+    {
+        return m_iterations;
+    }
+    // The iteration's particle species that have a position along every axis
+    // of its meshes. Each record component other than position,
+    // positionOffset and id is a component: NAME for a scalar record,
+    // NAME_KEY otherwise, integer-typed ones among the ints.
     [[nodiscard]] const std::vector<ParticleSpeciesMetadata>& particleSpecies()
         const noexcept override;
+    // Sampled by the `id` record (by index when there is none) with the
+    // plotfile reader's hash, so a smaller fraction is a subset of a larger
+    // one. Positions are position + positionOffset, in SI.
     [[nodiscard]] ParticleSample readParticleSample(const std::string& species,
         double fraction, std::uint64_t seed, StopToken cancellation,
         std::size_t maximumPoints,
@@ -55,13 +73,34 @@ public:
         double unitSI = 1.0;
     };
 
+    // One particle component: a record and its key in it.
+    struct ParticleRecord {
+        std::string record;
+        std::string key;
+    };
+    // Where a species' data is, beside the metadata it reports.
+    struct SpeciesLayout {
+        // By spatial axis: the position (and positionOffset) component.
+        std::array<std::string, 3> axisKey;
+        bool hasOffset = false;
+        bool hasId = false;
+        std::vector<ParticleRecord> reals;
+        std::vector<ParticleRecord> ints;
+    };
+
 private:
+    void readParticleLayouts(StopToken cancellation);
+
     // Every Series call goes through this: openPMD-api is not thread-safe,
     // and readBlock is called under the owning dataset's IO lock, which a
     // mapped grid or a second dataset on the same source would not share.
-    mutable std::mutex m_mutex;
-    mutable openPMD::Series m_series;
+    // Shared with every other source on the same series (OpenPmdSeries).
+    std::shared_ptr<OpenPmdSeries> m_open;
     std::uint64_t m_iteration = 0;
+    std::vector<std::uint64_t> m_iterations;
+    // By spatial axis: the label ("x", "y" or "z") the meshes give it, which
+    // is the key of the particle position component along it.
+    std::array<std::string, 3> m_axisLabels{"x", "y", "z"};
     std::filesystem::path m_path;
     // By level, then by field id.
     std::vector<std::vector<Component>> m_components;
@@ -69,6 +108,8 @@ private:
     MetadataReadMetrics m_metrics;
     std::string m_fileVersion;
     std::vector<ParticleSpeciesMetadata> m_particleSpecies;
+    // Parallel to m_particleSpecies.
+    std::vector<SpeciesLayout> m_speciesLayouts;
 };
 
 } // namespace amrvis

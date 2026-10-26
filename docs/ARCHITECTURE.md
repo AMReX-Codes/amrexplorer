@@ -112,6 +112,10 @@ implementations, interchangeable to everything above them:
   to a server that itself runs a `LocalDatasetSession`.
 
 The GUI opens one or the other and is otherwise agnostic to where the data lives.
+What it opens is a `DatasetLocation` (`include/amrexplorer/io/DatasetLocation.hpp`):
+a path, plus an iteration for an openPMD series. A sequence frame is one of these,
+so the iterations of a series play like a plotfile sequence (protocol 1.10 carries
+the iteration to a server).
 Capabilities a session may lack are asked for before they are offered
 (`supportsVolumeRendering`, `supportsVolumeOrientation`,
 `supportsDerivedFields`, `supportsMappedGrid`, and

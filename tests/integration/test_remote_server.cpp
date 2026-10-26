@@ -4,6 +4,7 @@
 #endif
 
 #include <amrexplorer/data/ViewData.hpp>
+#include <amrexplorer/io/OpenPmd.hpp>
 #include <amrexplorer/remote/Frame.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
@@ -20,6 +21,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <random>
 #include <ranges>
 #include <cerrno>
 #include <span>
@@ -313,7 +315,7 @@ int main(int argc, char* argv[])
     envelope = exchange(socket, 2,
         codec::toWire(OpenDatasetData{
             std::filesystem::path(argv[1]).string(),
-            16ULL * 1024ULL * 1024ULL, {}}),
+            16ULL * 1024ULL * 1024ULL, {}, std::nullopt}),
         hello.maximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::DatasetOpened,
         "server did not open the materialized plotfile");
@@ -345,7 +347,7 @@ int main(int argc, char* argv[])
             {{"product", "density * temperature"},
                 {"elsewhere", "nonesuch * 2"},
                 {"overlong", std::string(maximumExpressionBytes + 1, 'x')},
-                {"longreason", std::string(maximumExpressionBytes - 6, 'a')}}}),
+                {"longreason", std::string(maximumExpressionBytes - 6, 'a')}}, std::nullopt}),
         hello.maximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::DatasetOpened,
         "server refused an open carrying derived fields");
@@ -500,7 +502,7 @@ int main(int argc, char* argv[])
         envelope = exchange(socket, 14,
             codec::toWire(OpenDatasetData{
                 (std::filesystem::path(argv[1]) / "CraftedHeader").string(),
-                16ULL * 1024ULL * 1024ULL, {}}),
+                16ULL * 1024ULL * 1024ULL, {}, std::nullopt}),
             hello.maximumFrameBytes);
         require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse,
             "a crafted plotfile Header was opened as a dataset");
@@ -563,7 +565,7 @@ int main(int argc, char* argv[])
     envelope = exchange(socket, 5,
         codec::toWire(OpenDatasetData{
             std::filesystem::path(argv[1]).string(),
-            16ULL * 1024ULL * 1024ULL, {}}),
+            16ULL * 1024ULL * 1024ULL, {}, std::nullopt}),
         hello.maximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::DatasetOpened,
         "server rejected the second allowed dataset");
@@ -573,7 +575,7 @@ int main(int argc, char* argv[])
     envelope = exchange(socket, 6,
         codec::toWire(OpenDatasetData{
             std::filesystem::path(argv[1]).string(),
-            16ULL * 1024ULL * 1024ULL, {}}),
+            16ULL * 1024ULL * 1024ULL, {}, std::nullopt}),
         hello.maximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse
             && codec::fromWire(*envelope->payload.AsErrorResponse()).code
@@ -586,6 +588,74 @@ int main(int argc, char* argv[])
         hello.maximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::DatasetClosed,
         "server did not close the second dataset");
+
+    // Protocol 1.10 lists openPMD series in a directory -- recognized by
+    // name, so empty files stand in for them here -- and a series of one file
+    // per iteration as its %T pattern. Only to a peer that negotiated 1.10,
+    // and only from a server that reads openPMD: an older client takes every
+    // entry for a directory to enter.
+    {
+        const auto browse = std::filesystem::temp_directory_path()
+            / ("amrexplorer-browse-" + std::to_string(std::random_device{}()));
+        std::filesystem::create_directories(browse / "sub");
+        std::filesystem::create_directories(browse / "out.bp");
+        for (const auto* name : {"diag_000010.h5", "diag_000020.h5",
+                 "series.json", "notes.txt"}) {
+            std::ofstream(browse / name) << "";
+        }
+        const auto listAt = [&](std::uint16_t minor) {
+            auto socket = connectTo("127.0.0.1", server.port());
+            auto hello = helloRequest(server.token());
+            hello.maximumMinorVersion = minor;
+            auto envelope = exchange(
+                socket, 1, codec::toWire(hello), defaultMaximumFrameBytes, minor);
+            const auto info
+                = codec::fromWire(*envelope->payload.AsHelloResponse());
+            envelope = exchange(socket, 2,
+                codec::toWireDirectoryRequest(browse.string()),
+                info.maximumFrameBytes, minor);
+            require(codec::inspect(*envelope).payload
+                    == PayloadKind::DirectoryListing,
+                "a directory listing was refused");
+            return codec::fromWire(*envelope->payload.AsDirectoryListing());
+        };
+        const auto names = [](const RemoteDirectoryListing& listing) {
+            std::vector<std::string> result;
+            for (const auto& entry : listing.entries) {
+                result.push_back(entry.name);
+            }
+            return result;
+        };
+
+        const auto older = listAt(9);
+        require(names(older) == std::vector<std::string>{"out.bp", "sub"},
+            "a 1.9 peer was sent something other than directories");
+        require(std::none_of(older.entries.begin(), older.entries.end(),
+                    [](const auto& entry) { return entry.isOpenPmd; }),
+            "a 1.9 peer was sent openPMD flags");
+
+        const auto current = listAt(protocolMinorVersion);
+        if (amrvis::openPmdSupported()) {
+            require(names(current)
+                    == std::vector<std::string>{
+                        "diag_%T.h5", "out.bp", "series.json", "sub"},
+                "openPMD series are listed, files numbered as one series "
+                "as its pattern, and other files not at all");
+            const auto& pattern = current.entries[0];
+            require(pattern.isOpenPmd && pattern.isFile && !pattern.isPlotfile
+                    && pattern.path == (browse / "diag_%T.h5").string(),
+                "a file-per-iteration series is one openable pattern");
+            require(current.entries[1].isOpenPmd && !current.entries[1].isFile,
+                "an ADIOS2 directory is a series, not a directory to enter");
+            require(current.entries[2].isOpenPmd && current.entries[2].isFile,
+                "a single series file is listed as one");
+            require(!current.entries[3].isOpenPmd, "a plain directory is one");
+        } else {
+            require(names(current) == names(older),
+                "a server that cannot read openPMD lists none");
+        }
+        std::filesystem::remove_all(browse);
+    }
 
     // A peer that negotiated 1.3 asking for derived fields anyway. encode()
     // stamps the envelope's version but filters no fields, so the request can
@@ -610,7 +680,7 @@ int main(int argc, char* argv[])
             codec::toWire(OpenDatasetData{
                 std::filesystem::path(argv[1]).string(),
                 16ULL * 1024ULL * 1024ULL,
-                {{"product", "density * temperature"}}}),
+                {{"product", "density * temperature"}}, std::nullopt}),
             olderInfo.maximumFrameBytes, 3);
         require(codec::inspect(*olderEnvelope).payload
                 == PayloadKind::ErrorResponse,
@@ -626,7 +696,7 @@ int main(int argc, char* argv[])
         // allowed to send.
         {
             OpenDatasetData overCap{std::filesystem::path(argv[1]).string(),
-                16ULL * 1024ULL * 1024ULL, {}};
+                16ULL * 1024ULL * 1024ULL, {}, std::nullopt};
             for (std::size_t index = 0; index <= maximumDerivedFieldCount;
                 ++index) {
                 overCap.derivedFields.push_back(
@@ -647,7 +717,7 @@ int main(int argc, char* argv[])
         olderEnvelope = exchange(olderSocket, 3,
             codec::toWire(OpenDatasetData{
                 std::filesystem::path(argv[1]).string(),
-                16ULL * 1024ULL * 1024ULL, {}}),
+                16ULL * 1024ULL * 1024ULL, {}, std::nullopt}),
             olderInfo.maximumFrameBytes, 3);
         require(codec::inspect(*olderEnvelope).payload
                 == PayloadKind::DatasetOpened,
@@ -695,7 +765,7 @@ int main(int argc, char* argv[])
         currentEnvelope = exchange(currentSocket, 2,
             codec::toWire(OpenDatasetData{
                 std::filesystem::path(argv[1]).string(),
-                16ULL * 1024ULL * 1024ULL, {}}),
+                16ULL * 1024ULL * 1024ULL, {}, std::nullopt}),
             currentInfo.maximumFrameBytes);
         require(codec::inspect(*currentEnvelope).payload == PayloadKind::DatasetOpened,
             "the mapped-grid probe could not open its dataset");
@@ -763,7 +833,7 @@ int main(int argc, char* argv[])
         reply = exchange(valueSocket, 2, codec::toWire(OpenDatasetData{
             std::filesystem::path(argv[1]).string(), 16ULL * 1024ULL * 1024ULL,
             {{"precise", "1.0000000000000002"},
-                {"positive", "1e200"}, {"negative", "-1e200"}}}),
+                {"positive", "1e200"}, {"negative", "-1e200"}}, std::nullopt}),
             info.maximumFrameBytes, minor);
         require(codec::inspect(*reply).payload == PayloadKind::DatasetOpened,
             "server did not open the value-vector dataset");
@@ -847,7 +917,7 @@ int main(int argc, char* argv[])
         *envelope->payload.AsHelloResponse());
     const OpenDatasetData duplicateOpen{
         std::filesystem::path(argv[1]).string(),
-        16ULL * 1024ULL * 1024ULL, {}};
+        16ULL * 1024ULL * 1024ULL, {}, std::nullopt};
     envelope = exchange(duplicateSocket, 2, codec::toWire(duplicateOpen),
         duplicateHello.maximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::DatasetOpened,
@@ -1091,7 +1161,7 @@ int main(int argc, char* argv[])
         codec::toWire(OpenDatasetData{
             std::string(
                 handshakeFrameOptions.maximumHandshakeFrameBytes * 2U, 'x'),
-            16ULL * 1024ULL * 1024ULL, {}}),
+            16ULL * 1024ULL * 1024ULL, {}, std::nullopt}),
         defaultMaximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse,
         "server retained the handshake frame cap after authentication");
@@ -1115,7 +1185,7 @@ int main(int argc, char* argv[])
         envelope = exchange(boundedSocket, requestId,
             codec::toWire(OpenDatasetData{
                 std::filesystem::path(argv[1]).string(),
-                16ULL * 1024ULL * 1024ULL, {}}),
+                16ULL * 1024ULL * 1024ULL, {}, std::nullopt}),
             boundedOptions.maximumFrameBytes);
         require(codec::inspect(*envelope).payload
                     == PayloadKind::ErrorResponse
@@ -1180,7 +1250,7 @@ int main(int argc, char* argv[])
         envelope = exchange(slow, 2,
             codec::toWire(OpenDatasetData{
                 std::filesystem::path(argv[1]).string(),
-                16ULL * 1024ULL * 1024ULL, {}}),
+                16ULL * 1024ULL * 1024ULL, {}, std::nullopt}),
             defaultMaximumFrameBytes);
         require(codec::inspect(*envelope).payload
                 == PayloadKind::DatasetOpened,
@@ -1247,7 +1317,7 @@ int main(int argc, char* argv[])
         envelope = exchange(neighbour, 2,
             codec::toWire(OpenDatasetData{
                 std::filesystem::path(argv[1]).string(),
-                16ULL * 1024ULL * 1024ULL, {}}),
+                16ULL * 1024ULL * 1024ULL, {}, std::nullopt}),
             defaultMaximumFrameBytes);
         require(codec::inspect(*envelope).payload
                 == PayloadKind::DatasetOpened,

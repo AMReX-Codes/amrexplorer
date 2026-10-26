@@ -47,8 +47,9 @@ void workerExceptionDetailReachesTheHost(QCoreApplication& application)
     });
 
     controller.open(
-        std::vector<std::filesystem::path>{"frame-0", "frame-1"},
-        [](const std::filesystem::path&, amrvis::DatasetId,
+        std::vector<amrvis::DatasetLocation>{
+            std::filesystem::path{"frame-0"}, std::filesystem::path{"frame-1"}},
+        [](const amrvis::DatasetLocation&, amrvis::DatasetId,
             const amrvis::FrameSliceSpec&, amrvis::StopToken)
             -> amrvis::InitialSliceResult {
             throw std::runtime_error("specific frame-load failure");
@@ -110,8 +111,9 @@ void idleRequestForTheDisplayedFrameStartsNoSwitch(
     });
 
     controller.open(
-        std::vector<std::filesystem::path>{"frame-0", "frame-1"},
-        [](const std::filesystem::path&, amrvis::DatasetId,
+        std::vector<amrvis::DatasetLocation>{
+            std::filesystem::path{"frame-0"}, std::filesystem::path{"frame-1"}},
+        [](const amrvis::DatasetLocation&, amrvis::DatasetId,
             const amrvis::FrameSliceSpec&, amrvis::StopToken) {
             return amrvis::InitialSliceResult{};
         });

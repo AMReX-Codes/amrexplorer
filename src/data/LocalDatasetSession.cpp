@@ -112,6 +112,8 @@ LocalDatasetSession::LocalDatasetSession(
     , m_metadataMetrics(
           dataset ? dataset->metadataReadMetrics() : MetadataReadMetrics{})
     , m_fileVersion(dataset ? dataset->fileVersion() : std::string{})
+    , m_seriesIterations(dataset ? dataset->seriesIterations()
+                                 : std::vector<std::uint64_t>{})
     , m_particleSpecies(
           dataset ? dataset->particleSpecies()
                   : std::vector<ParticleSpeciesMetadata>{})
@@ -136,11 +138,11 @@ LocalDatasetSession::LocalDatasetSession(
         m_volumeGrids.setBudget(m_dataset->cacheMetrics().budgetBytes));
 }
 
-LocalDatasetSession::LocalDatasetSession(const std::filesystem::path& path,
+LocalDatasetSession::LocalDatasetSession(const DatasetLocation& location,
     DatasetId id, std::uint64_t cacheBudgetBytes, StopToken cancellation,
     std::vector<DerivedFieldDefinition> derivedFields)
     : LocalDatasetSession(openDataset(
-          path, id, cacheBudgetBytes, cancellation, std::move(derivedFields)))
+          location, id, cacheBudgetBytes, cancellation, std::move(derivedFields)))
 {
 }
 

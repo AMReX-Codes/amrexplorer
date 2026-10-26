@@ -8,6 +8,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace amrvis {
 
@@ -35,6 +36,10 @@ struct PlotfileMetadataResult {
     // series). A dataset built from this result reads through it; null for a
     // plotfile, MultiFab or FAB, which reopen their files per block.
     std::shared_ptr<const BlockSource> source;
+    // Every iteration of the openPMD series this metadata is one iteration
+    // of, in order; empty for a plotfile, MultiFab or FAB. More than one is
+    // what makes the GUI open the series as a sequence.
+    std::vector<std::uint64_t> iterations;
 };
 
 // Component names that identify the mapped-grid block among a Header's

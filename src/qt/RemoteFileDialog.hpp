@@ -24,11 +24,13 @@ class Connection;
 
 namespace amrvis::qt {
 
-// Browses the directories the remote server can see and picks plotfiles
-// there, over the window's live connection: each listing is one
-// Connection::listDirectory call on a worker thread, applied on the GUI
-// thread when it lands. Only directories are shown; the ones the server
-// recognizes as plotfiles are marked and are the only selectable entries.
+// Browses the directories the remote server can see and picks plotfiles or
+// openPMD series there, over the window's live connection: each listing is
+// one Connection::listDirectory call on a worker thread, applied on the GUI
+// thread when it lands. Directories are shown, and -- from a server that
+// reads openPMD (protocol 1.10) -- openPMD series, a series of one file per
+// iteration as its single %T entry. Plotfiles and series are marked and are
+// the only selectable entries; series only when opening one dataset.
 // The path box accepts anything a typed dataset path accepts ("~/run",
 // "run", "/scratch/run"); the server resolves it. Selection order is not
 // tracked: a sequence plays in the listing's name order, which is what

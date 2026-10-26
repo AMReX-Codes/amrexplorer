@@ -174,6 +174,25 @@ std::optional<int> MainWindow::prefetchedSequenceFrameForTest() const
     return m_sequenceController->prefetchedFrameForTest();
 }
 
+int MainWindow::sequenceFrameCountForTest() const
+{
+    return m_sequenceController->frameCount();
+}
+
+std::optional<std::uint64_t> MainWindow::sequenceFrameIterationForTest(
+    int index) const
+{
+    return m_sequenceController->frameLocation(index).iteration;
+}
+
+int MainWindow::displayedStepForTest() const
+{
+    const auto& session = primary().session;
+    return session && !session->metadata().levels.empty()
+        ? session->metadata().levels.front().step
+        : -1;
+}
+
 void MainWindow::requestVisibleSyncForTest()
 {
     syncVisibleRanges();

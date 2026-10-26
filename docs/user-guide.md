@@ -94,7 +94,16 @@ one. Instead of typing the path, **Browse...** connects (or reuses the
 session) and opens a browser of the remote machine's directories, starting at
 the last one browsed there or the home directory. Plotfiles are marked as
 such; double-click one to open it, or select several for a sequence, which
-plays in name order. Its path box accepts the same spellings as the CLI
+plays in name order. If the server is built with openPMD support, the
+browser also lists openPMD series, and double-clicking one opens it.
+- A series written as one file per iteration (`diag_000100.h5`,
+  `diag_000200.h5`, ...) is listed once, as `diag_%T.h5`. Opening it plays
+  every iteration as a sequence.
+- An ADIOS2 `.bp` series is a directory, but double-clicking it opens the
+  series instead of entering the directory.
+- The sequence browser shows openPMD series but doesn't let you select them,
+  because a series is already a sequence. Open it with **Open Remote
+  Plotfile...** instead. Its path box accepts the same spellings as the CLI
 (`~/run`, `run`, `/scratch/run`). Browsing needs a current
 `amrexplorer-server` on the remote machine; with an older one the browser
 reports that and the path can still be typed. Once open, a remote dataset is
@@ -252,7 +261,10 @@ series. An ADIOS2 `.bp` series is a directory, so choose any file inside it,
 or open the directory itself with **Open Plotfile Directory...** or on the
 command line.
 
-- Only the series' first iteration is shown.
+- A series with more than one iteration opens as a sequence with one frame
+  per iteration, so the Animation dock steps, plays, and exports it like a
+  plotfile sequence. This also works on a remote server, if the server is
+  built with openPMD support and is new enough (protocol 1.10).
 - A mesh named `E_lvl1` is level 1 of `E`, following WarpX. A vector mesh
   `E` appears as the fields `E_x`, `E_y`, and `E_z`.
 - Every field is shown cell-centered. Staggered and nodal components are
@@ -260,7 +272,12 @@ command line.
 - Values and coordinates are in SI units, with `unitSI` and `gridUnitSI`
   applied.
 - Only cartesian meshes stored in C order are shown.
-- Particles are not read yet.
+- A particle species is shown if it has a position along every axis of the
+  meshes. Particle positions are `position + positionOffset`. Particles are
+  sampled by their `id` record, so a smaller fraction always shows a subset
+  of a larger one. Every other record can color the particles: a scalar
+  record by its name, and a vector record's components as `NAME_x`,
+  `NAME_y`, and so on.
 - openPMD stores no per-block minimum and maximum, so the **File** and
   **Level** ranges are unavailable and the range starts on **Visible**.
 - HDF5 does not record which parts of a dataset were written. In an HDF5

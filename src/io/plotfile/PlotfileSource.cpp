@@ -65,7 +65,7 @@ PlotfileSource::PlotfileSource(std::filesystem::path dataRoot,
 PlotfileSource::PlotfileSource(MappedGridTag, std::filesystem::path root,
     std::shared_ptr<const DatasetMetadata> metadata)
     : m_root(std::move(root))
-    , m_metadataResult{std::move(metadata), {}, {}, {}, nullptr}
+    , m_metadataResult{std::move(metadata), {}, {}, {}, nullptr, {}}
     , m_blockReader(m_root, m_metadataResult.metadata)
 {
 }

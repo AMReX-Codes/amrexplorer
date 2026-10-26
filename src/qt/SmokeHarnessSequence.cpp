@@ -5,6 +5,8 @@
 
 #include <QTimer>
 
+#include <amrexplorer/remote/Server.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -56,6 +58,44 @@ bool centeredHalfWindowPreserved(const amrvis::qt::MainWindow& window)
 
 } // namespace
 
+namespace {
+
+// An openPMD series with three iterations (10, 20, 30), opened the way a
+// single dataset is. It must become a sequence of its iterations, show
+// iteration 10 first, and step to iteration 20 -- read on the server when
+// `remote`.
+void armSeriesChecks(amrvis::qt::MainWindow& window,
+    QApplication& application, bool remote)
+{
+    QObject::connect(&window,
+        &amrvis::qt::MainWindow::sequenceFrameDisplayed, &application,
+        [&window, &application, remote](int index) {
+            const auto expectedStep = index == 0 ? 10 : 20;
+            const bool valid = window.sequenceFrameCountForTest() == 3
+                && window.sequenceFrameIterationForTest(2) == 30
+                && window.displayedStepForTest() == expectedStep
+                && window.layerSessionIsRemoteForTest(0) == remote;
+            if (!valid) {
+                qCritical("series frame %d: %d frames, step %d", index,
+                    window.sequenceFrameCountForTest(),
+                    window.displayedStepForTest());
+                application.exit(1);
+            } else if (index == 0) {
+                window.stepSequence(1);
+            } else {
+                application.exit(0);
+            }
+        });
+    QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+        &application, [&application] { application.exit(1); });
+    QTimer::singleShot(15000, &application, [&application] {
+        qCritical("the series never stepped to its second iteration");
+        application.exit(1);
+    });
+}
+
+} // namespace
+
 Outcome dispatchSequence(Context& context)
 {
     // The branches read these names as main() declared them; binding them
@@ -65,7 +105,27 @@ Outcome dispatchSequence(Context& context)
     const int argc = context.argc;
     char** argv = context.argv;
 
-    if (argc == 4
+    if (argc == 3
+        && std::string_view(argv[1]) == "--openpmd-series-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        armSeriesChecks(window, application, false);
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--remote-openpmd-series-smoke-test") {
+        // The same series over the in-process loopback server: the open's
+        // reply lists the iterations (protocol 1.10), and each frame is
+        // opened on the server at its own iteration.
+        context.server = std::make_shared<amrvis::remote::Server>();
+        context.serverThread.emplace(
+            [server = context.server] { server->run(); });
+        armSeriesChecks(window, application, true);
+        QTimer::singleShot(0, &window,
+            [&window, remotePath = std::string(argv[2]),
+                server = context.server] {
+                attachSmokeServer(window, server);
+                window.openRemoteDataset(remotePath);
+            });
+    } else if (argc == 4
         && std::string_view(argv[1]) == "--sequence-noop-smoke-test") {
         // Two sequence annoyances at once, because both are observed on the
         // same frame step. On frame 0: hide the Animation dock, then ask for

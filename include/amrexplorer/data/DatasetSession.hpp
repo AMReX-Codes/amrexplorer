@@ -43,6 +43,13 @@ public:
     [[nodiscard]] virtual const MetadataReadMetrics& metadataReadMetrics()
         const noexcept = 0;
     [[nodiscard]] virtual const std::string& fileVersion() const noexcept = 0;
+    // Every iteration of the openPMD series this dataset is one iteration
+    // of, in order; empty for anything else, and from a remote peer older
+    // than protocol 1.10. More than one is a sequence to the GUI.
+    [[nodiscard]] virtual std::vector<std::uint64_t> seriesIterations() const
+    {
+        return {};
+    }
     [[nodiscard]] virtual const std::vector<ParticleSpeciesMetadata>&
     particleSpecies() const noexcept = 0;
     // The largest encoded response accepted by this session. Local sessions

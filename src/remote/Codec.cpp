@@ -711,6 +711,8 @@ fb::DirectoryListingT toWire(const RemoteDirectoryListing& value)
         converted->name = entry.name;
         converted->path = entry.path;
         converted->is_plotfile = entry.isPlotfile;
+        converted->is_openpmd = entry.isOpenPmd;
+        converted->is_file = entry.isFile;
         wire.entries.push_back(std::move(converted));
     }
     return wire;
@@ -735,8 +737,16 @@ RemoteDirectoryListing fromWire(const fb::DirectoryListingT& value)
             throw std::invalid_argument(
                 "directory listing contains an invalid entry");
         }
-        listing.entries.push_back(
-            {entry->name, entry->path, entry->is_plotfile});
+        // Only openPMD series are listed as files, and nothing is both a
+        // plotfile and a series: an entry claiming otherwise would be offered
+        // as something it is not.
+        if ((entry->is_file && !entry->is_openpmd)
+            || (entry->is_plotfile && entry->is_openpmd)) {
+            throw std::invalid_argument(
+                "directory listing contains an entry of no single kind");
+        }
+        listing.entries.push_back({entry->name, entry->path,
+            entry->is_plotfile, entry->is_openpmd, entry->is_file});
     }
     return listing;
 }
@@ -746,6 +756,8 @@ fb::OpenDatasetRequestT toWire(const OpenDatasetData& value)
     fb::OpenDatasetRequestT wire;
     wire.path = value.path;
     wire.cache_budget_bytes = value.cacheBudgetBytes;
+    wire.has_iteration = value.iteration.has_value();
+    wire.iteration = value.iteration.value_or(0);
     wire.derived_fields.reserve(value.derivedFields.size());
     for (const auto& definition : value.derivedFields) {
         auto entry = std::make_unique<fb::DerivedFieldDefinitionT>();
@@ -776,6 +788,9 @@ OpenDatasetData fromWire(const fb::OpenDatasetRequestT& value)
     OpenDatasetData result;
     result.path = value.path;
     result.cacheBudgetBytes = value.cache_budget_bytes;
+    if (value.has_iteration) {
+        result.iteration = value.iteration;
+    }
     result.derivedFields.reserve(value.derived_fields.size());
     for (const auto& entry : value.derived_fields) {
         if (!entry) {
@@ -853,6 +868,7 @@ fb::DatasetOpenedT toWire(const OpenedDataset& value)
     }
     wire.has_mapped_grid = value.catalog.hasMappedGrid;
     wire.mapped_grid_component_names = value.mappedGridComponentNames;
+    wire.series_iterations = value.seriesIterations;
     return wire;
 }
 
@@ -1000,6 +1016,20 @@ OpenedDataset fromWire(const fb::DatasetOpenedT& value)
             "wire catalog names mapped-grid components without a mapped grid");
     }
     result.mappedGridComponentNames = value.mapped_grid_component_names;
+    // A sequence is built from this list, one frame per entry, so it is
+    // bounded as the local reader bounds it, and ordered: a repeated or
+    // reordered iteration would show the same frame twice or play backwards.
+    if (value.series_iterations.size() > maximumSeriesIterations) {
+        throw std::invalid_argument(
+            "wire dataset catalog lists too many series iterations");
+    }
+    for (std::size_t i = 1; i < value.series_iterations.size(); ++i) {
+        if (value.series_iterations[i] <= value.series_iterations[i - 1]) {
+            throw std::invalid_argument(
+                "wire series iterations are not strictly increasing");
+        }
+    }
+    result.seriesIterations = value.series_iterations;
     if (result.derivedFieldCount > result.catalog.fields.size()) {
         throw std::invalid_argument(
             "wire dataset catalog claims more derived fields than it has "

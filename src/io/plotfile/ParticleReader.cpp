@@ -596,6 +596,12 @@ std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
     return result;
 }
 
+bool particleSelected(
+    std::uint64_t id, double fraction, std::uint64_t seed) noexcept
+{
+    return selected(id, fraction, seed);
+}
+
 ParticleSample readParticleSample(
     const std::filesystem::path& plotfile, const std::string& species,
     double fraction, std::uint64_t seed, StopToken cancellation,

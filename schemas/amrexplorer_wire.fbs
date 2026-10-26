@@ -116,6 +116,11 @@ table OpenDatasetRequest {
   // than dropping it: the field it cannot read would leave the client offering
   // an editor whose Apply silently did nothing.
   derived_fields:[DerivedFieldDefinition] (id: 2);
+  // Protocol 1.10. The openPMD iteration to open, when has_iteration; without
+  // one a series opens at its first iteration. A peer that negotiated less
+  // refuses has_iteration rather than opening some other iteration.
+  has_iteration:bool (id: 3);
+  iteration:ulong (id: 4);
 }
 
 table FieldCatalog {
@@ -188,6 +193,9 @@ table DatasetOpened {
   // the version gate, not these fields, decides what it may ask for.
   has_mapped_grid:bool (id: 18);
   mapped_grid_component_names:[string] (id: 19);
+  // Protocol 1.10. Every iteration of the openPMD series opened, in strictly
+  // increasing order; empty for a plotfile.
+  series_iterations:[ulong] (id: 20);
 }
 
 table CloseDatasetRequest {
@@ -381,6 +389,11 @@ table DirectoryEntry {
   name:string (id: 0);
   is_plotfile:bool (id: 1);
   path:string (id: 2);
+  // Protocol 1.10, sent only to a peer that negotiated it: an openPMD series,
+  // and whether it is a file (or a %T pattern of files) rather than a
+  // directory. A file entry is always an openPMD series.
+  is_openpmd:bool (id: 3);
+  is_file:bool (id: 4);
 }
 
 table DirectoryListing {

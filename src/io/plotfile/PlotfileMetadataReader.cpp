@@ -805,7 +805,8 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
         metrics,
         fileVersion,
         std::move(mappedGrid),
-        nullptr
+        nullptr,
+        {}
     };
 }
 

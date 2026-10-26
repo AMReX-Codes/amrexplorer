@@ -40,19 +40,21 @@ bool openPmdSupported() noexcept
 }
 
 PlotfileMetadataResult readOpenPmdMetadata(
-    const std::filesystem::path& path, StopToken cancellation)
+    const DatasetLocation& location, StopToken cancellation)
 {
 #if AMREXPLORER_HAS_OPENPMD
-    auto source = std::make_shared<const OpenPmdSource>(path, cancellation);
+    auto source = std::make_shared<const OpenPmdSource>(
+        location.path, location.iteration, cancellation);
     PlotfileMetadataResult result;
     result.metadata = source->metadata();
     result.metrics = source->metadataReadMetrics();
     result.fileVersion = source->fileVersion();
+    result.iterations = source->iterations();
     result.source = std::move(source);
     return result;
 #else
     static_cast<void>(cancellation);
-    throw MetadataReadError("'" + path.string()
+    throw MetadataReadError("'" + location.path.string()
         + "' is an openPMD series, which this build cannot read "
           "(configure with -DAMREXPLORER_ENABLE_OPENPMD=ON)");
 #endif

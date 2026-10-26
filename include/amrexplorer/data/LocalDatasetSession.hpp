@@ -3,6 +3,7 @@
 #include <amrexplorer/cache/ByteLruCache.hpp>
 #include <amrexplorer/core/DerivedField.hpp>
 #include <amrexplorer/data/DatasetSession.hpp>
+#include <amrexplorer/io/DatasetLocation.hpp>
 
 #include <array>
 #include <cstddef>
@@ -62,7 +63,9 @@ public:
     // reporting them through skippedDerivedFields() rather than failing the
     // open (see AmrDataset).
     explicit LocalDatasetSession(std::shared_ptr<AmrDataset> dataset);
-    LocalDatasetSession(const std::filesystem::path& path, DatasetId id,
+    // Opens `location`: a plotfile, MultiFab or FAB, or one iteration of an
+    // openPMD series.
+    LocalDatasetSession(const DatasetLocation& location, DatasetId id,
         std::uint64_t cacheBudgetBytes, StopToken cancellation = {},
         std::vector<DerivedFieldDefinition> derivedFields = {});
     LocalDatasetSession(std::filesystem::path dataRoot, DatasetId id,
@@ -75,6 +78,10 @@ public:
     [[nodiscard]] const MetadataReadMetrics& metadataReadMetrics()
         const noexcept override;
     [[nodiscard]] const std::string& fileVersion() const noexcept override;
+    [[nodiscard]] std::vector<std::uint64_t> seriesIterations() const override
+    {
+        return m_seriesIterations;
+    }
     [[nodiscard]] const std::vector<ParticleSpeciesMetadata>& particleSpecies()
         const noexcept override;
 
@@ -171,6 +178,7 @@ private:
     DatasetMetadata m_metadata;
     MetadataReadMetrics m_metadataMetrics;
     std::string m_fileVersion;
+    std::vector<std::uint64_t> m_seriesIterations;
     std::vector<ParticleSpeciesMetadata> m_particleSpecies;
     std::size_t m_storedFieldCount = 0;
     std::vector<DerivedFieldSkip> m_skippedDerivedFields;

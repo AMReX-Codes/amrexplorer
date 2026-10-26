@@ -147,15 +147,20 @@ int main()
     }
 
     RemoteDirectoryListing listing{"/scratch/run", "/scratch",
-        {{"plt00010", "/scratch/run/plt00010", true},
-            {"inputs", "/scratch/run/inputs", false}},
+        {{"plt00010", "/scratch/run/plt00010", true, false, false},
+            {"diag_%T.h5", "/scratch/run/diag_%T.h5", false, true, true},
+            {"inputs", "/scratch/run/inputs", false, false, false}},
         true};
     const auto decodedListing = codec::fromWire(codec::toWire(listing));
     require(decodedListing.path == listing.path
             && decodedListing.parentPath == listing.parentPath
-            && decodedListing.truncated && decodedListing.entries.size() == 2
+            && decodedListing.truncated && decodedListing.entries.size() == 3
             && decodedListing.entries.front().isPlotfile
+            && decodedListing.entries[1].isOpenPmd
+            && decodedListing.entries[1].isFile
+            && !decodedListing.entries[1].isPlotfile
             && !decodedListing.entries.back().isPlotfile
+            && !decodedListing.entries.back().isOpenPmd
             && decodedListing.entries.front().path
                 == listing.entries.front().path,
         "directory listing did not round-trip");

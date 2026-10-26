@@ -3,6 +3,7 @@
 #include <amrexplorer/cache/ByteLruCache.hpp>
 #include <amrexplorer/data/SessionValidation.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 #include <utility>
@@ -48,7 +49,8 @@ decltype(auto) refusingInvalidResponses(
 std::shared_ptr<RemoteDatasetSession> RemoteDatasetSession::open(
     std::shared_ptr<Connection> connection, const std::string& path,
     std::uint64_t cacheBudgetBytes, StopToken cancellation,
-    std::vector<DerivedFieldDefinition> derivedFields)
+    std::vector<DerivedFieldDefinition> derivedFields,
+    std::optional<std::uint64_t> iteration)
 {
     if (!connection) {
         throw std::invalid_argument(
@@ -61,11 +63,23 @@ std::shared_ptr<RemoteDatasetSession> RemoteDatasetSession::open(
     if (!derivedFields.empty() && !connection->supportsDerivedFields()) {
         throw std::runtime_error(derivedFieldsUnsupportedMessage);
     }
+    if (iteration && !connection->supportsSeriesIterations()) {
+        throw std::runtime_error(seriesIterationsUnsupportedMessage);
+    }
     // The catalog is validated while it is decoded, so an impossible one throws
     // in here rather than at a later call.
     auto opened = refusingInvalidResponses(*connection, [&] {
         auto answer = connection->openDataset(
-            path, cacheBudgetBytes, cancellation, derivedFields);
+            path, cacheBudgetBytes, cancellation, derivedFields, iteration);
+        // A server that opened the iteration asked for lists it; one that
+        // does not has opened something else.
+        if (iteration
+            && std::find(answer.seriesIterations.begin(),
+                   answer.seriesIterations.end(), *iteration)
+                == answer.seriesIterations.end()) {
+            throw std::invalid_argument(
+                "server opened a series that lacks the requested iteration");
+        }
         // What the decoder could not check: it does not know how many
         // definitions were sent. A reply that disagrees with the request is a
         // peer that stopped speaking the protocol, so it belongs in here.
@@ -78,15 +92,18 @@ std::shared_ptr<RemoteDatasetSession> RemoteDatasetSession::open(
         return answer;
     });
     return std::shared_ptr<RemoteDatasetSession>(
-        new RemoteDatasetSession(std::move(connection), path,
+        new RemoteDatasetSession(std::move(connection), path, iteration,
             std::move(opened), std::move(derivedFields)));
 }
 
 RemoteDatasetSession::RemoteDatasetSession(
     std::shared_ptr<Connection> connection, std::string path,
-    OpenedDataset opened, std::vector<DerivedFieldDefinition> derivedFields)
+    std::optional<std::uint64_t> iteration, OpenedDataset opened,
+    std::vector<DerivedFieldDefinition> derivedFields)
     : m_connection(std::move(connection))
     , m_path(std::move(path))
+    , m_iteration(iteration)
+    , m_seriesIterations(std::move(opened.seriesIterations))
     , m_id(opened.id)
     , m_metadata(std::move(opened.catalog))
     , m_metadataMetrics(opened.metadataMetrics)

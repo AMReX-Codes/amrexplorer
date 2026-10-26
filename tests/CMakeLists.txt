@@ -553,6 +553,18 @@ if(AMREXPLORER_ENABLE_OPENPMD)
             openPMD::openPMD
     )
     add_test(NAME openpmd_reader COMMAND test_openpmd_reader)
+    if(AMREXPLORER_ENABLE_REMOTE)
+        add_executable(test_openpmd_remote integration/test_openpmd_remote.cpp)
+        target_link_libraries(test_openpmd_remote
+            PRIVATE
+                amrexplorer::data
+                amrexplorer::remote
+                amrexplorer::warnings
+                openPMD::openPMD
+                Threads::Threads
+        )
+        add_test(NAME openpmd_remote COMMAND test_openpmd_remote)
+    endif()
 endif()
 
 add_executable(test_volume_query integration/test_volume_query.cpp)
@@ -2270,6 +2282,30 @@ if(TARGET amrexplorer_qt)
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
         )
         set_tests_properties(qt_openpmd_open PROPERTIES TIMEOUT 30)
+        add_test(
+            NAME qt_openpmd_series
+            COMMAND "${CMAKE_COMMAND}"
+                "-DMATERIALIZER=$<TARGET_FILE:test_openpmd_reader>"
+                "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+                "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_openpmd_series"
+                -DMODE=openpmd-series
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+        )
+        set_tests_properties(qt_openpmd_series PROPERTIES TIMEOUT 30)
+        if(AMREXPLORER_ENABLE_REMOTE)
+            add_test(
+                NAME qt_remote_openpmd_series
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DMATERIALIZER=$<TARGET_FILE:test_openpmd_reader>"
+                    "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+                    "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}"
+                    "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_openpmd_series"
+                    -DMODE=remote-openpmd-series
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+            )
+            set_tests_properties(qt_remote_openpmd_series PROPERTIES TIMEOUT 30)
+        endif()
     endif()
     add_test(
         NAME qt_multifab_non_finite

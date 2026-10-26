@@ -153,6 +153,11 @@ either should preserve its invariants.
    bounded by real file evidence (not a claimed count), path-containment checks on
    any metadata-derived path, and every geometry offset overflow-checked.
    `validateMetadata` (`src/core`) is the final gate every reader runs.
+   openPMD series are read through openPMD-api (`src/io/openpmd`), and the
+   HDF5 and ADIOS2 parsers underneath it are not hardened against crafted
+   files the way `src/io/plotfile` is. `OpenPmdSource` bounds the counts and
+   extents it accepts and runs `validateMetadata`, but it cannot protect
+   against a fault inside those libraries.
 2. **A malicious remote peer** — `src/remote/Codec` verifies the FlatBuffers wire
    and re-runs `validateMetadata` on any received catalog; `Server` bounds every
    request before allocating and authenticates with a per-session token; and

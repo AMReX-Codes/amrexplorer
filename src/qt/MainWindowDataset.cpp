@@ -376,6 +376,26 @@ void MainWindow::chooseStandaloneDataset(const QString& caption, bool rawFab)
     }
 }
 
+void MainWindow::chooseOpenPmdSeries()
+{
+    const auto settings = makeSettings();
+    const auto filename = QFileDialog::getOpenFileName(this,
+        tr("Open openPMD series"),
+        settings.value(QStringLiteral("lastOpenDirectory")).toString(),
+        tr("openPMD series (*.h5 *.bp *.bp4 *.bp5 *.json *.toml);;"
+           "All files (*)"));
+    if (filename.isEmpty()) {
+        return;
+    }
+    // An ADIOS2 series is a directory (diags.bp/) that a file dialog can only
+    // descend into, so a file chosen inside one opens the series holding it.
+    auto path = std::filesystem::path(filename.toStdString());
+    if (!isOpenPmdSeriesPath(path) && isOpenPmdSeriesPath(path.parent_path())) {
+        path = path.parent_path();
+    }
+    openDataset(path);
+}
+
 void MainWindow::exportImage()
 {
     auto* view = m_activeView != nullptr ? m_activeView->view : nullptr;

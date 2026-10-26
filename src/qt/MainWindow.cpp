@@ -1991,6 +1991,14 @@ void MainWindow::createMenus()
             chooseStandaloneDataset(tr("Open AMReX MultiFab header"), false);
         });
 
+    QAction* openOpenPmdAction = nullptr;
+    if (openPmdSupported()) {
+        openOpenPmdAction = new QAction(tr("Open openPM&D Series..."), this);
+        openOpenPmdAction->setObjectName(QStringLiteral("openOpenPmdAction"));
+        connect(openOpenPmdAction, &QAction::triggered, this,
+            [this] { chooseOpenPmdSeries(); });
+    }
+
     auto* paletteMenu = m_paletteController->createMenu(this);
 
     auto* exportAction = new QAction(tr("&Export Image..."), this);
@@ -2026,6 +2034,9 @@ void MainWindow::createMenus()
     fileMenu->addSeparator();
     fileMenu->addAction(openFabAction);
     fileMenu->addAction(openMultiFabAction);
+    if (openOpenPmdAction != nullptr) {
+        fileMenu->addAction(openOpenPmdAction);
+    }
     fileMenu->addSeparator();
     fileMenu->addAction(exportAction);
     fileMenu->addAction(m_exportAnimationAction);

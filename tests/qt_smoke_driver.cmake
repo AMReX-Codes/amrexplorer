@@ -40,7 +40,7 @@
 #                 slice-planes | panel-layout | axis-scale-settings |
 #                 spherical-scale-report |
 #                 fixed-scale-centre | fab-overlap-failure |
-#                 fab-direct-open-failure
+#                 fab-direct-open-failure | openpmd
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
         message(FATAL_ERROR "qt_smoke_driver.cmake requires -D${argument}=...")
@@ -88,6 +88,12 @@ elseif(MODE STREQUAL "navigation")
 elseif(MODE STREQUAL "adaptive-precision")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --adaptive-precision-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "openpmd")
+    # MATERIALIZER is test_openpmd_reader, which writes its AMR series; the
+    # window must open it and fall back to the Visible range (openPMD carries
+    # no per-block statistics).
+    run_or_die("${MATERIALIZER}" --write-fixture "${WORK}/amr.json")
+    run_or_die("${AMREXPLORER_QT}" --missing-range-smoke-test "${WORK}/amr.json")
 elseif(MODE STREQUAL "menu-shortcuts")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --menu-shortcuts-smoke-test "${WORK}/plt")

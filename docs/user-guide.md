@@ -244,6 +244,30 @@ Cell-centered and nodal index types are honored independently in each
 direction, so coordinates, slice positions, probing, and panning follow the
 sample locations recorded by the FAB or MultiFab.
 
+## openPMD series
+
+Builds configured with openPMD support (see [building.md](building.md)) add
+**File > Open openPMD Series...**, for `.h5`, `.bp`, `.json`, and `.toml`
+series. An ADIOS2 `.bp` series is a directory, so choose any file inside it,
+or open the directory itself with **Open Plotfile Directory...** or on the
+command line.
+
+- Only the series' first iteration is shown.
+- A mesh named `E_lvl1` is level 1 of `E`, following WarpX. A vector mesh
+  `E` appears as the fields `E_x`, `E_y`, and `E_z`.
+- Every field is shown cell-centered. Staggered and nodal components are
+  interpolated linearly to the cell centers when they are read.
+- Values and coordinates are in SI units, with `unitSI` and `gridUnitSI`
+  applied.
+- Only cartesian meshes stored in C order are shown.
+- Particles are not read yet.
+- openPMD stores no per-block minimum and maximum, so the **File** and
+  **Level** ranges are unavailable and the range starts on **Visible**.
+- HDF5 does not record which parts of a dataset were written. In an HDF5
+  series, a refined level therefore appears to cover the whole domain, with
+  the file's fill value wherever nothing was written. ADIOS2 and JSON series
+  record their written regions, so refined levels cover only those.
+
 ## A basic 2-D workflow
 
 1. Open a plotfile and choose a field from the **Field** control or

@@ -604,20 +604,20 @@ int main(int argc, char* argv[])
             std::ofstream(browse / name) << "";
         }
         const auto listAt = [&](std::uint16_t minor) {
-            auto socket = connectTo("127.0.0.1", server.port());
-            auto hello = helloRequest(server.token());
-            hello.maximumMinorVersion = minor;
-            auto envelope = exchange(
-                socket, 1, codec::toWire(hello), defaultMaximumFrameBytes, minor);
+            auto peer = connectTo("127.0.0.1", server.port());
+            auto peerHello = helloRequest(server.token());
+            peerHello.maximumMinorVersion = minor;
+            auto reply = exchange(peer, 1, codec::toWire(peerHello),
+                defaultMaximumFrameBytes, minor);
             const auto info
-                = codec::fromWire(*envelope->payload.AsHelloResponse());
-            envelope = exchange(socket, 2,
+                = codec::fromWire(*reply->payload.AsHelloResponse());
+            reply = exchange(peer, 2,
                 codec::toWireDirectoryRequest(browse.string()),
                 info.maximumFrameBytes, minor);
-            require(codec::inspect(*envelope).payload
+            require(codec::inspect(*reply).payload
                     == PayloadKind::DirectoryListing,
                 "a directory listing was refused");
-            return codec::fromWire(*envelope->payload.AsDirectoryListing());
+            return codec::fromWire(*reply->payload.AsDirectoryListing());
         };
         const auto names = [](const RemoteDirectoryListing& listing) {
             std::vector<std::string> result;

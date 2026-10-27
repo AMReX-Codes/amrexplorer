@@ -1,6 +1,7 @@
 #pragma once
 
 #include <amrexplorer/core/StopToken.hpp>
+#include <amrexplorer/io/DatasetLocation.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 
 #include <filesystem>
@@ -16,8 +17,9 @@ namespace amrvis {
 // Whether this build links openPMD-api (AMREXPLORER_ENABLE_OPENPMD).
 [[nodiscard]] bool openPmdSupported() noexcept;
 
-// Opens the series and reads its first iteration's meshes as an AMR
-// hierarchy. The result carries the open series as its `source`, which a
+// Opens the series and reads one iteration's meshes -- the location's, or
+// the first -- as an AMR hierarchy, listing every iteration in the result's
+// `iterations`. The result carries the open series as its `source`, which a
 // dataset built from it reads blocks through. Throws MetadataReadError when
 // the series cannot be read -- or when this build cannot read openPMD at all.
 //
@@ -27,6 +29,6 @@ namespace amrvis {
 // staggered or nodal component is interpolated to the cell centres as it is
 // read. Values and coordinates are in SI (unitSI, gridUnitSI applied).
 [[nodiscard]] PlotfileMetadataResult readOpenPmdMetadata(
-    const std::filesystem::path& path, StopToken cancellation = {});
+    const DatasetLocation& location, StopToken cancellation = {});
 
 } // namespace amrvis

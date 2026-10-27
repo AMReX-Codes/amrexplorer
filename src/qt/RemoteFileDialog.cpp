@@ -21,7 +21,12 @@ namespace amrvis::qt {
 namespace {
 
 constexpr int pathRole = Qt::UserRole;
+// Whether the entry is opened (selected) rather than entered.
 constexpr int plotfileRole = Qt::UserRole + 1;
+// An openPMD series: opened in the single-dataset dialog, and neither opened
+// nor entered in the sequence one, since a series plays as a sequence of its
+// own iterations.
+constexpr int openPmdRole = Qt::UserRole + 2;
 
 } // namespace
 
@@ -200,27 +205,44 @@ void RemoteFileDialog::finishLoad()
     m_entries->clear();
     const auto directoryIcon = style()->standardIcon(QStyle::SP_DirIcon);
     const auto plotfileIcon = style()->standardIcon(QStyle::SP_FileIcon);
+    bool sawSeries = false;
     for (const auto& entry : result.listing.entries) {
         auto* item = new QTreeWidgetItem(m_entries);
         item->setText(0, QString::fromStdString(entry.name));
-        item->setText(1, entry.isPlotfile ? tr("AMReX plotfile")
-                                          : tr("Directory"));
-        item->setIcon(0, entry.isPlotfile ? plotfileIcon : directoryIcon);
+        if (entry.isOpenPmd) {
+            sawSeries = true;
+            // A %T entry stands for one file per iteration.
+            item->setText(1, entry.name.find("%T") != std::string::npos
+                    ? tr("openPMD series (file per iteration)")
+                    : tr("openPMD series"));
+        } else {
+            item->setText(1, entry.isPlotfile ? tr("AMReX plotfile")
+                                              : tr("Directory"));
+        }
+        const bool opened = entry.isPlotfile
+            || (entry.isOpenPmd && m_mode == SelectionMode::SinglePlotfile);
+        item->setIcon(0,
+            entry.isPlotfile || entry.isOpenPmd ? plotfileIcon : directoryIcon);
         item->setData(0, pathRole, QString::fromStdString(entry.path));
-        item->setData(0, plotfileRole, entry.isPlotfile);
-        // Only plotfiles are selectable; other directories are entered.
-        item->setFlags(entry.isPlotfile
-                ? Qt::ItemIsEnabled | Qt::ItemIsSelectable
-                : Qt::ItemIsEnabled);
+        item->setData(0, plotfileRole, opened);
+        item->setData(0, openPmdRole, entry.isOpenPmd);
+        // Only what opens is selectable; other directories are entered.
+        item->setFlags(opened ? Qt::ItemIsEnabled | Qt::ItemIsSelectable
+                              : Qt::ItemIsEnabled);
     }
     m_entries->doItemsLayout();
     m_entries->scrollToTop();
     m_entries->setUpdatesEnabled(true);
     auto status = m_mode == SelectionMode::SinglePlotfile
-        ? tr("Select a plotfile, or double-click a directory to enter it.")
+        ? tr("Select a plotfile or openPMD series, or double-click a "
+             "directory to enter it.")
         : tr("Select one or more plotfiles; they play in name order.");
+    if (sawSeries && m_mode == SelectionMode::PlotfileSequence) {
+        status += tr(" An openPMD series plays its iterations as a sequence "
+                     "by itself: open it with Open Remote Plotfile.");
+    }
     if (result.listing.entries.empty()) {
-        status = tr("No subdirectories here.");
+        status = tr("Nothing to open or enter here.");
     }
     if (result.listing.truncated) {
         status += tr(" Only the first %1 entries are shown; enter a "
@@ -252,6 +274,10 @@ void RemoteFileDialog::activateItem(QTreeWidgetItem* item)
         if (m_mode == SelectionMode::SinglePlotfile) {
             accept();
         }
+        return;
+    }
+    // A series is not a directory to enter, even an ADIOS2 one that is.
+    if (item->data(0, openPmdRole).toBool()) {
         return;
     }
     loadDirectory(item->data(0, pathRole).toString());

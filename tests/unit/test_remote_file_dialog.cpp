@@ -4,6 +4,7 @@
 
 #include "RemoteFileDialog.hpp"
 
+#include <amrexplorer/io/OpenPmd.hpp>
 #include <amrexplorer/remote/Connection.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
@@ -320,6 +321,58 @@ int main(int argc, char* argv[])
             "fallback did not explain itself");
     }
 #endif
+
+    // openPMD series, from a server that reads them: offered for opening as
+    // one dataset -- a file-per-iteration series as its single %T entry, an
+    // ADIOS2 directory opened rather than entered -- and in the sequence
+    // browser shown but not offered, since a series is its own sequence.
+    if (amrvis::openPmdSupported()) {
+        QTemporaryDir seriesScratch;
+        require(seriesScratch.isValid(), "could not create a series directory");
+        const auto seriesRoot
+            = std::filesystem::path(seriesScratch.path().toStdString());
+        std::ofstream(seriesRoot / "diag_000010.h5") << "";
+        std::ofstream(seriesRoot / "diag_000020.h5") << "";
+        std::filesystem::create_directory(seriesRoot / "out.bp");
+        {
+            RemoteFileDialog dialog(connection,
+                QString::fromStdString(seriesRoot.string()),
+                Mode::SinglePlotfile);
+            auto* entries = dialog.findChild<QTreeWidget*>();
+            auto* pattern = waitForEntry(application, *entries, "diag_%T.h5");
+            require(pattern != nullptr
+                    && pattern->text(1).contains(
+                        QStringLiteral("file per iteration"))
+                    && (pattern->flags() & Qt::ItemIsSelectable),
+                "a file-per-iteration series is one openable entry");
+            auto* adios = findEntry(*entries, QStringLiteral("out.bp"));
+            require(adios != nullptr && (adios->flags() & Qt::ItemIsSelectable),
+                "an ADIOS2 series directory is openable");
+            emit entries->itemActivated(adios, 0);
+            require(dialog.result() == QDialog::Accepted
+                    && dialog.selectedPaths().size() == 1
+                    && samePath(dialog.selectedPaths().front(),
+                        seriesRoot / "out.bp"),
+                "activating an ADIOS2 series opened it instead of entering it");
+        }
+        {
+            RemoteFileDialog dialog(connection,
+                QString::fromStdString(seriesRoot.string()),
+                Mode::PlotfileSequence);
+            auto* entries = dialog.findChild<QTreeWidget*>();
+            auto* status = dialog.findChild<QLabel*>();
+            auto* pattern = waitForEntry(application, *entries, "diag_%T.h5");
+            require(pattern != nullptr
+                    && !(pattern->flags() & Qt::ItemIsSelectable),
+                "a series is offered as a frame of a plotfile sequence");
+            require(status->text().contains(QStringLiteral("openPMD")),
+                "the sequence browser does not say where a series opens");
+            emit entries->itemActivated(pattern, 0);
+            application.processEvents();
+            require(samePath(dialog.currentDirectory().toStdString(), seriesRoot),
+                "activating a series in the sequence browser tried to enter it");
+        }
+    }
 
     connection->close();
     return 0;

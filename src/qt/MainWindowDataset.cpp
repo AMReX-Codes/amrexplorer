@@ -1197,6 +1197,26 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
             }
             try {
                 auto result = watcher->result();
+                if (generation == m_generation && !metadataOnly
+                    && result.metadata.iterations.size() > 1) {
+                    // A series of several iterations is a sequence of them,
+                    // however it was opened. The sequence loads frame 0
+                    // itself, so this read only told us there were more.
+                    if (result.session) {
+                        std::vector<DatasetLocation> frames;
+                        frames.reserve(result.metadata.iterations.size());
+                        for (const auto iteration : result.metadata.iterations) {
+                            frames.emplace_back(path, iteration);
+                        }
+                        result.session.reset();
+                        openRemoteFrames(std::move(frames));
+                    } else {
+                        openSeriesSequence(path, result.metadata.iterations);
+                    }
+                    updateDiagnostics();
+                    watcher->deleteLater();
+                    return;
+                }
                 if (generation == m_generation) {
                     showMetadata(result.metadata, path);
                     // The FAB selector contents were built off-thread with the
@@ -1274,6 +1294,8 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
                 = opened.session->metadataReadMetrics();
             opened.metadata.fileVersion
                 = opened.session->fileVersion();
+            opened.metadata.iterations
+                = opened.session->seriesIterations();
         } else {
             opened.metadata = preparedMetadata
                 ? std::move(*preparedMetadata)
@@ -1799,7 +1821,8 @@ void MainWindow::requestInitialSlice(
             // frames use, so the connected() pre-check and the derived-field
             // capability gate are the ones written once.
             return loadRemoteFrame(load.reopen->connection,
-                load.reopen->remotePath, 0, spec, cancellation);
+                std::filesystem::path(load.reopen->remotePath), 0, spec,
+                cancellation);
         }
         return executeFrameLoad(path, DatasetId{generation}, spec,
             initialCacheBudget(), cancellation,

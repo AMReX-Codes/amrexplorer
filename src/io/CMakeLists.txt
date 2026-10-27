@@ -25,7 +25,8 @@ target_link_libraries(amrexplorer_io
 target_compile_features(amrexplorer_io PUBLIC cxx_std_20)
 
 if(AMREXPLORER_ENABLE_OPENPMD)
-    target_sources(amrexplorer_io PRIVATE openpmd/OpenPmdSource.cpp)
+    target_sources(amrexplorer_io
+        PRIVATE openpmd/OpenPmdSeries.cpp openpmd/OpenPmdSource.cpp)
     target_link_libraries(amrexplorer_io PRIVATE openPMD::openPMD)
     target_compile_definitions(amrexplorer_io PRIVATE AMREXPLORER_HAS_OPENPMD=1)
 endif()

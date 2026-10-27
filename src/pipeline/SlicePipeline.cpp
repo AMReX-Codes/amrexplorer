@@ -1067,7 +1067,7 @@ InitialSliceResult executeSessionFrameLoad(
     return result;
 }
 
-InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
+InitialSliceResult executeFrameLoad(const DatasetLocation& location,
     DatasetId datasetId, const FrameSliceSpec& spec,
     std::uint64_t cacheBudgetBytes, StopToken cancellation,
     std::optional<PlotfileMetadataResult> preparedMetadata,
@@ -1080,7 +1080,7 @@ InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
             std::move(*preparedMetadata), cancellation, spec.derivedFields);
     } else {
         dataset = std::make_shared<LocalDatasetSession>(
-            path, datasetId, cacheBudgetBytes, cancellation,
+            location, datasetId, cacheBudgetBytes, cancellation,
             spec.derivedFields);
     }
     return executeSessionFrameLoad(

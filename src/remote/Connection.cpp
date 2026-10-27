@@ -235,8 +235,12 @@ public:
 
     OpenedDataset openDataset(const std::string& path,
         std::uint64_t cacheBudgetBytes, StopToken cancellation,
-        std::vector<DerivedFieldDefinition> derivedFields)
+        std::vector<DerivedFieldDefinition> derivedFields,
+        std::optional<std::uint64_t> iteration)
     {
+        if (iteration && !supportsSeriesIterations()) {
+            throw std::runtime_error(seriesIterationsUnsupportedMessage);
+        }
         // Refused here as well as in RemoteDatasetSession, for the reason
         // renderVolume gives: this class is public, this is where the
         // negotiated version lives, and a caller that did not ask first must
@@ -246,7 +250,8 @@ public:
             throw std::runtime_error(derivedFieldsUnsupportedMessage);
         }
         const auto response = transact(codec::toWire(
-            OpenDatasetData{path, cacheBudgetBytes, std::move(derivedFields)}),
+            OpenDatasetData{
+                path, cacheBudgetBytes, std::move(derivedFields), iteration}),
             PayloadKind::DatasetOpened, cancellation,
             ResponseWait::Indefinite);
         const auto* payload = response->payload.AsDatasetOpened();
@@ -319,6 +324,12 @@ public:
     [[nodiscard]] bool supportsDoublePrecisionValues() const noexcept
     {
         return m_selectedMinorVersion >= doubleValueVectorsMinorVersion;
+    }
+
+    // A 1.9 server would open a series' first iteration whatever it is sent.
+    [[nodiscard]] bool supportsSeriesIterations() const noexcept
+    {
+        return m_selectedMinorVersion >= seriesIterationMinorVersion;
     }
 
     // A 1.6 server has no answer for a node plane at all.
@@ -865,10 +876,16 @@ std::string Connection::disconnectReason() const
 
 OpenedDataset Connection::openDataset(const std::string& path,
     std::uint64_t cacheBudgetBytes, StopToken cancellation,
-    std::vector<DerivedFieldDefinition> derivedFields)
+    std::vector<DerivedFieldDefinition> derivedFields,
+    std::optional<std::uint64_t> iteration)
 {
-    return m_impl->openDataset(
-        path, cacheBudgetBytes, cancellation, std::move(derivedFields));
+    return m_impl->openDataset(path, cacheBudgetBytes, cancellation,
+        std::move(derivedFields), iteration);
+}
+
+bool Connection::supportsSeriesIterations() const noexcept
+{
+    return m_impl->supportsSeriesIterations();
 }
 
 RemoteDirectoryListing Connection::listDirectory(

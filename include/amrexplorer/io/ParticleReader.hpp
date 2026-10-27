@@ -31,7 +31,8 @@ struct ParticleSpeciesMetadata {
     int intComponentCount = 0;
     std::uint64_t particleCount = 0;
     ParticleRealPrecision precision = ParticleRealPrecision::Double;
-    // As the Header lists them: the positions are not among the reals.
+    // In the order the data lists them (a plotfile's Header, an openPMD
+    // species' records); the positions are not among the reals.
     std::vector<std::string> realComponentNames;
     std::vector<std::string> intComponentNames;
 
@@ -41,7 +42,7 @@ struct ParticleSpeciesMetadata {
 };
 
 // One real or int component to read with the positions, by its index in the
-// Header's list for that kind.
+// species' list of that kind (ParticleSpeciesMetadata).
 struct ParticleAttribute {
     enum class Kind : std::uint8_t { Real, Int };
     Kind kind = Kind::Real;
@@ -52,8 +53,9 @@ struct ParticleAttribute {
 };
 
 struct ParticlePoint {
-    // Complete AMReX idcpu: validity bit, persistent particle ID, and the
-    // persistent CPU field. This is the stable sampling identity.
+    // The stable sampling identity (particleSelected): a plotfile's complete
+    // AMReX idcpu -- validity bit, persistent particle ID and CPU field -- or
+    // an openPMD species' `id` record.
     std::uint64_t id = 0;
     Real3 position{};
     // The sample's attribute for this particle; zero when none was read.
@@ -92,6 +94,12 @@ public:
 
 [[nodiscard]] std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
     const std::filesystem::path& plotfile, StopToken cancellation = {});
+
+// Whether the particle `id` is in a sample of `fraction` drawn with `seed`:
+// a stable hash of the id, so a smaller fraction selects a subset of what a
+// larger one does. Every particle reader samples with this.
+[[nodiscard]] bool particleSelected(
+    std::uint64_t id, double fraction, std::uint64_t seed) noexcept;
 
 // Selection is a stable hash of the complete AMReX idcpu. File order, grid,
 // level, and current file ownership do not affect it; lower fractions are

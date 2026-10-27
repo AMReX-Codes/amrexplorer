@@ -302,18 +302,19 @@ MainWindow::openRemoteSessionForLoad(
     const std::shared_ptr<remote::Connection>& connection,
     const std::string& remotePath,
     const std::vector<DerivedFieldDefinition>& derivedFields,
-    StopToken cancellation)
+    StopToken cancellation, std::optional<std::uint64_t> iteration)
 {
     return remote::RemoteDatasetSession::open(connection, remotePath,
         initialCacheBudget(), cancellation,
         connection && connection->supportsDerivedFields()
             ? derivedFields
-            : std::vector<DerivedFieldDefinition>{});
+            : std::vector<DerivedFieldDefinition>{},
+        iteration);
 }
 
 InitialSliceResult MainWindow::loadRemoteFrame(
     const std::shared_ptr<remote::Connection>& connection,
-    const std::string& remotePath, std::uint64_t connectionGeneration,
+    const DatasetLocation& frame, std::uint64_t connectionGeneration,
     const FrameSliceSpec& spec, StopToken cancellation)
 {
     // Foreground loads and prefetches share the session's connection, which
@@ -327,8 +328,8 @@ InitialSliceResult MainWindow::loadRemoteFrame(
             + (connection ? connection->disconnectReason()
                           : std::string("no connection")));
     }
-    auto session = openRemoteSessionForLoad(
-        connection, remotePath, spec.derivedFields, cancellation);
+    auto session = openRemoteSessionForLoad(connection, frame.path.string(),
+        spec.derivedFields, cancellation, frame.iteration);
     auto result = executeSessionFrameLoad(
         std::move(session), spec, cancellation);
     result.connectionGeneration = connectionGeneration;
@@ -2337,7 +2338,20 @@ void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
     }
 
     prepareSequence(sorted.size());
-    m_sequenceController->open(std::move(sorted));
+    m_sequenceController->open(
+        std::vector<DatasetLocation>(sorted.begin(), sorted.end()));
+}
+
+void MainWindow::openSeriesSequence(const std::filesystem::path& series,
+    const std::vector<std::uint64_t>& iterations)
+{
+    std::vector<DatasetLocation> frames;
+    frames.reserve(iterations.size());
+    for (const auto iteration : iterations) {
+        frames.emplace_back(series, iteration);
+    }
+    prepareSequence(frames.size());
+    m_sequenceController->open(std::move(frames));
 }
 
 void MainWindow::prepareSequence(std::size_t frameCount)
@@ -2399,16 +2413,6 @@ void MainWindow::prepareSequence(std::size_t frameCount)
 void MainWindow::openRemoteSequence(
     const std::vector<std::string>& remotePaths)
 {
-    // Read together, before anything else runs: the generation belongs to
-    // this connection and must be the one the loader captures.
-    auto connection = m_remoteSession->connection();
-    const auto connectionGeneration = m_remoteSession->connectionGeneration();
-    if (!connection) {
-        emit sequenceFrameFailed();
-        reportBackgroundError(tr("Open a remote session first "
-                                 "(File > Open Remote Plotfile...)."));
-        return;
-    }
     if (remotePaths.size() < 2
         || std::any_of(remotePaths.begin(), remotePaths.end(),
             [](const auto& path) { return path.empty(); })) {
@@ -2419,27 +2423,42 @@ void MainWindow::openRemoteSequence(
                "the server, not chosen from a local file dialog."));
         return;
     }
-
-    prepareSequence(remotePaths.size());
-    m_remoteSequence = true;
-    m_remoteSequenceDerivedFields
-        = connection && connection->supportsDerivedFields();
-
-    std::vector<std::filesystem::path> frames;
+    std::vector<DatasetLocation> frames;
     frames.reserve(remotePaths.size());
     for (const auto& path : remotePaths) {
         frames.emplace_back(path);
     }
+    openRemoteFrames(std::move(frames));
+}
+
+void MainWindow::openRemoteFrames(std::vector<DatasetLocation> frames)
+{
+    // Read together, before anything else runs: the generation belongs to
+    // this connection and must be the one the loader captures.
+    auto connection = m_remoteSession->connection();
+    const auto connectionGeneration = m_remoteSession->connectionGeneration();
+    if (!connection) {
+        emit sequenceFrameFailed();
+        reportBackgroundError(tr("Open a remote session first "
+                                 "(File > Open Remote Plotfile...)."));
+        return;
+    }
+
+    prepareSequence(frames.size());
+    m_remoteSequence = true;
+    m_remoteSequenceDerivedFields
+        = connection && connection->supportsDerivedFields();
+
     // Foreground loads and prefetches share the session's connection, which
     // multiplexes their requests. There is no reconnect: the connection lives
     // as long as the ssh session, and a lost session is reported to the user
     // rather than silently re-established.
     auto loader = [connection = std::move(connection),
                       generation = connectionGeneration](
-                      const std::filesystem::path& path, DatasetId,
+                      const DatasetLocation& frame, DatasetId,
                       const FrameSliceSpec& spec, StopToken cancellation) {
         return loadRemoteFrame(
-            connection, path.string(), generation, spec, cancellation);
+            connection, frame, generation, spec, cancellation);
     };
     m_sequenceController->open(std::move(frames), std::move(loader));
 }

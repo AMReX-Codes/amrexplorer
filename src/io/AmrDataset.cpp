@@ -135,6 +135,11 @@ const std::string& AmrDataset::fileVersion() const noexcept
     return m_source->fileVersion();
 }
 
+std::vector<std::uint64_t> AmrDataset::seriesIterations() const
+{
+    return m_source->seriesIterations();
+}
+
 DatasetId AmrDataset::id() const noexcept
 {
     return m_id;

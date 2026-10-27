@@ -64,7 +64,18 @@ inline constexpr std::uint16_t cameraOrientationMinorVersion = 8;
 // A version for the 1.3 reason: a 1.8 server ignores the attribute and
 // returns positions alone, so a client coloring by it would draw nothing.
 inline constexpr std::uint16_t particleAttributeMinorVersion = 9;
-inline constexpr std::uint16_t protocolMinorVersion = particleAttributeMinorVersion;
+// 1.10 names an iteration of an openPMD series on an open request
+// (OpenDatasetRequest.iteration) and lists the series' iterations on the
+// reply (DatasetOpened.series_iterations). A version for the 1.3 reason: a
+// 1.9 server ignores the iteration and opens the series' first, a frame the
+// client could not tell from the one it asked for. It also lists openPMD
+// series in a directory listing (DirectoryEntry.is_openpmd, is_file), which a
+// server sends only to a 1.10 peer: an older client takes every entry for a
+// directory to enter, and a file is not one.
+inline constexpr std::uint16_t seriesIterationMinorVersion = 10;
+// The most iterations a reply may list, as the local reader bounds them.
+inline constexpr std::size_t maximumSeriesIterations = std::size_t{1} << 20;
+inline constexpr std::uint16_t protocolMinorVersion = seriesIterationMinorVersion;
 
 enum class PayloadKind : std::uint8_t {
     None = 0,
@@ -154,15 +165,25 @@ struct OpenDatasetData {
     // resolve comes back in OpenedDataset::derivedFieldSkips rather than
     // failing the open.
     std::vector<DerivedFieldDefinition> derivedFields;
+    // Protocol 1.10. The openPMD iteration to open; none opens a plotfile, or
+    // a series' first iteration.
+    std::optional<std::uint64_t> iteration;
 };
 
-// One subdirectory of a listed directory. Only directories are listed:
-// plotfiles are directories, and files are not navigable. `path` is the
-// server-side absolute path of the entry.
+// One entry of a listed directory: a subdirectory -- which may be a
+// plotfile -- or, from protocol 1.10, an openPMD series. Other files are not
+// listed, since nothing could be done with them. `path` is the server-side
+// absolute path of the entry; for a series stored one file per iteration it
+// is the series' %T pattern ("run/diag_%T.h5"), standing for every file.
 struct RemoteDirectoryEntry {
     std::string name;
     std::string path;
     bool isPlotfile = false;
+    // Protocol 1.10. An openPMD series, to open rather than enter, and
+    // whether it is a file (or a pattern of files) rather than a directory
+    // (an ADIOS2 .bp series is a directory).
+    bool isOpenPmd = false;
+    bool isFile = false;
 };
 
 // The most subdirectories one DirectoryListing carries: the first this many
@@ -204,6 +225,9 @@ struct OpenedDataset {
     // (amrexvec_nu_x, ...) when catalog.hasMappedGrid, for the metadata
     // panel; empty otherwise, and from a server that predates 1.7.
     std::vector<std::string> mappedGridComponentNames;
+    // Protocol 1.10. Every iteration of the openPMD series opened, in order;
+    // empty for a plotfile, and from a server that predates 1.10.
+    std::vector<std::uint64_t> seriesIterations;
 };
 
 struct ErrorData {

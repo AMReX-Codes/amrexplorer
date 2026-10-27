@@ -2,7 +2,7 @@
 
 A proposed design, drafted on 2026-10-26, for opening openPMD series
 (HDF5 or ADIOS2) alongside AMReX plotfiles. The *Phases* section is the
-suggested order of PRs; phases 1 and 2 are done.
+suggested order of PRs; all three phases are done.
 
 ## Recommendation
 
@@ -144,7 +144,57 @@ lines and ranges.
    - Not handled yet: non-cartesian geometry, F-ordered meshes, particles,
      iterations beyond the first, and openPMD entries in the remote file
      browser (typing the path works).
-3. **Iterations and particles.** Frames as (path, iteration) through
-   `SequenceController`, `DatasetId` and the remote protocol; openPMD particle
-   species, with the format-neutral `ParticlePoint`/`ParticleAttribute`
-   wording.
+3. **Iterations and particles.** *(Done.)* A frame is a `DatasetLocation`
+   (`include/amrexplorer/io/DatasetLocation.hpp`): a path, plus an
+   iteration for an openPMD series. It converts implicitly from a path, so
+   plotfile callers are unchanged. `SequenceController`, `executeFrameLoad`,
+   `openDataset` and `LocalDatasetSession` all take a location.
+   `DatasetId` needed no change, because every frame already gets an id of
+   its own.
+   - **Opening a series:** the metadata of an open lists the series'
+     iterations (`PlotfileMetadataResult::iterations`,
+     `DatasetSession::seriesIterations`). When there is more than one, the
+     open becomes a sequence of (path, iteration) frames, both locally and
+     over a remote connection (`openSeriesSequence`, `openRemoteFrames`).
+   - **Protocol 1.10:** `OpenDatasetRequest.iteration`/`has_iteration` and
+     `DatasetOpened.series_iterations`. The client refuses to send an
+     iteration to an older server, and refuses a reply that does not list
+     the iteration it asked for.
+   - **Particles:** read by `OpenPmdSource`. Positions are
+     position + positionOffset. Particles are sampled through the shared
+     `particleSelected` hash on the `id` record, and other records become
+     real or int components. The particle type comments no longer assume
+     AMReX.
+   - **Tests:** `test_openpmd_reader` (iterations, particles),
+     `test_openpmd_remote` (1.10 against an in-process server), and
+     `qt_openpmd_series` / `qt_remote_openpmd_series` (a series opened in
+     the real window becomes a sequence and steps).
+
+   - **Shared series:** frames of one series share a single open `Series`
+     (`src/io/openpmd/OpenPmdSeries.hpp`). It is held weakly, so it stays
+     open only while some frame uses it and is reopened afresh after that.
+     That matters for a series a simulation is still writing. Iterations are
+     parsed only when a frame opens them (`defer_iteration_parsing`). On a
+     300-iteration, 878 MB HDF5 series, opening a frame dropped from about
+     63 ms to 6 ms. `testSharedSeries` checks both the sharing and the
+     release.
+
+   - **Remote file browser:** a server that reads openPMD lists series to a
+     1.10 client (`DirectoryEntry.is_openpmd` and `is_file`, folded into
+     1.10 because 1.10 had not been released). Files numbered as one series
+     (`diag_000100.h5`, `diag_000200.h5`, ...) are listed once, as their `%T`
+     pattern, which openPMD-api opens as a file-based series. An ADIOS2 `.bp`
+     directory is opened rather than entered. The sequence browser shows
+     series but does not let you select them. An older client sees
+     directories only, as before.
+
+   Still open:
+   - Concurrent opens of different series wait for each other: the registry
+     holds one lock across each open, and that wait is not cancellable.
+   - A companion shows only its series' first iteration.
+   - The local **Open openPMD Series...** dialog opens a single file of a
+     file-per-iteration series as that one iteration. The remote browser
+     already groups those files into a `%T` series; the local dialog could
+     do the same.
+   - A series with particles but no meshes cannot be opened.
+   - Non-cartesian and F-ordered meshes are not supported.

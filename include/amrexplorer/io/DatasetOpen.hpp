@@ -3,6 +3,7 @@
 #include <amrexplorer/core/DerivedField.hpp>
 #include <amrexplorer/core/StopToken.hpp>
 #include <amrexplorer/io/AmrDataset.hpp>
+#include <amrexplorer/io/DatasetLocation.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 
 #include <cstdint>
@@ -12,10 +13,10 @@
 
 namespace amrvis {
 
-// The dataset at `path`, in whichever format it is: an openPMD series
-// (isOpenPmdSeriesPath), else a plotfile, MultiFab or FAB.
+// The dataset at `location`, in whichever format it is: an iteration of an
+// openPMD series (isOpenPmdSeriesPath), else a plotfile, MultiFab or FAB.
 [[nodiscard]] std::shared_ptr<AmrDataset> openDataset(
-    const std::filesystem::path& path, DatasetId id,
+    const DatasetLocation& location, DatasetId id,
     std::uint64_t cacheBudgetBytes, StopToken cancellation = {},
     std::vector<DerivedFieldDefinition> derivedFields = {});
 

@@ -40,7 +40,8 @@
 #                 slice-planes | panel-layout | axis-scale-settings |
 #                 spherical-scale-report |
 #                 fixed-scale-centre | fab-overlap-failure |
-#                 fab-direct-open-failure | openpmd
+#                 fab-direct-open-failure | openpmd | openpmd-series |
+#                 remote-openpmd-series
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
         message(FATAL_ERROR "qt_smoke_driver.cmake requires -D${argument}=...")
@@ -94,6 +95,15 @@ elseif(MODE STREQUAL "openpmd")
     # no per-block statistics).
     run_or_die("${MATERIALIZER}" --write-fixture "${WORK}/amr.json")
     run_or_die("${AMREXPLORER_QT}" --missing-range-smoke-test "${WORK}/amr.json")
+elseif(MODE STREQUAL "openpmd-series")
+    # A series of three iterations opens as a sequence of them.
+    run_or_die("${MATERIALIZER}" --write-series-fixture "${WORK}/series.json")
+    run_or_die("${AMREXPLORER_QT}" --openpmd-series-smoke-test
+        "${WORK}/series.json")
+elseif(MODE STREQUAL "remote-openpmd-series")
+    run_or_die("${MATERIALIZER}" --write-series-fixture "${WORK}/series.json")
+    run_or_die("${AMREXPLORER_QT}" --remote-openpmd-series-smoke-test
+        "${WORK}/series.json")
 elseif(MODE STREQUAL "menu-shortcuts")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --menu-shortcuts-smoke-test "${WORK}/plt")

@@ -59,6 +59,11 @@ inline constexpr const char* volumeOrientationUnsupportedMessage
 inline constexpr const char* derivedFieldsUnsupportedMessage
     = "the remote server predates derived fields (protocol 1.4); install a "
       "current amrexplorer-server";
+// And for an openPMD iteration, which a 1.9 server would not read off an open
+// request -- it would open the series' first iteration instead.
+inline constexpr const char* seriesIterationsUnsupportedMessage
+    = "the remote server predates openPMD iterations (protocol 1.10); install "
+      "a current amrexplorer-server";
 // And for a mapped grid's node plane, which a 1.6 server has no answer for.
 inline constexpr const char* mappedGridUnsupportedMessage
     = "the remote server predates mapped grids (protocol 1.7); install a "
@@ -98,9 +103,15 @@ public:
     // (protocol 1.4). Ask supportsDerivedFields() first: a non-empty list
     // against an older peer throws, because a peer that cannot read the field
     // would answer a catalog of stored fields alone.
+    // An `iteration` (protocol 1.10) names one iteration of an openPMD series;
+    // ask supportsSeriesIterations() first, since an older peer would open
+    // the series' first instead, and so is refused here.
     [[nodiscard]] OpenedDataset openDataset(const std::string& path,
         std::uint64_t cacheBudgetBytes, StopToken cancellation = {},
-        std::vector<DerivedFieldDefinition> derivedFields = {});
+        std::vector<DerivedFieldDefinition> derivedFields = {},
+        std::optional<std::uint64_t> iteration = std::nullopt);
+    // Whether the negotiated protocol names openPMD iterations (1.10).
+    [[nodiscard]] bool supportsSeriesIterations() const noexcept;
     // Lists the subdirectories of a server-side directory (protocol 1.1);
     // an empty path is the server's home. Throws when the server negotiated
     // protocol 1.0, i.e. predates browsing.

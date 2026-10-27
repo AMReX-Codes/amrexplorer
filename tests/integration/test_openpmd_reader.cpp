@@ -4,8 +4,11 @@
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
 #include <amrexplorer/query/LineQuery.hpp>
 
+#include "OpenPmdFixtures.hpp"
+
 #include <openPMD/openPMD.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -27,6 +30,7 @@
 namespace {
 
 namespace io = openPMD;
+using namespace amrvis::test::openpmd;
 
 void require(bool condition, const std::string& message)
 {
@@ -39,120 +43,6 @@ void require(bool condition, const std::string& message)
 bool near(double a, double b)
 {
     return std::abs(a - b) <= 1e-9 * (1.0 + std::abs(b));
-}
-
-double rhoAt(double x, double y, double z)
-{
-    return 1.0 + 2.0 * x + 3.0 * y + 5.0 * z;
-}
-
-double eAt(int component, double x, double y, double z)
-{
-    return 7.0 * (component + 1) - x + 4.0 * y + 0.5 * z;
-}
-
-// The 3-D series: level 0 is 8^3 cells of size 1 from (-4, 0, 10); level 1
-// (WarpX's _lvl1 meshes) is the same domain at half the spacing, written only
-// over cells [4, 11]^3. rho is cell-centred and stored at half its value with
-// unitSI 2; E's components each sit on the lower face along their own axis.
-// Arrays are (z, y, x), x fastest, as WarpX writes them.
-constexpr std::array<double, 3> origin{-4.0, 0.0, 10.0};
-
-void writeMesh(io::Iteration& iteration, const std::string& name,
-    double spacing, int cells, int lower, int upper, bool vector)
-{
-    auto mesh = iteration.meshes[name];
-    mesh.setGeometry(io::Mesh::Geometry::cartesian);
-    mesh.setDataOrder(io::Mesh::DataOrder::C);
-    mesh.setAxisLabels({"z", "y", "x"});
-    mesh.setGridSpacing(std::vector<double>{spacing, spacing, spacing});
-    mesh.setGridGlobalOffset({origin[2], origin[1], origin[0]});
-    mesh.setGridUnitSI(1.0);
-    const std::vector<std::string> keys = vector
-        ? std::vector<std::string>{"x", "y", "z"}
-        : std::vector<std::string>{io::RecordComponent::SCALAR};
-    for (std::size_t c = 0; c < keys.size(); ++c) {
-        auto rc = mesh[keys[c]];
-        // By array dimension (z, y, x): which axis this component is
-        // staggered along, if any.
-        std::array<double, 3> position{0.5, 0.5, 0.5};
-        std::array<std::uint64_t, 3> extent{static_cast<std::uint64_t>(cells),
-            static_cast<std::uint64_t>(cells), static_cast<std::uint64_t>(cells)};
-        std::array<int, 3> last{upper, upper, upper};
-        if (vector) {
-            const auto dim = 2 - c;
-            position[dim] = 0.0;
-            extent[dim] += 1;
-            last[dim] += 1;
-        }
-        rc.setPosition(std::vector<double>(position.begin(), position.end()));
-        rc.setUnitSI(vector ? 1.0 : 2.0);
-        rc.resetDataset({io::Datatype::DOUBLE, {extent[0], extent[1], extent[2]}});
-        std::vector<double> values;
-        for (int k = lower; k <= last[0]; ++k) {
-            for (int j = lower; j <= last[1]; ++j) {
-                for (int i = lower; i <= last[2]; ++i) {
-                    const double x = origin[0] + (i + position[2]) * spacing;
-                    const double y = origin[1] + (j + position[1]) * spacing;
-                    const double z = origin[2] + (k + position[0]) * spacing;
-                    values.push_back(vector ? eAt(static_cast<int>(c), x, y, z)
-                                            : 0.5 * rhoAt(x, y, z));
-                }
-            }
-        }
-        const auto n = [&](std::size_t dim) {
-            return static_cast<std::uint64_t>(last[dim] - lower + 1);
-        };
-        rc.storeChunk(values,
-            {static_cast<std::uint64_t>(lower), static_cast<std::uint64_t>(lower),
-                static_cast<std::uint64_t>(lower)},
-            {n(0), n(1), n(2)});
-        // storeChunk keeps only a view of `values` until the next flush.
-        iteration.seriesFlush();
-    }
-}
-
-void writeAmr(const std::filesystem::path& file)
-{
-    io::Series series(file.string(), io::Access::CREATE);
-    auto iteration = series.iterations[100];
-    iteration.setTime(2.0);
-    iteration.setTimeUnitSI(0.5);
-    writeMesh(iteration, "rho", 1.0, 8, 0, 7, false);
-    writeMesh(iteration, "E", 1.0, 8, 0, 7, true);
-    writeMesh(iteration, "rho_lvl1", 0.5, 16, 4, 11, false);
-    writeMesh(iteration, "E_lvl1", 0.5, 16, 4, 11, true);
-    series.flush();
-}
-
-// 2-D, single precision, labelled (x, z) with x the *slowest* array
-// dimension -- the opposite of AMReX's layout, so the reader must transpose.
-// x spacing 1 from 0, z spacing 2 from 100.
-double phiAt(double x, double z)
-{
-    return x + 1000.0 * z;
-}
-
-void writeTransposed(const std::filesystem::path& file)
-{
-    io::Series series(file.string(), io::Access::CREATE);
-    auto iteration = series.iterations[0];
-    auto mesh = iteration.meshes["phi"];
-    mesh.setGeometry(io::Mesh::Geometry::cartesian);
-    mesh.setAxisLabels({"x", "z"});
-    mesh.setGridSpacing(std::vector<double>{1.0, 2.0});
-    mesh.setGridGlobalOffset({0.0, 100.0});
-    auto rc = mesh[io::RecordComponent::SCALAR];
-    rc.setPosition(std::vector<double>{0.5, 0.5});
-    rc.resetDataset({io::Datatype::FLOAT, {4, 6}});
-    std::vector<float> values;
-    for (int i = 0; i < 4; ++i) {
-        for (int k = 0; k < 6; ++k) {
-            values.push_back(static_cast<float>(phiAt(i + 0.5, 100.0 + 2.0 * (k + 0.5))));
-        }
-    }
-    rc.storeChunk(values, {0, 0}, {4, 6});
-    series.flush();
 }
 
 double cellCentre(const amrvis::LevelMetadata& level, int axis, int index)
@@ -346,16 +236,158 @@ void testRejection(const std::filesystem::path& directory)
     require(threw, "an unreadable file is refused as metadata");
 }
 
+void testIterations(const std::filesystem::path& file)
+{
+    const auto first = amrvis::readDatasetMetadata(file);
+    require(first.iterations
+            == std::vector<std::uint64_t>(
+                seriesIterations.begin(), seriesIterations.end()),
+        "the metadata lists every iteration");
+    require(first.metadata->levels[0].step == 10,
+        "a series opened without an iteration shows its first");
+
+    const amrvis::DatasetId id{3};
+    for (const auto iteration : seriesIterations) {
+        auto dataset = amrvis::openDataset({file, iteration}, id, 64ULL << 20U);
+        const auto& metadata = dataset->metadata();
+        require(metadata.levels[0].step == static_cast<int>(iteration),
+            "an iteration opens as itself");
+        require(near(metadata.time, 0.1 * static_cast<double>(iteration)),
+            "each iteration has its own time");
+        const auto access = dataset->requestBlock({id, 0, 0, amrvis::FieldId{0}, 0, 1});
+        require(near(access.handle->values[0],
+                    seriesRhoAt(iteration, 0.5, 0.5, 0.5)),
+            "each iteration reads its own values");
+    }
+
+    bool threw = false;
+    try {
+        static_cast<void>(amrvis::readDatasetMetadata({file, 99}));
+    } catch (const amrvis::MetadataReadError&) {
+        threw = true;
+    }
+    require(threw, "an iteration the series lacks is refused");
+
+    threw = false;
+    try {
+        static_cast<void>(amrvis::readDatasetMetadata(
+            {file.parent_path() / "plt00000", 10}));
+    } catch (const amrvis::MetadataReadError& error) {
+        threw = std::string_view(error.what()).find("no iterations")
+            != std::string_view::npos;
+    }
+    require(threw, "an iteration given with a plotfile is refused");
+
+    amrvis::LocalDatasetSession session({file, 20}, id, 64ULL << 20U);
+    require(session.seriesIterations().size() == 3,
+        "the session reports the series' iterations");
+}
+
+void testParticles(const std::filesystem::path& file)
+{
+    const amrvis::DatasetId id{4};
+    amrvis::LocalDatasetSession session({file, 30}, id, 64ULL << 20U);
+    require(session.particleSpecies().size() == 1, "one species");
+    const auto& species = session.particleSpecies().front();
+    require(species.name == "electrons", "species name");
+    require(species.particleCount == seriesParticles, "particle count");
+    require(species.dimension == 3, "particle dimension");
+    require(species.realComponentNames
+            == std::vector<std::string>{
+                "momentum_x", "momentum_y", "momentum_z", "weighting"},
+        "real components exclude position, positionOffset and id");
+    require(species.intComponentNames == std::vector<std::string>{"level"},
+        "integer records are int components");
+
+    using Kind = amrvis::ParticleAttribute::Kind;
+    const auto all = session.requestParticleSample("electrons", 1.0, 0, {},
+        amrvis::ParticleAttribute{Kind::Real, 1});
+    require(all.points.size() == seriesParticles, "fraction 1 is every particle");
+    for (std::uint64_t p = 0; p < seriesParticles; ++p) {
+        const auto& point = all.points[static_cast<std::size_t>(p)];
+        require(point.id == seriesParticleId(p), "ids come from the id record");
+        for (int axis = 0; axis < 3; ++axis) {
+            require(near(point.position[static_cast<std::size_t>(axis)],
+                        seriesParticlePosition(30, p, axis)),
+                "positions are position + positionOffset");
+        }
+        require(near(point.value, seriesMomentum(p, 1)),
+            "attribute values have unitSI applied");
+    }
+    const auto levels = session.requestParticleSample("electrons", 1.0, 0, {},
+        amrvis::ParticleAttribute{Kind::Int, 0});
+    require(near(levels.points[5].value, seriesLevel(5)), "int attribute");
+
+    // Nested and seed-stable, as plotfile sampling is.
+    const auto half = session.requestParticleSample("electrons", 0.5, 42);
+    const auto most = session.requestParticleSample("electrons", 0.8, 42);
+    require(!half.points.empty() && half.points.size() < most.points.size()
+            && most.points.size() < seriesParticles,
+        "fractions select proportionate samples");
+    for (const auto& point : half.points) {
+        require(std::any_of(most.points.begin(), most.points.end(),
+                    [&point](const auto& other) { return other.id == point.id; }),
+            "a smaller fraction is a subset of a larger one");
+        require(amrvis::particleSelected(point.id, 0.5, 42),
+            "sampling uses the shared hash");
+    }
+
+    bool limited = false;
+    try {
+        static_cast<void>(session.requestParticleSample(
+            "electrons", 1.0, 0, std::size_t{10}));
+    } catch (const amrvis::ParticleSampleLimitExceeded&) {
+        limited = true;
+    }
+    require(limited, "the point limit is enforced");
+}
+
+// Frames of one series share its open handle (OpenPmdSeries) while any of
+// them is alive, and nothing keeps it open after. Moving the file away tells
+// the two apart: only a series already open can still serve another
+// iteration, and once every frame is gone the next open has to find the file.
+void testSharedSeries(const std::filesystem::path& source)
+{
+    const auto file = source.parent_path() / "shared.json";
+    const auto moved = source.parent_path() / "moved.json";
+    std::filesystem::copy_file(source, file);
+    const amrvis::DatasetId id{5};
+    {
+        auto first = amrvis::openDataset({file, 10}, id, 64ULL << 20U);
+        std::filesystem::rename(file, moved);
+        auto second = amrvis::openDataset({file, 20}, id, 64ULL << 20U);
+        require(second->metadata().levels[0].step == 20,
+            "a frame opens through the series another frame holds");
+        const auto access = second->requestBlock({id, 0, 0, amrvis::FieldId{0}, 0, 1});
+        require(near(access.handle->values[0], seriesRhoAt(20, 0.5, 0.5, 0.5)),
+            "the shared series reads the frame's own iteration");
+    }
+    bool reopened = true;
+    try {
+        static_cast<void>(amrvis::openDataset({file, 30}, id, 64ULL << 20U));
+    } catch (const amrvis::MetadataReadError&) {
+        reopened = false;
+    }
+    require(!reopened, "a series no frame holds is closed, not cached");
+}
+
 } // namespace
 
-// With --write-fixture PATH, writes the 3-D AMR series to PATH and exits:
-// the fixture the Qt smoke test (qt_openpmd_open) opens in the real window.
+// With --write-fixture PATH (the 3-D AMR series) or --write-series-fixture
+// PATH (three iterations), writes that series to PATH and exits: the
+// fixtures the Qt smoke tests open in the real window.
 int main(int argc, char* argv[])
 {
     if (argc == 3 && std::string_view(argv[1]) == "--write-fixture") {
         std::filesystem::create_directories(
             std::filesystem::path(argv[2]).parent_path());
         writeAmr(argv[2]);
+        return 0;
+    }
+    if (argc == 3 && std::string_view(argv[1]) == "--write-series-fixture") {
+        std::filesystem::create_directories(
+            std::filesystem::path(argv[2]).parent_path());
+        writeSeries(argv[2]);
         return 0;
     }
     const auto directory = std::filesystem::temp_directory_path()
@@ -365,6 +397,8 @@ int main(int argc, char* argv[])
     const auto transposed = directory / "transposed.json";
     writeAmr(amr);
     writeTransposed(transposed);
+    const auto seriesFile = directory / "series.json";
+    writeSeries(seriesFile);
 
     testPathDetection();
     testMetadata(amr);
@@ -372,6 +406,9 @@ int main(int argc, char* argv[])
     testSessionAndLine(amr);
     testTransposed(transposed);
     testRejection(directory);
+    testIterations(seriesFile);
+    testParticles(seriesFile);
+    testSharedSeries(seriesFile);
 
     std::filesystem::remove_all(directory);
     std::cout << "openPMD reader tests passed\n";

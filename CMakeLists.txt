@@ -91,6 +91,10 @@ option(AMREXPLORER_LIBFUZZER
     "Build the fuzz harnesses as coverage-guided libFuzzer drivers (Clang)" OFF)
 option(AMREXPLORER_FORCE_FETCH_FLATBUFFERS
     "Skip installed FlatBuffers discovery and use the pinned fallback" OFF)
+option(AMREXPLORER_ENABLE_OPENPMD
+    "Read openPMD series (HDF5, ADIOS2, JSON) through openPMD-api" OFF)
+option(AMREXPLORER_FORCE_FETCH_OPENPMD
+    "Skip installed openPMD-api discovery and use the pinned fallback" OFF)
 # Off under the sanitizers, where it is both pointless and a hazard: every
 # sanitizer runtime pulls in libgcc_s.so.1, so -static-libgcc buys nothing, and
 # libubsan pulls libstdc++.so.6 too -- the process would then carry a statically
@@ -248,6 +252,40 @@ endif()
 add_subdirectory(src/expression)
 add_subdirectory(src/core)
 add_subdirectory(src/cache)
+if(AMREXPLORER_ENABLE_OPENPMD)
+    # Without MPI: this application reads a series from one process, and an
+    # MPI-enabled openPMD-api would drag MPI into the GUI and the server.
+    if(NOT AMREXPLORER_FORCE_FETCH_OPENPMD)
+        find_package(openPMD 0.16 CONFIG QUIET)
+    endif()
+    if(openPMD_FOUND AND openPMD_HAVE_MPI)
+        message(STATUS "Ignoring the installed openPMD-api: it was built "
+            "with MPI; using the pinned fallback instead")
+        set(openPMD_FOUND FALSE)
+    endif()
+    if(openPMD_FOUND)
+        message(STATUS "Using installed openPMD-api ${openPMD_VERSION}")
+    else()
+        include(FetchContent)
+        # The backends follow whatever is installed (AUTO); the JSON backend
+        # is always built and is what the tests write their fixtures with.
+        set(openPMD_USE_MPI OFF CACHE STRING "" FORCE)
+        set(openPMD_USE_PYTHON OFF CACHE STRING "" FORCE)
+        set(openPMD_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+        set(openPMD_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(openPMD_BUILD_CLI_TOOLS OFF CACHE BOOL "" FORCE)
+        set(openPMD_INSTALL OFF CACHE BOOL "" FORCE)
+        set(openPMD_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+        FetchContent_Declare(openPMD
+            GIT_REPOSITORY https://github.com/openPMD/openPMD-api.git
+            GIT_TAG 0.17.1
+            GIT_SHALLOW TRUE
+            SYSTEM
+        )
+        FetchContent_MakeAvailable(openPMD)
+        message(STATUS "Using pinned FetchContent openPMD-api fallback")
+    endif()
+endif()
 add_subdirectory(src/io)
 add_subdirectory(src/query)
 add_subdirectory(src/render3d)

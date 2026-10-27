@@ -3,7 +3,7 @@
 #include <amrexplorer/core/Statistics.hpp>
 #include <amrexplorer/core/ValueMapping.hpp>
 #include <amrexplorer/data/SessionValidation.hpp>
-#include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/io/DatasetOpen.hpp>
 #include <amrexplorer/query/LineQuery.hpp>
 #include <amrexplorer/query/MappedGridQuery.hpp>
 #include <amrexplorer/query/SliceQuery.hpp>
@@ -139,7 +139,7 @@ LocalDatasetSession::LocalDatasetSession(
 LocalDatasetSession::LocalDatasetSession(const std::filesystem::path& path,
     DatasetId id, std::uint64_t cacheBudgetBytes, StopToken cancellation,
     std::vector<DerivedFieldDefinition> derivedFields)
-    : LocalDatasetSession(std::make_shared<PlotfileDataset>(
+    : LocalDatasetSession(openDataset(
           path, id, cacheBudgetBytes, cancellation, std::move(derivedFields)))
 {
 }
@@ -148,7 +148,7 @@ LocalDatasetSession::LocalDatasetSession(std::filesystem::path dataRoot,
     DatasetId id, std::uint64_t cacheBudgetBytes,
     PlotfileMetadataResult metadata, StopToken cancellation,
     std::vector<DerivedFieldDefinition> derivedFields)
-    : LocalDatasetSession(std::make_shared<PlotfileDataset>(dataRoot, id,
+    : LocalDatasetSession(openDataset(std::move(dataRoot), id,
           cacheBudgetBytes, std::move(metadata), cancellation,
           std::move(derivedFields)))
 {

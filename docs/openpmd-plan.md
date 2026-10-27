@@ -2,7 +2,7 @@
 
 A proposed design, drafted on 2026-10-26, for opening openPMD series
 (HDF5 or ADIOS2) alongside AMReX plotfiles. The *Phases* section is the
-suggested order of PRs; phase 1 is done.
+suggested order of PRs; phases 1 and 2 are done.
 
 ## Recommendation
 
@@ -118,9 +118,32 @@ lines and ranges.
    `PlotfileSource` is the plotfile implementation, and `PlotfileDataset` is
    now only its two constructors. The queries, `DatasetPage` and
    `LocalDatasetSession` take `AmrDataset`.
-2. **openPMD mesh reader, one iteration.** `OpenPmdSource` for meshes only,
-   behind `AMREXPLORER_ENABLE_OPENPMD`, with reader selection on open and the
-   comparison fixtures.
+2. **openPMD mesh reader, one iteration.** *(Done.)* `OpenPmdSource`
+   (`src/io/openpmd/`) behind `AMREXPLORER_ENABLE_OPENPMD`, with a pinned
+   FetchContent fallback built without MPI. `readDatasetMetadata` and
+   `openDataset` (`include/amrexplorer/io/DatasetOpen.hpp`) pick the reader
+   from the path, so the GUI, the server and every frame load open a series
+   with no further change. The GUI adds **File › Open openPMD Series…**. The
+   tests are `test_openpmd_reader` (JSON fixtures written by openPMD-api:
+   two levels, staggered fields, a transposed 2-D layout, and a line across
+   both levels) and `qt_openpmd_open` (the series opened in the real window).
+   Decisions and limits found along the way:
+   - Staggered and nodal components are interpolated linearly to cell
+     centres when read. Every field then shares one centering, which
+     `validateMetadata` requires.
+   - The series is opened with `verify_homogeneous_extents: false`.
+     Otherwise openPMD-api 0.17 drops any staggered vector (E_x and E_y
+     have different extents).
+   - The finest level is the last one that every field reaches without a
+     gap. A field on a different grid from the reference field is left out.
+   - Written chunks become boxes, cut into tiles of at most 64³ (256² in
+     2-D) so that a serial HDF5 level is not one huge block.
+   - HDF5 cannot report which regions were written, so a refined level in an
+     HDF5 series looks complete and shows the fill value outside what was
+     written. ADIOS2 and JSON series are not affected.
+   - Not handled yet: non-cartesian geometry, F-ordered meshes, particles,
+     iterations beyond the first, and openPMD entries in the remote file
+     browser (typing the path works).
 3. **Iterations and particles.** Frames as (path, iteration) through
    `SequenceController`, `DatasetId` and the remote protocol; openPMD particle
    species, with the format-neutral `ParticlePoint`/`ParticleAttribute`

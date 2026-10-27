@@ -804,7 +804,8 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
         std::shared_ptr<const DatasetMetadata>(std::move(metadata)),
         metrics,
         fileVersion,
-        std::move(mappedGrid)
+        std::move(mappedGrid),
+        nullptr
     };
 }
 

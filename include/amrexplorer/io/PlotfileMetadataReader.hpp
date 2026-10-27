@@ -11,6 +11,8 @@
 
 namespace amrvis {
 
+class BlockSource;
+
 struct MetadataReadMetrics {
     std::uint64_t filesRead = 0;
     std::uint64_t bytesRead = 0;
@@ -28,6 +30,11 @@ struct PlotfileMetadataResult {
     // dimension (amrexvec_nu_x, _y, _z) and the Nu_nd boxes and blocks. Null
     // otherwise; metadata->hasMappedGrid says which.
     std::shared_ptr<const DatasetMetadata> mappedGrid;
+    // The open source this metadata was read from, for a format whose blocks
+    // can only be read through the handle that read its metadata (an openPMD
+    // series). A dataset built from this result reads through it; null for a
+    // plotfile, MultiFab or FAB, which reopen their files per block.
+    std::shared_ptr<const BlockSource> source;
 };
 
 // Component names that identify the mapped-grid block among a Header's

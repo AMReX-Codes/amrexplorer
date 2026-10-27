@@ -543,6 +543,18 @@ add_executable(test_slice_query integration/test_slice_query.cpp)
 target_link_libraries(test_slice_query PRIVATE amrexplorer::query amrexplorer::warnings)
 add_test(NAME slice_query COMMAND test_slice_query)
 
+if(AMREXPLORER_ENABLE_OPENPMD)
+    add_executable(test_openpmd_reader integration/test_openpmd_reader.cpp)
+    target_link_libraries(test_openpmd_reader
+        PRIVATE
+            amrexplorer::data
+            amrexplorer::query
+            amrexplorer::warnings
+            openPMD::openPMD
+    )
+    add_test(NAME openpmd_reader COMMAND test_openpmd_reader)
+endif()
+
 add_executable(test_volume_query integration/test_volume_query.cpp)
 target_link_libraries(test_volume_query PRIVATE amrexplorer::query amrexplorer::warnings)
 add_test(NAME volume_query COMMAND test_volume_query)
@@ -2246,6 +2258,19 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_multifab_missing_range PROPERTIES TIMEOUT 30)
+    if(AMREXPLORER_ENABLE_OPENPMD)
+        add_test(
+            NAME qt_openpmd_open
+            COMMAND "${CMAKE_COMMAND}"
+                "-DMATERIALIZER=$<TARGET_FILE:test_openpmd_reader>"
+                "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+                "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_openpmd"
+                -DMODE=openpmd
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+        )
+        set_tests_properties(qt_openpmd_open PROPERTIES TIMEOUT 30)
+    endif()
     add_test(
         NAME qt_multifab_non_finite
         COMMAND "${CMAKE_COMMAND}"

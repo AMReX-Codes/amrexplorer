@@ -1043,6 +1043,8 @@ private:
     void refreshFollowingCompanion(std::size_t normal, double minimum,
         double maximum, bool logarithmic);
     void chooseStandaloneDataset(const QString& caption, bool rawFab);
+    // A local openPMD series (only offered when this build can read one).
+    void chooseOpenPmdSeries();
     struct RemoteOpen {
         std::shared_ptr<remote::Connection> connection;
         std::string remotePath;

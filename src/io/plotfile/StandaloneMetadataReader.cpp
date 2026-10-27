@@ -1,4 +1,5 @@
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
+#include <amrexplorer/io/OpenPmd.hpp>
 #include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 #include <amrexplorer/io/FabCatalog.hpp>
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
@@ -116,6 +117,7 @@ PlotfileMetadataResult StandaloneMetadataReader::readFab(
         std::shared_ptr<const DatasetMetadata>(std::move(metadata)),
         MetadataReadMetrics{1, headerBytes, 0, 0},
         "FAB",
+        nullptr,
         nullptr
     };
 }
@@ -167,7 +169,7 @@ PlotfileMetadataResult makeSelectedFabMetadata(
     metadata->physicalDomain = sampleBounds(level, storedBox, source.dimension);
     validateStandalone(*metadata);
     return {std::shared_ptr<const DatasetMetadata>(std::move(metadata)),
-        MetadataReadMetrics{}, "FAB", nullptr};
+        MetadataReadMetrics{}, "FAB", nullptr, nullptr};
 }
 
 PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
@@ -225,6 +227,7 @@ PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
         std::shared_ptr<const DatasetMetadata>(std::move(metadata)),
         MetadataReadMetrics{1, index.bytesRead, 0, 0},
         "VisMF-" + std::to_string(index.version),
+        nullptr,
         nullptr
     };
 }
@@ -232,6 +235,9 @@ PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
 PlotfileMetadataResult readDatasetMetadata(const std::filesystem::path& path,
     StopToken cancellation)
 {
+    if (isOpenPmdSeriesPath(path)) {
+        return readOpenPmdMetadata(path, cancellation);
+    }
     if (std::filesystem::is_directory(path)
         && std::filesystem::is_regular_file(path / "Header")) {
         return PlotfileMetadataReader{}.read(path, cancellation);

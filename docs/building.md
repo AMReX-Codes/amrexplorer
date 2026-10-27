@@ -66,6 +66,14 @@ fetches the pinned fallback. Use `CMAKE_PREFIX_PATH` to select a package-manager
 installation, or `-DAMREXPLORER_FORCE_FETCH_FLATBUFFERS=ON` to force the
 fallback path.
 
+Reading openPMD series is optional: configure with
+`-DAMREXPLORER_ENABLE_OPENPMD=ON`. CMake first searches for an installed
+openPMD-api (0.16 or newer) built without MPI. If none is found, it fetches
+openPMD-api 0.17.1, built without MPI against whichever of HDF5 and ADIOS2 are
+installed; the JSON backend is always included. Use
+`-DAMREXPLORER_FORCE_FETCH_OPENPMD=ON` to force the fetched copy. The remote
+server reads openPMD only if it was built with this option.
+
 On macOS, Qt builds produce `build/src/qt/amrexplorer.app` by default. The bundle
 contains its executable at `Contents/MacOS/amrexplorer` and can be installed into a
 user application directory with:

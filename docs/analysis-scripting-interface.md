@@ -66,7 +66,7 @@ with amrexplorer.open_plotfile(
     plan = ds.plan_leaf_chunks(
         fields=["gasDensity", "temperature"],
         region=None,                 # full physical domain
-        dtype=None,                  # None: plotfile's stored dtype
+        dtype=None,                  # None: widest stored dtype
     )
     cold_mass_native = 0.0
     for item in plan:                 # serial in milestone 1
@@ -79,9 +79,19 @@ with amrexplorer.open_plotfile(
 `ds.leaf_cells(...)` is a convenience iterator equivalent to planning and
 reading serially. A chunk exposes arrays of equal logical shape for its
 requested fields; integer cell indices; cell-center coordinates; level; cell
-widths; and cell volume, which is always present for supported geometries. Arrays are read-only by
-default. The Python binding must keep their backing storage alive while any
-array view exists. Each array is a one-dimensional, equal-length vector of
+widths; and cell volume, which is always present for supported geometries.
+
+Chunks are copies. Reading an item decodes what it needs through the block
+cache, copies the selected leaf cells into arrays the chunk owns, and releases
+every cache pin before returning. A chunk therefore holds no cache blocks,
+stays valid after the dataset is closed, and any number of chunks can be kept
+without affecting the cache budget. Arrays are read-only by default.
+
+Field arrays are filled when the item is read. Geometry arrays (indices,
+coordinates, widths, and `cell_volume`) are computed lazily on first access
+from the chunk's level, box, and leaf selection, then cached on the chunk, so
+a script that never touches them never pays for them. Each array is a
+one-dimensional, equal-length vector of
 selected leaf cells in the canonical order defined below. Per-axis quantities
 are separate 1-D arrays, one per axis the plotfile has, never an `(n, 3)`
 array: indices `chunk.i`, `chunk.j`, `chunk.k`; cell-center coordinates
@@ -102,14 +112,16 @@ fastest). Masking removes cells without reordering the ones that remain. Each
 chunk is exactly one grid (FAB), so a chunk's arrays hold that grid's selected
 leaf cells in this order.
 
-Field arrays have the plotfile's stored dtype unless the caller passes a
-`dtype` keyword, in which case the backend converts while decoding. `dtype`
-affects only the output arrays; cache estimates use the stored dtype, because
-the cache holds blocks in on-disk precision. Keeping the stored dtype by default means
-a float32 plotfile yields float32 arrays, so scripts that need float64
-accumulation must request it or pass a dtype to the reduction. Derived fields
-are evaluated in float64 and, with `dtype=None`, narrowed to the plotfile's
-stored dtype, so every field array in a chunk shares one dtype. Geometry arrays
+Precision is stored per level (each level's `realDescriptor`), so a plotfile
+can mix float32 and float64 levels. With `dtype=None`, field arrays use the
+widest stored dtype across all levels, so one plan yields one dtype on every
+level; narrower levels are widened exactly. A `dtype` keyword overrides this,
+and the backend converts while decoding. `dtype` affects only the output
+arrays, not cache use. An all-float32 plotfile yields float32 arrays, so
+scripts that need float64 accumulation must request it or pass a dtype to the
+reduction. Derived fields are evaluated in float64 and, with `dtype=None`,
+narrowed to that widest stored dtype, so every field array in a chunk shares
+one dtype. Geometry arrays
 (cell-center coordinates, cell widths, and `cell_volume`) are always float64,
 regardless of the plotfile's stored dtype or the `dtype` keyword.
 
@@ -169,29 +181,33 @@ sizes (AMReX's `max_grid_size`), not by the planner; this matches
 `PlotfileDataset::requestBlock`, which decodes complete FAB components.
 The decoded box is the on-disk FAB, which includes the plotfile's stored
 ghost cells (`nGrow`), so estimates use that grown box, not the valid box;
-with `nGrow=2` on 32^3 grids the difference is about 42%. Document the actual
-peak as including the output arrays, decoded source components, derived-field
-inputs, and cache residency.
+with `nGrow=2` on 32^3 grids the difference is about 42%. The documented
+peak per read is the cache budget plus the chunk's own arrays and evaluation
+scratch.
 
 The dataset's block-cache budget is the allocation limit; there is no
-separate per-plan cap. Reading an item pins every decoded source component and
-derived-field input it needs in the block cache at once, and
-`ByteLruCache::insertAndPin` refuses a pin that would exceed the budget. The
-planner therefore estimates each item's pinned bytes and raises an error
-naming the offending grid and its estimate if any item exceeds the field-block
-budget. The estimate is the sum of:
+separate per-plan cap. While an item is being read, its decoded blocks are
+pinned in the block cache, and `ByteLruCache::insertAndPin` refuses a pin
+that would exceed the budget. The planner rejects, with an error naming the
+grid and its estimate, any item whose conservative estimate exceeds the
+budget. The estimate is a deliberate upper bound, not an exact model of
+pinning order:
 
-- each stored source component, over the grown on-disk box, at the stored
-  dtype size, counted once even when several fields share it;
-- each derived field's own block, which `PlotfileDataset::readDerivedBlock`
-  builds in float64 over the valid box and pins alongside its inputs,
-  including derived fields reached only as inputs to other derived fields.
+- every block the item could touch, meaning each distinct stored source
+  component and each derived field, including derived fields reached only as
+  inputs to other derived fields, is counted as if pinned at once;
+- each block is sized at 8 bytes per cell over the grown on-disk box,
+  whatever its stored dtype or actual box;
+- a fixed per-block allowance covers bookkeeping such as `FabBlock`
+  overhead.
 
-This rejects oversized items at planning time instead of failing with
-`CacheBudgetExceeded` mid-run. If the budget is lowered after planning, reads
-can still raise `CacheBudgetExceeded`; that error names the item. Output
-arrays are allocated outside the cache and are at most one FAB's selected
-cells per field.
+An item that passes this check cannot exceed the budget through its own pins.
+Reads can still raise `CacheBudgetExceeded` if the budget is lowered after
+planning or if concurrent reads share the cache; that error names the item.
+The check may reject an item that would in fact have fit; raising
+`cache_bytes` resolves it. Chunk arrays and evaluation scratch are allocated
+outside the cache, are not covered by the budget, and are bounded by one
+FAB's cells per field.
 
 `open_plotfile(path, cache_bytes=None)` sets that budget the same way the C++
 code does today: the value is passed as `cacheBudgetBytes` when the
@@ -242,8 +258,11 @@ can follow when an MPI or distributed executor is implemented.
 
 ### Particle attributes
 
-`ds.particle_chunks(species, fields=[...], target_bytes=...)` should eventually
-stream complete named integer and real attributes, positions, and stable IDs.
+`ds.particle_chunks(species, fields=[...])` should eventually stream complete
+named integer and real attributes, positions, and stable IDs. As with leaf
+chunks, each particle chunk is exactly one grid's particles as the plotfile
+stores them, never split or grouped, in level and then native grid order, and
+chunks are copies.
 The existing reader discovers species and samples positions for display; it
 currently discards component names while parsing the particle header and does
 not expose the full attributes. Extend its bounded parsing and chunked I/O

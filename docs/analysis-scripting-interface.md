@@ -63,7 +63,6 @@ with amrexplorer.open_plotfile("plt0100000") as ds:
         fields=["gasDensity", "temperature"],
         region=None,                 # full physical domain
         dtype=None,                  # None: plotfile's stored dtype
-        max_bytes=None,              # None: 1 GiB; hard per-item cap
     )
     cold_mass_native = 0.0
     for item in plan:                 # serial in milestone 1
@@ -76,7 +75,7 @@ with amrexplorer.open_plotfile("plt0100000") as ds:
 `ds.leaf_cells(...)` is a convenience iterator equivalent to planning and
 reading serially. A chunk exposes arrays of equal logical shape for its
 requested fields; integer cell indices; cell-center coordinates; level; cell
-widths; and cell volume where that measure is defined. Arrays are read-only by
+widths; and cell volume, which is always present for supported geometries. Arrays are read-only by
 default. The Python binding must keep their backing storage alive while any
 array view exists. Each array is a one-dimensional, equal-length vector of
 selected leaf cells in the canonical order defined below. Coverage and region
@@ -99,7 +98,9 @@ Field arrays have the plotfile's stored dtype unless the caller passes a
 `dtype` keyword, in which case the backend converts while decoding. The plan's
 memory estimates use the output dtype. Keeping the stored dtype by default means
 a float32 plotfile yields float32 arrays, so scripts that need float64
-accumulation must request it or pass a dtype to the reduction. Geometry arrays
+accumulation must request it or pass a dtype to the reduction. Derived fields
+are evaluated in float64 and, with `dtype=None`, narrowed to the plotfile's
+stored dtype, so every field array in a chunk shares one dtype. Geometry arrays
 (cell-center coordinates, cell widths, and `cell_volume`) are always float64,
 regardless of the plotfile's stored dtype or the `dtype` keyword.
 
@@ -117,10 +118,17 @@ Planning reads metadata, not field payloads. Each work item describes a
 dataset-session-local, immutable unit of work: level, grid (FAB), requested
 fields, region selection, and the refinement coverage needed to identify leaf
 cells. Each item is exactly one FAB: the planner neither splits FABs nor
-groups them, and a FAB with no selected leaf cells produces no item. The plan is ordered deterministically
-and exposes a stable item index for reporting and deterministic reductions.
-Items do not depend on iteration order or on mutable cursor state. Reading an
-item twice gives the same cells and values while the plotfile is unchanged.
+groups them, and a FAB with no selected leaf cells produces no item. The plan
+is ordered deterministically and exposes a stable item index for reporting
+and deterministic reductions. Items do not depend on iteration order or on
+mutable cursor state. Reading an item twice gives the same cells and values
+while the plotfile is unchanged.
+
+The plan records a fingerprint of each requested derived field's definition
+at planning time. Reading an item checks it against the current definition
+and raises an error naming the field if the definition has been changed or
+removed since planning, rather than returning values from a different
+expression. The caller re-plans to use the new definition.
 
 For a full-domain plan, every leaf cell appears in exactly one item and no
 covered coarse cell appears. The backend assumes the plotfile is properly
@@ -138,17 +146,26 @@ partition of native cells.
 Because items are whole FABs, per-item memory is set by the plotfile's grid
 sizes (AMReX's `max_grid_size`), not by the planner; this matches
 `PlotfileDataset::requestBlock`, which decodes complete FAB components.
-Document the actual peak as including the output arrays, decoded source
-components, derived-field inputs, and cache residency.
+The decoded box is the on-disk FAB, which includes the plotfile's stored
+ghost cells (`nGrow`), so estimates use that grown box, not the valid box;
+with `nGrow=2` on 32^3 grids the difference is about 42%. Document the actual
+peak as including the output arrays, decoded source components, derived-field
+inputs, and cache residency.
 
-`max_bytes` is the explicit allocation limit. It caps the estimated peak
-allocation for reading any single item: its output arrays plus the decoded
-source FAB components and derived-field inputs it needs. It defaults to 1 GiB,
-far above typical FABs, and the plan exposes the resolved value as
-`plan.max_bytes`. Planning raises an error naming the offending grid and its
-estimated size if any item would exceed the limit, rather than allocating
-without a bound. Callers with very large FABs can raise `max_bytes`
-explicitly.
+The dataset's block-cache budget is the allocation limit; there is no
+separate per-plan cap. Reading an item pins every decoded source component and
+derived-field input it needs in the block cache at once, and
+`ByteLruCache::insertAndPin` refuses a pin that would exceed the budget. The
+planner therefore estimates each item's pinned bytes (grown-box components
+times the stored dtype size, plus derived-field inputs) and raises an error
+naming the offending grid and its estimate if any item exceeds the budget
+available to field blocks, which excludes the mapped-grid slice. This rejects
+oversized items at planning time instead of failing with
+`CacheBudgetExceeded` mid-run. Callers with very large FABs raise the budget
+when opening the dataset. If the budget is lowered after planning, reads can
+still raise `CacheBudgetExceeded`; that error names the item. Output arrays
+are allocated outside the cache and are at most one FAB's selected cells per
+field.
 
 Future executors can distribute items across threads, processes, or MPI ranks
 and combine partial results. They should use bounded in-flight reads and
@@ -204,8 +221,10 @@ of leaf cells; Kangaroo's `plotfile_fab_minmax.py`, for example, reports
 per-FAB extrema including covered cells. `ds.blocks(level=None)` should list
 each grid's level, index box, physical bounds, and covered fraction, and
 `ds.block_statistics(fields)` should return per-block minima and maxima over
-all cells, covered or not. Extrema are computed from the decoded data with
-NaN ignored, matching Kangaroo's `nanmin`/`nanmax`. The per-block extrema in
+all cells of the on-disk FAB, covered or not and including stored ghost
+cells, as Kangaroo's `plotfile_fab_minmax.py` does. Extrema are computed from
+the decoded data with NaN ignored, matching Kangaroo's `nanmin`/`nanmax`; a
+block whose values are all NaN reports NaN for both, without raising. The per-block extrema in
 the MultiFab header (`src/io/plotfile/PlotfileMetadataReader.cpp`) are not
 used here: AMReX computes them before converting to the stored precision,
 writes them as text at limited precision, and lets NaN propagate. Block order
@@ -222,12 +241,19 @@ geometry is Kangaroo's tangent-plane approximation
 `plotfile_flux_surface.py` and `plotfile_cylindrical_flux_surface.py`, not the
 exact curved-surface area:
 
+- **Intersection test:** a cell gets nonzero area only if the true sphere or
+  finite cylinder meets its box (Kangaroo's `sphere_may_intersect_cell` and
+  `cylinder_may_intersect_cell`). This test runs first; the tangent-plane
+  area below is computed only for cells that pass it, so a plane that clips a
+  cell corner the real surface misses contributes nothing.
 - **Sphere:** the surface inside a cell is approximated by the plane
   perpendicular to the unit vector from the center to the cell center, at
   distance `radius`; the area is that plane's section of the cell box, and
   the normal is that unit vector.
 - **Cylinder walls:** the same construction in the x-y plane, with the cell's
-  z extent clipped to `|z| <= half_height`.
+  z extent clipped to `|z - center[2]| <= half_height`. All cylinder
+  coordinates, including the end caps and their moments, are measured
+  relative to `center`.
 - **Cylinder end caps:** these are planar, so the clipped disk-rectangle
   footprint is computed analytically, together with its first moments
   (integrals of x dA and y dA) for lever-arm-weighted fluxes such as
@@ -264,30 +290,58 @@ AMReX's `FillPatch` does. Physical-domain ghosts follow a stated boundary
 policy or are marked invalid. Each tile carries a leaf mask for its valid
 region so a reduction counts each leaf cell once and agrees with the
 leaf-chunk iterator. Tiles use Fortran order and the same dtype rules as leaf
-chunks, and `max_bytes` covers the ghost-filled allocation. Ghost filling
+chunks, and the planning-time budget check covers every FAB a tile's ghost
+fill pins. Ghost filling
 reads neighboring FABs, so its cost and cache behavior must be measured
 before parallel execution relies on it.
 
 ### Particle deposition (later milestone)
 
-Kangaroo's `plotfile_projection_cic_stellar.py` deposits particle mass onto a
-projection grid with cloud-in-cell weights. Particle attribute chunks alone
+Kangaroo's `plotfile_projection_cic_stellar.py` deposits particle mass with
+cloud-in-cell weights and then projects it. Particle attribute chunks alone
 leave this to Python, which is correct but slow for large particle counts.
 `ds.deposit_particles(species, weight, axis, region, resolution,
-method="cic", mask=None)` should return a numeric array with documented
-kernel width and normalization, using the same pixel conventions as numeric
-projections so the two can be compared or summed. `mask` is an optional
-boolean array or callable over particle attributes that selects which
-particles deposit, so Python-side filters such as Kangaroo's `mass_max` reach
-the native deposit.
+method="cic", mask=None)` provides it natively. The deposit must be
+conservative: every selected particle's full weight reaches the result or is
+reported as outside the image.
 
-The boundary policy follows Kangaroo: CIC weight that lands outside the
-particle's grid, in a covered cell, or outside the region is dropped, not
-clipped or reflected. The result reports the dropped weight alongside the
-array. Conservation is therefore stated as: deposited weight plus dropped
-weight equals the direct sum over selected particles, and the two totals
-agree exactly when every selected particle's CIC cloud lies inside the
-region.
+Kangaroo is not the reference here. Its `particle_cic_projection_accumulate`
+(`kangaroo/cpp/src/kernels/particle_kernels.cpp`) deposits block by block and
+drops CIC weight that lands in a neighboring block or in a cell covered by a
+finer level, so it loses mass near block and coarse-fine boundaries. This
+deposit instead works on the AMR hierarchy as a whole:
+
+- **Kernel.** Each selected particle spreads its weight with 2-D CIC weights
+  over the four nearest cell centers, in the two image axes, at the cell size
+  of the level it is stored on, within the cell layer along `axis` that
+  contains it. Region selection along `axis` uses the particle position.
+- **Block boundaries.** Weight that crosses into a neighboring grid on the
+  same level is deposited there. Blocks are a storage detail and never cause
+  loss.
+- **Coarse-fine boundaries.** Weight that lands where the particle's level
+  has no grid goes to the cell of the next coarser level that contains that
+  point, recursing as needed. Weight that lands in a cell covered by a finer
+  level is distributed to the covering leaf cells in proportion to their area
+  in the image plane. The deposited field therefore lives on leaf cells only.
+- **Domain boundaries.** Periodic directions wrap. In non-periodic directions,
+  weight that would leave the domain is folded back into the boundary cell,
+  so the domain keeps all of it.
+- **Projection.** Each leaf cell's deposited weight is distributed to the
+  output pixels by the fraction of the cell's area in the image plane that
+  overlaps each pixel. The result is deposited weight per pixel, using the
+  same pixel conventions as numeric projections so the two can be compared
+  or summed.
+
+`mask` is an optional boolean array or callable over particle attributes that
+selects which particles deposit, so Python-side filters such as Kangaroo's
+`mass_max` reach the native deposit. Particles with a non-finite position or
+weight raise an error rather than being skipped silently.
+
+The result reports the weight that falls outside the image rectangle. Pixel
+weight plus outside weight equals the direct sum over selected particles, to
+floating-point tolerance. Results agree with Kangaroo away from block,
+coarse-fine, and domain boundaries, and differ near them by the mass Kangaroo
+drops.
 
 ### Headless rendering
 
@@ -310,9 +364,10 @@ result-size limits and a separate security review.
    metadata/field discovery, serial convenience iterator, and one example
    computing temperature-phase masses. Keep native values throughout. Test
    multilevel full and partial refinement, region boundaries, multi-field
-   requests, missing fields, `max_bytes` rejection, and chunk lifetime. Compare a
-   real Quokka plotfile's native values and phase totals with yt using the
-   same selection and arithmetic; document any floating-point difference.
+   requests, missing fields, planning-time rejection of items over the cache
+   budget, and chunk lifetime. Compare a real Quokka plotfile's native values
+   and phase totals with yt using the same selection and arithmetic; document
+   any floating-point difference.
 2. **Particle attributes and analysis scripts.** Expose complete particle
    attributes. Port one particle histogram and the Kennicutt-Schmidt
    calculation, retaining its Python histogram of cell-center positions
@@ -341,11 +396,14 @@ result-size limits and a separate security review.
    that masked tile reductions match leaf-chunk totals, and that gradients of
    linear fields are exact across coarse-fine boundaries. Port
    `plotfile_toomre_q.py` and compare profiles with Kangaroo.
-9. **Particle deposition.** Add CIC deposition on the projection pixel grid.
-   Test that deposited plus dropped weight equals the direct sum, that
-   interior-only particles conserve exactly, and agreement with a NumPy
-   reference deposit, then port `plotfile_projection_cic_stellar.py` with its
-   `mass_max` selection.
+9. **Particle deposition.** Add conservative AMR-aware CIC deposition and
+   projection to pixels. Test, to floating-point tolerance, that pixel plus
+   outside weight equals the direct sum on single-level, multi-block, and
+   multilevel plotfiles, including particles next to block, coarse-fine, and
+   domain boundaries; and agreement with a NumPy reference deposit on a
+   uniform grid. Then port `plotfile_projection_cic_stellar.py` with its
+   `mass_max` selection, and check that it matches Kangaroo away from
+   boundaries.
 
 The public Python examples and tests should say whether they validate raw
 source values, analysis totals, visual equivalence, or parallel execution.

@@ -62,9 +62,8 @@ with amrexplorer.open_plotfile("plt0100000") as ds:
     plan = ds.plan_leaf_chunks(
         fields=["gasDensity", "temperature"],
         region=None,                 # full physical domain
-        target_bytes=256 << 20,      # target output size, not a hard I/O cap
         dtype=None,                  # None: plotfile's stored dtype
-        max_bytes=None,              # None: 4 * target_bytes; hard per-item cap
+        max_bytes=None,              # None: 1 GiB; hard per-item cap
     )
     cold_mass_native = 0.0
     for item in plan:                 # serial in milestone 1
@@ -92,20 +91,21 @@ Within a level, grids are ordered along a Morton (Z-order) curve keyed on each
 grid's lower-corner cell index, measured from the level's domain lower corner.
 Grids on one level do not overlap, so these keys are distinct. Within a grid,
 cells follow AMReX's native FAB memory order (Fortran order, x varying
-fastest). Masking removes cells without reordering the ones that remain. When
-a chunk splits a grid, each piece is a contiguous run of that grid's cells in
-this order.
+fastest). Masking removes cells without reordering the ones that remain. Each
+chunk is exactly one grid (FAB), so a chunk's arrays hold that grid's selected
+leaf cells in this order.
 
 Field arrays have the plotfile's stored dtype unless the caller passes a
-`dtype` keyword, in which case the backend converts while decoding. The plan
-sizes chunks using the output dtype. Keeping the stored dtype by default means
+`dtype` keyword, in which case the backend converts while decoding. The plan's
+memory estimates use the output dtype. Keeping the stored dtype by default means
 a float32 plotfile yields float32 arrays, so scripts that need float64
 accumulation must request it or pass a dtype to the reduction. Geometry arrays
 (cell-center coordinates, cell widths, and `cell_volume`) are always float64,
 regardless of the plotfile's stored dtype or the `dtype` keyword.
 
 Field selection uses the plotfile's exact field names. Each plotfile variable
-is its own single-component field, so there are no component indices; the API must expose metadata so a script can resolve names before reading.
+is its own single-component field, so there are no component indices; the API
+must expose metadata so a script can resolve names before reading.
 Unknown fields, unavailable derived fields, unsupported centering, and invalid
 regions are errors. The first milestone supports cell-centered Cartesian
 plotfile fields. Nodal, face-centered, mapped, and spherical geometry require
@@ -114,9 +114,10 @@ separate semantics and can be added explicitly later.
 ## Leaf-chunk plan and parallel readiness
 
 Planning reads metadata, not field payloads. Each work item describes a
-dataset-session-local, immutable unit of work: level, grid/block, an index-space
-tile within that block, requested fields, region selection, and the refinement
-coverage needed to identify leaf cells. The plan is ordered deterministically
+dataset-session-local, immutable unit of work: level, grid (FAB), requested
+fields, region selection, and the refinement coverage needed to identify leaf
+cells. Each item is exactly one FAB: the planner neither splits FABs nor
+groups them, and a FAB with no selected leaf cells produces no item. The plan is ordered deterministically
 and exposes a stable item index for reporting and deterministic reductions.
 Items do not depend on iteration order or on mutable cursor state. Reading an
 item twice gives the same cells and values while the plotfile is unchanged.
@@ -128,22 +129,22 @@ lies within the level-l grids. Under that assumption, a level-l cell is a
 leaf exactly when no level-(l+1) grid covers it, so checking coverage against
 the next finer level alone is sufficient. A plotfile that violates proper
 nesting gives undefined leaf partitions. Coverage must still account for
-partial overlap with a coarse block or requested region. Region selection is defined by cell centers unless an operation
-explicitly requests fractional boundary-cell overlap. Do not infer leaf status
+partial overlap with a coarse block or requested region. Region selection is
+defined by cell centers unless an operation explicitly requests fractional
+boundary-cell overlap. Do not infer leaf status
 from a display raster's `sourceLevel`: that reports sampled pixels, not a
 partition of native cells.
 
-`target_bytes` guides tile size using the selected fields and geometry arrays.
-It is not yet a hard peak-memory bound: `PlotfileDataset::requestBlock` currently
-decodes a complete FAB component before a tile can be extracted. Document the
-actual peak as including decoded source blocks, derived-field inputs, and cache
-residency. A later windowed FAB reader is required before promising a hard
-per-worker memory ceiling for very large FABs.
+Because items are whole FABs, per-item memory is set by the plotfile's grid
+sizes (AMReX's `max_grid_size`), not by the planner; this matches
+`PlotfileDataset::requestBlock`, which decodes complete FAB components.
+Document the actual peak as including the output arrays, decoded source
+components, derived-field inputs, and cache residency.
 
 `max_bytes` is the explicit allocation limit. It caps the estimated peak
 allocation for reading any single item: its output arrays plus the decoded
-source FAB components and derived-field inputs it needs. It defaults to
-`4 * target_bytes`, and the plan exposes the resolved value as
+source FAB components and derived-field inputs it needs. It defaults to 1 GiB,
+far above typical FABs, and the plan exposes the resolved value as
 `plan.max_bytes`. Planning raises an error naming the offending grid and its
 estimated size if any item would exceed the limit, rather than allocating
 without a bound. Callers with very large FABs can raise `max_bytes`
@@ -203,36 +204,63 @@ of leaf cells; Kangaroo's `plotfile_fab_minmax.py`, for example, reports
 per-FAB extrema including covered cells. `ds.blocks(level=None)` should list
 each grid's level, index box, physical bounds, and covered fraction, and
 `ds.block_statistics(fields)` should return per-block minima and maxima over
-all cells, covered or not. The metadata reader already loads per-block
-extrema from the MultiFab header when the plotfile stores them
-(`src/io/plotfile/PlotfileMetadataReader.cpp`), so this mostly exposes
-existing data; plotfiles without header statistics need a reduction over
-decoded FABs. Block order follows the canonical grid order above.
+all cells, covered or not. Extrema are computed from the decoded data with
+NaN ignored, matching Kangaroo's `nanmin`/`nanmax`. The per-block extrema in
+the MultiFab header (`src/io/plotfile/PlotfileMetadataReader.cpp`) are not
+used here: AMReX computes them before converting to the stored precision,
+writes them as text at limited precision, and lets NaN propagate. Block order
+follows the canonical grid order above, and each block also reports its
+native FAB index within its level so output and selection can match tools
+that address FABs by plotfile position.
 
 ### Surface-intersection geometry (later milestone)
 
 Flux integrals through spheres and z-aligned cylinders weight each leaf cell
-by the exact area of the surface inside it, not by a cell-center test.
-Kangaroo's `plotfile_flux_surface.py` and
-`plotfile_cylindrical_flux_surface.py` do this with per-cell intersection
-geometry. Provide vectorized C++ helpers that take a chunk's cell centers and
-widths and return, for each cell, the intersecting surface area and its mean
-outward normal: `sphere_area_in_cells(chunk, center, radius)` and
+by a per-cell surface area rather than a cell-center test. The reference
+geometry is Kangaroo's tangent-plane approximation
+(`kangaroo/cpp/src/kernels/flux_geometry_support.cpp`), used by
+`plotfile_flux_surface.py` and `plotfile_cylindrical_flux_surface.py`, not the
+exact curved-surface area:
+
+- **Sphere:** the surface inside a cell is approximated by the plane
+  perpendicular to the unit vector from the center to the cell center, at
+  distance `radius`; the area is that plane's section of the cell box, and
+  the normal is that unit vector.
+- **Cylinder walls:** the same construction in the x-y plane, with the cell's
+  z extent clipped to `|z| <= half_height`.
+- **Cylinder end caps:** these are planar, so the clipped disk-rectangle
+  footprint is computed analytically, together with its first moments
+  (integrals of x dA and y dA) for lever-arm-weighted fluxes such as
+  vertical angular momentum.
+- **Faces:** when a cap or wall lies exactly on a cell face, the cell on the
+  interior side supplies the state and the face is counted once, as in
+  Kangaroo.
+
+Provide vectorized C++ helpers that take a chunk's cell centers and widths and
+return these per-cell areas, normals, and cap moments:
+`sphere_area_in_cells(chunk, center, radius)` and
 `cylinder_area_in_cells(chunk, center, radius, half_height)`, the latter
 reporting walls and end caps separately. Field arithmetic and binning stay in
-Python. Because region selection is by cell center, a caller must request a
-region padded by at least one finest-level cell width around the surface; the
-helpers document this, and a convenience planner may compute the padded
-region.
+Python. Exact curved-surface areas could be added later under a different
+name, not as a silent change to these helpers.
+
+Because region selection is by cell center, a cell can cross the surface
+while its center lies outside a tight region. A caller must pad the region
+around the surface by half the cell diagonal of the coarsest leaf cell that
+can meet the surface; padding by the coarsest level's half-diagonal is always
+safe. The helpers document this, and a convenience planner should compute the
+padded region.
 
 ### Tiles with ghost cells (later milestone)
 
 Stencil operations, such as the potential gradient in Kangaroo's
 `plotfile_toomre_q.py`, need neighbors that a compact leaf-cell vector does
-not carry. `ds.plan_tiles(fields, ghost=n, ...)` should yield rectangular
-tiles of one level with `n` ghost cells per side, filled from same-level
-neighbors and, at coarse-fine boundaries, by documented interpolation from
-the next coarser level; physical-domain ghosts follow a stated boundary
+not carry. `ds.plan_tiles(fields, ghost=n, ...)` should yield one tile per
+FAB, matching leaf chunks, grown by `n` ghost cells per side. Ghosts are
+filled from same-level neighbors where they exist. Elsewhere they are
+interpolated, by a documented scheme, from the finest coarser level that
+covers them, recursing past level l-1 when `n` exceeds the nesting buffer, as
+AMReX's `FillPatch` does. Physical-domain ghosts follow a stated boundary
 policy or are marked invalid. Each tile carries a leaf mask for its valid
 region so a reduction counts each leaf cell once and agrees with the
 leaf-chunk iterator. Tiles use Fortran order and the same dtype rules as leaf
@@ -246,10 +274,20 @@ Kangaroo's `plotfile_projection_cic_stellar.py` deposits particle mass onto a
 projection grid with cloud-in-cell weights. Particle attribute chunks alone
 leave this to Python, which is correct but slow for large particle counts.
 `ds.deposit_particles(species, weight, axis, region, resolution,
-method="cic")` should return a numeric array with documented kernel width,
-boundary, and normalization, using the same pixel conventions as numeric
-projections so the two can be compared or summed. Total deposited weight
-inside the region must equal the direct particle sum.
+method="cic", mask=None)` should return a numeric array with documented
+kernel width and normalization, using the same pixel conventions as numeric
+projections so the two can be compared or summed. `mask` is an optional
+boolean array or callable over particle attributes that selects which
+particles deposit, so Python-side filters such as Kangaroo's `mass_max` reach
+the native deposit.
+
+The boundary policy follows Kangaroo: CIC weight that lands outside the
+particle's grid, in a covered cell, or outside the region is dropped, not
+clipped or reflected. The result reports the dropped weight alongside the
+array. Conservation is therefore stated as: deposited weight plus dropped
+weight equals the direct sum over selected particles, and the two totals
+agree exactly when every selected particle's CIC cloud lies inside the
+region.
 
 ### Headless rendering
 
@@ -281,8 +319,7 @@ result-size limits and a separate security review.
    weighted by leaf-cell mass. These ports use leaf-cell and particle chunks.
 3. **Parallel execution.** Benchmark serial reads and cache contention, choose
    a worker ownership model, add bounded scheduling and reductions, then test
-   serial/thread/process or MPI parity on multilevel data. Add windowed FAB
-   reads if measured peak memory requires a hard per-worker limit.
+   serial/thread/process or MPI parity on multilevel data.
 4. **Numeric projections.** Define pixel normalization, boundary overlap, and
    coverage semantics; add leaf-cell projection and coverage results. Port one
    radial surface-density profile. Check conservation of total projected
@@ -291,21 +328,24 @@ result-size limits and a separate security review.
 5. **Headless plotting and batch ergonomics.** Expose numeric slices and
    image-oriented queries, sequence helpers, cancellation/progress, and examples
    covering the current yt plotting scripts.
-6. **Block metadata and statistics.** Expose grid listings and per-block
-   extrema. Port `plotfile_fab_minmax.py` and check its output against
+6. **Block metadata and statistics.** Expose grid listings with native FAB
+   indices and per-block extrema computed from decoded data. Port `plotfile_fab_minmax.py` and check its output against
    Kangaroo on the same plotfile.
 7. **Surface-intersection helpers.** Add sphere and cylinder area helpers.
    Port both Kangaroo flux-surface scripts, keeping their JSON output so the
-   existing `plot_*` scripts run unchanged. Test that intersected areas sum to
-   the analytic surface area on uniform and multilevel grids, and compare
-   fluxes with Kangaroo.
+   existing `plot_*` scripts run unchanged. Test that per-cell areas, normals,
+   cap moments, and fluxes match Kangaroo to rounding on the same plotfile,
+   and that summed areas converge to the analytic surface area as resolution
+   increases on uniform and multilevel grids.
 8. **Tiles with ghost cells.** Add the tile planner and ghost filling. Test
    that masked tile reductions match leaf-chunk totals, and that gradients of
    linear fields are exact across coarse-fine boundaries. Port
    `plotfile_toomre_q.py` and compare profiles with Kangaroo.
 9. **Particle deposition.** Add CIC deposition on the projection pixel grid.
-   Test mass conservation and agreement with a NumPy reference deposit, then
-   port `plotfile_projection_cic_stellar.py`.
+   Test that deposited plus dropped weight equals the direct sum, that
+   interior-only particles conserve exactly, and agreement with a NumPy
+   reference deposit, then port `plotfile_projection_cic_stellar.py` with its
+   `mass_max` selection.
 
 The public Python examples and tests should say whether they validate raw
 source values, analysis totals, visual equivalence, or parallel execution.

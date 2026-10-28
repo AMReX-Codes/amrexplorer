@@ -6,7 +6,8 @@ Status: design proposal, 2026-09-27. No interface described here is implemented 
 
 Let Python scripts use AMReXplorer to analyze AMReX plotfiles, including the
 gas-cell, particle, slice, and projection workflows currently written with yt
-in `incite-2026/postprocessing/`. The interface must preserve native field
+in `incite-2026/postprocessing/`, and the plotfile analyses currently written
+with Kangaroo in `kangaroo/scripts/`. The interface must preserve native field
 values and exact AMR coverage. Scripts own their physical-unit conversions,
 statistics, plots, and output files. A serial first milestone must leave a
 clear path to parallel iteration over leaf chunks.
@@ -81,9 +82,9 @@ default. The Python binding must keep their backing storage alive while any
 array view exists. Each array is a one-dimensional, equal-length vector of
 selected leaf cells in the canonical order defined below. Coverage and region
 masks are applied in C++; a covered coarse cell never appears as an ordinary
-sample. A later API
-may offer rectangular tiles with explicit masks for algorithms that need them,
-but the default iterator's compact contract stays unchanged.
+sample. Algorithms that need neighboring cells use the separate tile API
+described under "Tiles with ghost cells"; the default iterator's compact
+contract stays unchanged.
 
 Leaf cells have one canonical global order, and both plan items and the cells
 within each chunk follow it. Levels come in ascending order, coarsest first.
@@ -195,6 +196,61 @@ image. Its result is distinct from a face-on view made by summing sampled
 pixels. Exact integral and approximate raster sampling must have different
 names and documented semantics. Matplotlib can render either result in Python.
 
+### Block metadata and statistics (later milestone)
+
+Some analyses need the plotfile's own grid structure rather than a partition
+of leaf cells; Kangaroo's `plotfile_fab_minmax.py`, for example, reports
+per-FAB extrema including covered cells. `ds.blocks(level=None)` should list
+each grid's level, index box, physical bounds, and covered fraction, and
+`ds.block_statistics(fields)` should return per-block minima and maxima over
+all cells, covered or not. The metadata reader already loads per-block
+extrema from the MultiFab header when the plotfile stores them
+(`src/io/plotfile/PlotfileMetadataReader.cpp`), so this mostly exposes
+existing data; plotfiles without header statistics need a reduction over
+decoded FABs. Block order follows the canonical grid order above.
+
+### Surface-intersection geometry (later milestone)
+
+Flux integrals through spheres and z-aligned cylinders weight each leaf cell
+by the exact area of the surface inside it, not by a cell-center test.
+Kangaroo's `plotfile_flux_surface.py` and
+`plotfile_cylindrical_flux_surface.py` do this with per-cell intersection
+geometry. Provide vectorized C++ helpers that take a chunk's cell centers and
+widths and return, for each cell, the intersecting surface area and its mean
+outward normal: `sphere_area_in_cells(chunk, center, radius)` and
+`cylinder_area_in_cells(chunk, center, radius, half_height)`, the latter
+reporting walls and end caps separately. Field arithmetic and binning stay in
+Python. Because region selection is by cell center, a caller must request a
+region padded by at least one finest-level cell width around the surface; the
+helpers document this, and a convenience planner may compute the padded
+region.
+
+### Tiles with ghost cells (later milestone)
+
+Stencil operations, such as the potential gradient in Kangaroo's
+`plotfile_toomre_q.py`, need neighbors that a compact leaf-cell vector does
+not carry. `ds.plan_tiles(fields, ghost=n, ...)` should yield rectangular
+tiles of one level with `n` ghost cells per side, filled from same-level
+neighbors and, at coarse-fine boundaries, by documented interpolation from
+the next coarser level; physical-domain ghosts follow a stated boundary
+policy or are marked invalid. Each tile carries a leaf mask for its valid
+region so a reduction counts each leaf cell once and agrees with the
+leaf-chunk iterator. Tiles use Fortran order and the same dtype rules as leaf
+chunks, and `max_bytes` covers the ghost-filled allocation. Ghost filling
+reads neighboring FABs, so its cost and cache behavior must be measured
+before parallel execution relies on it.
+
+### Particle deposition (later milestone)
+
+Kangaroo's `plotfile_projection_cic_stellar.py` deposits particle mass onto a
+projection grid with cloud-in-cell weights. Particle attribute chunks alone
+leave this to Python, which is correct but slow for large particle counts.
+`ds.deposit_particles(species, weight, axis, region, resolution,
+method="cic")` should return a numeric array with documented kernel width,
+boundary, and normalization, using the same pixel conventions as numeric
+projections so the two can be compared or summed. Total deposited weight
+inside the region must equal the direct particle sum.
+
 ### Headless rendering
 
 Expose the existing slice and volume pipelines as optional Python operations
@@ -235,6 +291,21 @@ result-size limits and a separate security review.
 5. **Headless plotting and batch ergonomics.** Expose numeric slices and
    image-oriented queries, sequence helpers, cancellation/progress, and examples
    covering the current yt plotting scripts.
+6. **Block metadata and statistics.** Expose grid listings and per-block
+   extrema. Port `plotfile_fab_minmax.py` and check its output against
+   Kangaroo on the same plotfile.
+7. **Surface-intersection helpers.** Add sphere and cylinder area helpers.
+   Port both Kangaroo flux-surface scripts, keeping their JSON output so the
+   existing `plot_*` scripts run unchanged. Test that intersected areas sum to
+   the analytic surface area on uniform and multilevel grids, and compare
+   fluxes with Kangaroo.
+8. **Tiles with ghost cells.** Add the tile planner and ghost filling. Test
+   that masked tile reductions match leaf-chunk totals, and that gradients of
+   linear fields are exact across coarse-fine boundaries. Port
+   `plotfile_toomre_q.py` and compare profiles with Kangaroo.
+9. **Particle deposition.** Add CIC deposition on the projection pixel grid.
+   Test mass conservation and agreement with a NumPy reference deposit, then
+   port `plotfile_projection_cic_stellar.py`.
 
 The public Python examples and tests should say whether they validate raw
 source values, analysis totals, visual equivalence, or parallel execution.

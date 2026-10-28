@@ -31,8 +31,11 @@ PlotfileDataset / plotfile readers: metadata, stored/derived FABs, particles
 The C++ backend exposes plotfile-native numbers only. It does not read a unit
 system, attach units to arrays, infer cgs values, or convert fields. Coordinates
 and time are in the units represented by the plotfile geometry and header.
-`cell_volume` is a geometric measure in native coordinate units cubed for a
-Cartesian 3-D plotfile. A projected integral has units of the input field
+For Cartesian plotfiles, `cell_volume` is the product of the cell widths over
+the plotfile's dimensions: `dx[0]` in 1-D, `dx[0]*dx[1]` in 2-D, and
+`dx[0]*dx[1]*dx[2]` in 3-D, in native coordinate units raised to that power.
+Its meaning in lower dimensions (length or area) is the caller's to interpret.
+A projected integral has units of the input field
 multiplied by native path length; the caller decides its physical meaning.
 Geometry and coordinate system remain backend concerns because they determine
 which cells exist and how they are located. Unsupported geometry for an
@@ -59,15 +62,15 @@ with amrexplorer.open_plotfile("plt0100000") as ds:
         fields=["gasDensity", "temperature"],
         region=None,                 # full physical domain
         target_bytes=256 << 20,      # target output size, not a hard I/O cap
+        dtype=None,                  # None: plotfile's stored dtype
+        max_bytes=None,              # None: 4 * target_bytes; hard per-item cap
     )
     cold_mass_native = 0.0
     for item in plan:                 # serial in milestone 1
         chunk = ds.read_leaf_chunk(item)
         rho = chunk["gasDensity"]
-        cold_mass_native += (
-            rho[chunk["temperature"] < 200]
-            * chunk.cell_volume[chunk["temperature"] < 200]
-        ).sum()
+        cold = chunk["temperature"] < 200
+        cold_mass_native += (rho[cold] * chunk.cell_volume[cold]).sum()
 ```
 
 `ds.leaf_cells(...)` is a convenience iterator equivalent to planning and
@@ -76,13 +79,32 @@ requested fields; integer cell indices; cell-center coordinates; level; cell
 widths; and cell volume where that measure is defined. Arrays are read-only by
 default. The Python binding must keep their backing storage alive while any
 array view exists. Each array is a one-dimensional, equal-length vector of
-selected leaf cells in index order. Coverage and region masks are applied in
-C++; a covered coarse cell never appears as an ordinary sample. A later API
+selected leaf cells in the canonical order defined below. Coverage and region
+masks are applied in C++; a covered coarse cell never appears as an ordinary
+sample. A later API
 may offer rectangular tiles with explicit masks for algorithms that need them,
 but the default iterator's compact contract stays unchanged.
 
-Field selection uses the plotfile's exact field names and component indices;
-the API must expose metadata so a script can resolve names before reading.
+Leaf cells have one canonical global order, and both plan items and the cells
+within each chunk follow it. Levels come in ascending order, coarsest first.
+Within a level, grids are ordered along a Morton (Z-order) curve keyed on each
+grid's lower-corner cell index, measured from the level's domain lower corner.
+Grids on one level do not overlap, so these keys are distinct. Within a grid,
+cells follow AMReX's native FAB memory order (Fortran order, x varying
+fastest). Masking removes cells without reordering the ones that remain. When
+a chunk splits a grid, each piece is a contiguous run of that grid's cells in
+this order.
+
+Field arrays have the plotfile's stored dtype unless the caller passes a
+`dtype` keyword, in which case the backend converts while decoding. The plan
+sizes chunks using the output dtype. Keeping the stored dtype by default means
+a float32 plotfile yields float32 arrays, so scripts that need float64
+accumulation must request it or pass a dtype to the reduction. Geometry arrays
+(cell-center coordinates, cell widths, and `cell_volume`) are always float64,
+regardless of the plotfile's stored dtype or the `dtype` keyword.
+
+Field selection uses the plotfile's exact field names. Each plotfile variable
+is its own single-component field, so there are no component indices; the API must expose metadata so a script can resolve names before reading.
 Unknown fields, unavailable derived fields, unsupported centering, and invalid
 regions are errors. The first milestone supports cell-centered Cartesian
 plotfile fields. Nodal, face-centered, mapped, and spherical geometry require
@@ -99,9 +121,13 @@ Items do not depend on iteration order or on mutable cursor state. Reading an
 item twice gives the same cells and values while the plotfile is unchanged.
 
 For a full-domain plan, every leaf cell appears in exactly one item and no
-covered coarse cell appears. Coverage must account for *all* finer levels, not
-just the next one, and for partial overlap with a coarse block or requested
-region. Region selection is defined by cell centers unless an operation
+covered coarse cell appears. The backend assumes the plotfile is properly
+nested, as AMReX guarantees, and does not validate it: every level-(l+1) grid
+lies within the level-l grids. Under that assumption, a level-l cell is a
+leaf exactly when no level-(l+1) grid covers it, so checking coverage against
+the next finer level alone is sufficient. A plotfile that violates proper
+nesting gives undefined leaf partitions. Coverage must still account for
+partial overlap with a coarse block or requested region. Region selection is defined by cell centers unless an operation
 explicitly requests fractional boundary-cell overlap. Do not infer leaf status
 from a display raster's `sourceLevel`: that reports sampled pixels, not a
 partition of native cells.
@@ -111,9 +137,16 @@ It is not yet a hard peak-memory bound: `PlotfileDataset::requestBlock` currentl
 decodes a complete FAB component before a tile can be extracted. Document the
 actual peak as including decoded source blocks, derived-field inputs, and cache
 residency. A later windowed FAB reader is required before promising a hard
-per-worker memory ceiling for very large FABs. A plan must reject a request
-whose output would exceed its explicit allocation limits rather than allocate
-without a bound.
+per-worker memory ceiling for very large FABs.
+
+`max_bytes` is the explicit allocation limit. It caps the estimated peak
+allocation for reading any single item: its output arrays plus the decoded
+source FAB components and derived-field inputs it needs. It defaults to
+`4 * target_bytes`, and the plan exposes the resolved value as
+`plan.max_bytes`. Planning raises an error naming the offending grid and its
+estimated size if any item would exceed the limit, rather than allocating
+without a bound. Callers with very large FABs can raise `max_bytes`
+explicitly.
 
 Future executors can distribute items across threads, processes, or MPI ranks
 and combine partial results. They should use bounded in-flight reads and
@@ -182,8 +215,8 @@ result-size limits and a separate security review.
 1. **Serial leaf cells.** Add the Qt-free planner and reader, Python binding,
    metadata/field discovery, serial convenience iterator, and one example
    computing temperature-phase masses. Keep native values throughout. Test
-   multilevel full and partial refinement, region boundaries, two-component
-   requests, missing fields, cancellation, and chunk lifetime. Compare a
+   multilevel full and partial refinement, region boundaries, multi-field
+   requests, missing fields, `max_bytes` rejection, and chunk lifetime. Compare a
    real Quokka plotfile's native values and phase totals with yt using the
    same selection and arithmetic; document any floating-point difference.
 2. **Particle attributes and analysis scripts.** Expose complete particle

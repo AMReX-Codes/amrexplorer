@@ -82,7 +82,12 @@ requested fields; integer cell indices; cell-center coordinates; level; cell
 widths; and cell volume, which is always present for supported geometries. Arrays are read-only by
 default. The Python binding must keep their backing storage alive while any
 array view exists. Each array is a one-dimensional, equal-length vector of
-selected leaf cells in the canonical order defined below. Coverage and region
+selected leaf cells in the canonical order defined below. Per-axis quantities
+are separate 1-D arrays, one per axis the plotfile has, never an `(n, 3)`
+array: indices `chunk.i`, `chunk.j`, `chunk.k`; cell-center coordinates
+`chunk.x`, `chunk.y`, `chunk.z`; and cell widths `chunk.dx`, `chunk.dy`,
+`chunk.dz`. A 2-D plotfile has no `k`, `z`, or `dz`. A boolean mask over the
+chunk therefore indexes every array the same way. Coverage and region
 masks are applied in C++; a covered coarse cell never appears as an ordinary
 sample. Algorithms that need neighboring cells use the separate tile API
 described under "Tiles with ghost cells"; the default iterator's compact
@@ -134,9 +139,12 @@ derived fields cannot change for the dataset's lifetime; using different
 definitions means opening a new dataset and planning again. Scripts pass
 definitions explicitly as `open_plotfile(path, derived=[...])`, each a name and
 an expression in the viewer's expression syntax. The binding never loads the
-viewer's saved definitions. The constructor silently drops definitions that do
-not resolve (`skippedDerivedFields`); the binding instead raises at open,
-naming each skipped definition and why, per the failure rule above.
+viewer's saved definitions. `PlotfileDataset` currently hardcodes
+`DerivedFieldPolicy::Skip`, which drops definitions that do not resolve and
+reports them through `skippedDerivedFields`. The constructor gains a policy
+parameter, and the binding passes `DerivedFieldPolicy::Strict`, so the
+existing strict path in `installDerivedFields` raises at open with its own
+messages, per the failure rule above. The GUI keeps passing `Skip`.
 
 Each dataset the binding opens gets a unique `DatasetId`, and every plan item
 records it. Reading an item through a different dataset raises an error, even
@@ -197,10 +205,12 @@ or too large; the binding raises instead, naming the variable and its value,
 so a batch job never runs with a budget it did not ask for. Callers with very
 large FABs raise `cache_bytes`.
 
-`setCacheBudget` applies the new budget but returns `false` when pinned blocks
-already exceed it. `ds.set_cache_bytes(n)` raises in that case, saying how many
-bytes are pinned, so a later `CacheBudgetExceeded` is never a silent
-consequence of lowering the budget while chunks are alive.
+`setCacheBudget` returns `false` when pinned blocks already exceed the new
+budget, but `ByteLruCache::setBudget` has stored the new budget by then, and
+the mapped-grid pool has been resized too. `ds.set_cache_bytes(n)` therefore
+restores the previous budget on both pools before raising, and says how many
+bytes are pinned. A failed call leaves the dataset exactly as it was, so a
+later `CacheBudgetExceeded` is never a silent consequence of it.
 
 A plotfile with a mapped grid gives that grid its own block pool of the full
 budget (`PlotfileDataset::mappedGridCacheBudget`), so resident memory can
@@ -376,9 +386,13 @@ deposit instead works on the AMR hierarchy as a whole:
   same pixel conventions as numeric projections so the two can be compared
   or summed.
 
-`mask` is an optional boolean array or callable over particle attributes that
-selects which particles deposit, so Python-side filters such as Kangaroo's
-`mass_max` reach the native deposit. Particles with a non-finite position or
+`mask` is an optional callable that takes a particle chunk's attributes and
+returns a boolean array for that chunk, selecting which particles deposit, so
+Python-side filters such as Kangaroo's `mass_max` reach the native deposit.
+The deposit calls it on each chunk it reads, so the mask always lines up with
+the particles it describes. A precomputed boolean array over all particles is
+not accepted, because it would depend on a global particle order the API does
+not define. Particles with a non-finite position or
 weight raise an error rather than being skipped silently.
 
 The result reports the weight that falls outside the image rectangle. Pixel
@@ -411,22 +425,28 @@ result-size limits and a separate security review.
    requests, missing fields, planning-time rejection of items over the cache
    budget, and chunk lifetime. Compare a real Quokka plotfile's native values
    and phase totals with yt using the same selection and arithmetic; document
-   any floating-point difference.
+   any floating-point difference. Port Kangaroo's `plotfile_enclosed_sfr.py`
+   as a weighted 2-D histogram over leaf cells, keeping its JSON output, and
+   compare with Kangaroo.
 2. **Particle attributes and analysis scripts.** Expose complete particle
    attributes. Port one particle histogram and the Kennicutt-Schmidt
    calculation, retaining its Python histogram of cell-center positions
-   weighted by leaf-cell mass. These ports use leaf-cell and particle chunks.
+   weighted by leaf-cell mass. Port Kangaroo's
+   `plotfile_particle_mass_histogram.py` and compare with Kangaroo. These
+   ports use leaf-cell and particle chunks.
 3. **Parallel execution.** Benchmark serial reads and cache contention, choose
    a worker ownership model, add bounded scheduling and reductions, then test
    serial/thread/process or MPI parity on multilevel data.
 4. **Numeric projections.** Define pixel normalization, boundary overlap, and
    coverage semantics; add leaf-cell projection and coverage results. Port one
-   radial surface-density profile. Check conservation of total projected
+   radial surface-density profile and Kangaroo's `plotfile_projection.py`,
+   comparing the latter with Kangaroo. Check conservation of total projected
    quantity against a direct leaf-cell sum with matching region semantics on
    synthetic and representative plotfiles.
 5. **Headless plotting and batch ergonomics.** Expose numeric slices and
    image-oriented queries, sequence helpers, cancellation/progress, and examples
-   covering the current yt plotting scripts.
+   covering the current yt plotting scripts. Port Kangaroo's
+   `plotfile_slice.py` and compare with Kangaroo.
 6. **Block metadata and statistics.** Expose grid listings with native FAB
    indices and per-block extrema computed from decoded data. Port
    `plotfile_fab_minmax.py` and check its output against Kangaroo on the same

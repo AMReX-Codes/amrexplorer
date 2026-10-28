@@ -57,7 +57,11 @@ design decisions.
 ```python
 import amrexplorer
 
-with amrexplorer.open_plotfile("plt0100000") as ds:
+with amrexplorer.open_plotfile(
+    "plt0100000",
+    derived=[],                      # derived-field definitions; none here
+    cache_bytes=None,                # None: viewer default (see below)
+) as ds:
     print(ds.fields, ds.time, ds.geometry)
     plan = ds.plan_leaf_chunks(
         fields=["gasDensity", "temperature"],
@@ -86,17 +90,17 @@ contract stays unchanged.
 
 Leaf cells have one canonical global order, and both plan items and the cells
 within each chunk follow it. Levels come in ascending order, coarsest first.
-Within a level, grids are ordered along a Morton (Z-order) curve keyed on each
-grid's lower-corner cell index, measured from the level's domain lower corner.
-Grids on one level do not overlap, so these keys are distinct. Within a grid,
+Within a level, grids follow their native FAB index, the order in which the
+plotfile's level header lists them. Within a grid,
 cells follow AMReX's native FAB memory order (Fortran order, x varying
 fastest). Masking removes cells without reordering the ones that remain. Each
 chunk is exactly one grid (FAB), so a chunk's arrays hold that grid's selected
 leaf cells in this order.
 
 Field arrays have the plotfile's stored dtype unless the caller passes a
-`dtype` keyword, in which case the backend converts while decoding. The plan's
-memory estimates use the output dtype. Keeping the stored dtype by default means
+`dtype` keyword, in which case the backend converts while decoding. `dtype`
+affects only the output arrays; cache estimates use the stored dtype, because
+the cache holds blocks in on-disk precision. Keeping the stored dtype by default means
 a float32 plotfile yields float32 arrays, so scripts that need float64
 accumulation must request it or pass a dtype to the reduction. Derived fields
 are evaluated in float64 and, with `dtype=None`, narrowed to the plotfile's
@@ -124,11 +128,20 @@ and deterministic reductions. Items do not depend on iteration order or on
 mutable cursor state. Reading an item twice gives the same cells and values
 while the plotfile is unchanged.
 
-The plan records a fingerprint of each requested derived field's definition
-at planning time. Reading an item checks it against the current definition
-and raises an error naming the field if the definition has been changed or
-removed since planning, rather than returning values from a different
-expression. The caller re-plans to use the new definition.
+Derived-field definitions are fixed when the `PlotfileDataset` is
+constructed (`include/amrexplorer/io/PlotfileDataset.hpp`), so a plan's
+derived fields cannot change for the dataset's lifetime; using different
+definitions means opening a new dataset and planning again. Scripts pass
+definitions explicitly as `open_plotfile(path, derived=[...])`, each a name and
+an expression in the viewer's expression syntax. The binding never loads the
+viewer's saved definitions. The constructor silently drops definitions that do
+not resolve (`skippedDerivedFields`); the binding instead raises at open,
+naming each skipped definition and why, per the failure rule above.
+
+Each dataset the binding opens gets a unique `DatasetId`, and every plan item
+records it. Reading an item through a different dataset raises an error, even
+for the same plotfile path, so an item can never return values computed from
+another dataset's definitions.
 
 For a full-domain plan, every leaf cell appears in exactly one item and no
 covered coarse cell appears. The backend assumes the plotfile is properly
@@ -156,16 +169,44 @@ The dataset's block-cache budget is the allocation limit; there is no
 separate per-plan cap. Reading an item pins every decoded source component and
 derived-field input it needs in the block cache at once, and
 `ByteLruCache::insertAndPin` refuses a pin that would exceed the budget. The
-planner therefore estimates each item's pinned bytes (grown-box components
-times the stored dtype size, plus derived-field inputs) and raises an error
-naming the offending grid and its estimate if any item exceeds the budget
-available to field blocks, which excludes the mapped-grid slice. This rejects
-oversized items at planning time instead of failing with
-`CacheBudgetExceeded` mid-run. Callers with very large FABs raise the budget
-when opening the dataset. If the budget is lowered after planning, reads can
-still raise `CacheBudgetExceeded`; that error names the item. Output arrays
-are allocated outside the cache and are at most one FAB's selected cells per
-field.
+planner therefore estimates each item's pinned bytes and raises an error
+naming the offending grid and its estimate if any item exceeds the field-block
+budget. The estimate is the sum of:
+
+- each stored source component, over the grown on-disk box, at the stored
+  dtype size, counted once even when several fields share it;
+- each derived field's own block, which `PlotfileDataset::readDerivedBlock`
+  builds in float64 over the valid box and pins alongside its inputs,
+  including derived fields reached only as inputs to other derived fields.
+
+This rejects oversized items at planning time instead of failing with
+`CacheBudgetExceeded` mid-run. If the budget is lowered after planning, reads
+can still raise `CacheBudgetExceeded`; that error names the item. Output
+arrays are allocated outside the cache and are at most one FAB's selected
+cells per field.
+
+`open_plotfile(path, cache_bytes=None)` sets that budget the same way the C++
+code does today: the value is passed as `cacheBudgetBytes` when the
+`PlotfileDataset` is constructed, and `ds.set_cache_bytes(n)` maps to
+`PlotfileDataset::setCacheBudget`. With `cache_bytes=None` the binding uses
+the viewer's default, `AMREXPLORER_CACHE_SIZE_MB` if set and otherwise 1 GiB.
+That default currently lives in `src/qt/CacheConfig.hpp`; it moves to a
+Qt-free header so the GUI and the binding share one definition. The viewer
+silently falls back to 1 GiB when the variable is set but unparseable, zero,
+or too large; the binding raises instead, naming the variable and its value,
+so a batch job never runs with a budget it did not ask for. Callers with very
+large FABs raise `cache_bytes`.
+
+`setCacheBudget` applies the new budget but returns `false` when pinned blocks
+already exceed it. `ds.set_cache_bytes(n)` raises in that case, saying how many
+bytes are pinned, so a later `CacheBudgetExceeded` is never a silent
+consequence of lowering the budget while chunks are alive.
+
+A plotfile with a mapped grid gives that grid its own block pool of the full
+budget (`PlotfileDataset::mappedGridCacheBudget`), so resident memory can
+reach twice `cache_bytes`. That pool fills only while the mapped grid is
+displayed, and analysis rejects mapped geometry, so analysis reads never use
+it; a future mapped-geometry milestone must account for it.
 
 Future executors can distribute items across threads, processes, or MPI ranks
 and combine partial results. They should use bounded in-flight reads and
@@ -224,13 +265,16 @@ each grid's level, index box, physical bounds, and covered fraction, and
 all cells of the on-disk FAB, covered or not and including stored ghost
 cells, as Kangaroo's `plotfile_fab_minmax.py` does. Extrema are computed from
 the decoded data with NaN ignored, matching Kangaroo's `nanmin`/`nanmax`; a
-block whose values are all NaN reports NaN for both, without raising. The per-block extrema in
+block whose values are all NaN reports NaN for both, without raising.
+Derived fields have no stored ghost cells (`readDerivedBlock` builds them over
+the valid box), so their extrema cover the valid box only; each result
+reports which box it covers. The per-block extrema in
 the MultiFab header (`src/io/plotfile/PlotfileMetadataReader.cpp`) are not
 used here: AMReX computes them before converting to the stored precision,
-writes them as text at limited precision, and lets NaN propagate. Block order
-follows the canonical grid order above, and each block also reports its
-native FAB index within its level so output and selection can match tools
-that address FABs by plotfile position.
+writes them as text at limited precision, and lets NaN propagate. Blocks are
+listed in the canonical grid order above, by level and then native FAB index,
+and each block reports its FAB index so output and selection match tools that
+address FABs by plotfile position.
 
 ### Surface-intersection geometry (later milestone)
 
@@ -384,8 +428,9 @@ result-size limits and a separate security review.
    image-oriented queries, sequence helpers, cancellation/progress, and examples
    covering the current yt plotting scripts.
 6. **Block metadata and statistics.** Expose grid listings with native FAB
-   indices and per-block extrema computed from decoded data. Port `plotfile_fab_minmax.py` and check its output against
-   Kangaroo on the same plotfile.
+   indices and per-block extrema computed from decoded data. Port
+   `plotfile_fab_minmax.py` and check its output against Kangaroo on the same
+   plotfile.
 7. **Surface-intersection helpers.** Add sphere and cylinder area helpers.
    Port both Kangaroo flux-surface scripts, keeping their JSON output so the
    existing `plot_*` scripts run unchanged. Test that per-cell areas, normals,

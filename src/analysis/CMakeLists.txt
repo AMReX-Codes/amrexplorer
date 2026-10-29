@@ -1,4 +1,5 @@
 add_library(amrexplorer_analysis
+    Blocks.cpp
     LeafChunks.cpp
 )
 add_library(amrexplorer::analysis ALIAS amrexplorer_analysis)

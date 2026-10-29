@@ -2698,3 +2698,8 @@ target_include_directories(fuzz_expression PRIVATE
 target_link_libraries(
     fuzz_expression PRIVATE amrexplorer::expression amrexplorer::warnings)
 amrexplorer_add_fuzz_target(fuzz_expression)
+
+add_executable(test_leaf_chunks integration/test_leaf_chunks.cpp)
+target_link_libraries(test_leaf_chunks PRIVATE amrexplorer::analysis
+    amrexplorer::warnings)
+add_test(NAME leaf_chunks COMMAND test_leaf_chunks)

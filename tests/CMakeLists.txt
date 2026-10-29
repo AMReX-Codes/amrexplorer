@@ -110,7 +110,7 @@ add_test(NAME byte_lru_cache COMMAND test_byte_lru_cache)
 
 add_executable(test_cache_config unit/test_cache_config.cpp)
 target_include_directories(test_cache_config PRIVATE "${CMAKE_SOURCE_DIR}/src/qt")
-target_link_libraries(test_cache_config PRIVATE amrexplorer::warnings)
+target_link_libraries(test_cache_config PRIVATE amrexplorer::core amrexplorer::warnings)
 add_test(NAME cache_config COMMAND test_cache_config)
 set_tests_properties(cache_config PROPERTIES
     ENVIRONMENT "AMREXPLORER_CACHE_SIZE_MB=768"
@@ -514,6 +514,10 @@ target_link_libraries(
     PRIVATE amrexplorer::query amrexplorer::warnings
 )
 add_test(NAME single_precision_plotfile COMMAND test_single_precision_plotfile)
+
+add_executable(test_derived_field_policy integration/test_derived_field_policy.cpp)
+target_link_libraries(test_derived_field_policy PRIVATE amrexplorer::io amrexplorer::warnings)
+add_test(NAME derived_field_policy COMMAND test_derived_field_policy)
 
 add_executable(
     test_near_degenerate_field

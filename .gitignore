@@ -31,3 +31,6 @@ __pycache__/
 
 # ctest run artifacts (ctest from the repo root writes here)
 /Testing/
+
+# Python virtual environment
+/.venv/

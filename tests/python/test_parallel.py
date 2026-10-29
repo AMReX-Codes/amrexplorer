@@ -84,6 +84,8 @@ def test_partitioned_ranks_combine_to_the_whole(refined_3d):
                                      items=plan.partition(rank, 3))
                  for rank in range(3)]
     assert sum(ranks) == whole == plan.total_cells
+    with pytest.raises(ax.AnalysisError):
+        plan.partition(3, 3)
 
 
 def test_unordered_reduction_has_the_same_total_count(refined_3d):

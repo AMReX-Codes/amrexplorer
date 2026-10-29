@@ -186,29 +186,26 @@ def test_region_selects_by_cell_center_half_open(refined_2d):
         assert sorted(cells + gather(ds, other)) == sorted(full)
 
 
-def test_region_validation(refined_2d):
+@pytest.mark.parametrize("fields, region, match", [
+    (["Density"], None, "unknown field 'Density'"),
+    (["density", "density"], None, "twice"),
+    (["density"], ((0.5, 0.0), (0.5, 1.0)), None),
+    (["density"], ((0.0,), (1.0,)), None),
+    (["density"], ((0.0, float("nan")), (1.0, 1.0)), None),
+])
+def test_request_errors(refined_2d, fields, region, match):
     path, _ = refined_2d
     with ax.open_plotfile(path) as ds:
-        with pytest.raises(ax.AnalysisError):
-            ds.plan_leaf_chunks(["density"], region=((0.5, 0.0), (0.5, 1.0)))
-        with pytest.raises(ax.AnalysisError):
-            ds.plan_leaf_chunks(["density"], region=((0.0,), (1.0,)))
-        with pytest.raises(ax.AnalysisError):
-            ds.plan_leaf_chunks(["density"],
-                                region=((0.0, float("nan")), (1.0, 1.0)))
-        # Outside the domain: valid, and empty.
+        with pytest.raises(ValueError, match=match) as raised:
+            ds.plan_leaf_chunks(fields, region=region)
+    assert isinstance(raised.value, ax.AnalysisError)
+
+
+def test_region_outside_domain_is_empty(refined_2d):
+    path, _ = refined_2d
+    with ax.open_plotfile(path) as ds:
         assert len(ds.plan_leaf_chunks(["density"],
                                        region=((2.0, 2.0), (3.0, 3.0)))) == 0
-
-
-def test_field_errors(refined_2d):
-    path, _ = refined_2d
-    with ax.open_plotfile(path) as ds:
-        with pytest.raises(ax.AnalysisError, match="unknown field 'Density'"):
-            ds.plan_leaf_chunks(["Density"])
-        with pytest.raises(ax.AnalysisError, match="twice"):
-            ds.plan_leaf_chunks(["density", "density"])
-        assert issubclass(ax.AnalysisError, ValueError)
 
 
 def test_dtype_rules(refined_3d, tmp_path):
@@ -353,27 +350,13 @@ def test_reading_is_repeatable_and_order_free(refined_3d):
         assert plan[-1].index == len(plan) - 1
 
 
-def test_partition_covers_each_item_once(refined_3d):
-    path, _ = refined_3d
-    with ax.open_plotfile(path) as ds:
-        plan = ds.plan_leaf_chunks(["density"])
-        seen = sorted(item.index for rank in range(3)
-                      for item in plan.partition(rank, 3))
-        assert seen == list(range(len(plan)))
-        with pytest.raises(ax.AnalysisError):
-            plan.partition(3, 3)
-
-
-def test_unsupported_geometry_fails_explicitly(tmp_path):
+def test_unsupported_geometry_and_missing_plotfile(tmp_path):
     path = write_plotfile(tmp_path / "pltcyl", dim=2, domain_cells=(8, 8),
                           fields={"rho": density},
                           levels=[Level([((0, 0), (7, 7))])], coord_sys=1)
     with ax.open_plotfile(path) as ds:
         with pytest.raises(ax.AnalysisError, match="Cartesian"):
             ds.plan_leaf_chunks(["rho"])
-
-
-def test_missing_plotfile(tmp_path):
     with pytest.raises(ax.PlotfileReadError):
         ax.open_plotfile(tmp_path / "nothing")
 

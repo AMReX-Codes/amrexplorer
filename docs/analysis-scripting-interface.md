@@ -10,9 +10,9 @@ end.
 ## Goal
 
 Let Python scripts use AMReXplorer to analyze AMReX plotfiles, including the
-gas-cell, particle, slice, and projection workflows currently written with yt
-in `incite-2026/postprocessing/`, and the plotfile analyses currently written
-with Kangaroo in `kangaroo/scripts/`. The interface must preserve native field
+gas-cell, particle, slice, and projection workflows commonly written with yt,
+and the plotfile analyses currently written with Kangaroo in
+`kangaroo/scripts/`. The interface must preserve native field
 values and exact AMR coverage. Scripts own their physical-unit conversions,
 statistics, plots, and output files. A serial first milestone must leave a
 clear path to parallel iteration over leaf chunks.
@@ -453,24 +453,20 @@ result-size limits and a separate security review.
    as a weighted 2-D histogram over leaf cells, keeping its JSON output, and
    compare with Kangaroo.
 2. **Particle attributes and analysis scripts.** Expose complete particle
-   attributes. Port one particle histogram and the Kennicutt-Schmidt
-   calculation, retaining its Python histogram of cell-center positions
-   weighted by leaf-cell mass. Port Kangaroo's
-   `plotfile_particle_mass_histogram.py` and compare with Kangaroo. These
-   ports use leaf-cell and particle chunks.
+   attributes. Port Kangaroo's `plotfile_particle_mass_histogram.py` and
+   compare with Kangaroo. These ports use leaf-cell and particle chunks.
 3. **Parallel execution.** Benchmark serial reads and cache contention, choose
    a worker ownership model, add bounded scheduling and reductions, then test
    serial/thread/process or MPI parity on multilevel data.
 4. **Numeric projections.** Define pixel normalization, boundary overlap, and
-   coverage semantics; add leaf-cell projection and coverage results. Port one
-   radial surface-density profile and Kangaroo's `plotfile_projection.py`,
-   comparing the latter with Kangaroo. Check conservation of total projected
-   quantity against a direct leaf-cell sum with matching region semantics on
-   synthetic and representative plotfiles.
+   coverage semantics; add leaf-cell projection and coverage results. Port
+   Kangaroo's `plotfile_projection.py` and compare it with Kangaroo. Check
+   conservation of total projected quantity against a direct leaf-cell sum
+   with matching region semantics on synthetic and representative plotfiles.
 5. **Headless plotting and batch ergonomics.** Expose numeric slices and
-   image-oriented queries, sequence helpers, cancellation/progress, and examples
-   covering the current yt plotting scripts. Port Kangaroo's
-   `plotfile_slice.py` and compare with Kangaroo.
+   image-oriented queries, sequence helpers, cancellation/progress, and
+   slice and projection image examples. Port Kangaroo's `plotfile_slice.py`
+   and compare with Kangaroo.
 6. **Block metadata and statistics.** Expose grid listings with native FAB
    indices and per-block extrema computed from decoded data. Port
    `plotfile_fab_minmax.py` and check its output against Kangaroo on the same
@@ -545,7 +541,11 @@ Choices made while implementing, where the text above left room:
 - **Particle identities** are AMReX's `id` and `cpu`, decoded from either
   identity layout; particles marked invalid are left out, as the display
   sample leaves them out.
-- **Kangaroo comparisons** found several behaviors of Kangaroo's own that
-  the ports do not reproduce (ghost cells, slice planes, cylinder caps on
-  block faces); they are listed in analysis-validation.md.
+- **Kangaroo comparisons** found behaviors of Kangaroo's own that the ports
+  do not reproduce (ghost cells, slice planes); they are listed in
+  analysis-validation.md.
+- **Examples.** The repository keeps only the field-agnostic ports
+  (`plotfile_slice.py`, `plotfile_fab_minmax.py`, `plot_frames.py`). The
+  astrophysics-specific ports named in the milestones above are not part of
+  it.
 

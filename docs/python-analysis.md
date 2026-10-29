@@ -148,7 +148,7 @@ step order, `open_each(paths)` opens them one at a time, and `output_path` /
 
 ## Examples
 
-`python/examples/` holds ports of the yt scripts in
-`incite-2026/postprocessing` and of Kangaroo's `scripts/plotfile_*.py`,
-keeping their arguments and outputs, plus `plot_frames.py` for slice and
-projection image sequences. Each says in its docstring what it validates.
+`python/examples/` holds field-agnostic scripts: ports of Kangaroo's
+`plotfile_slice.py` and `plotfile_fab_minmax.py`, keeping their arguments and
+outputs, and `plot_frames.py` for slice and projection image sequences. Each
+says in its docstring what it validates.

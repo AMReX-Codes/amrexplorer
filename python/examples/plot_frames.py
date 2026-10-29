@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """Draw slice and projection frames for a plotfile sequence, headlessly.
 
-Covers incite-2026's yt plotting scripts ``plot_disk.py`` (an x-slice of
-gasDensity), ``plot_disk_temperature.py``, ``plot_disk_wide.py`` (other fields
-and zooms) and ``plot_faceon.py`` (a z-projection), with Matplotlib instead of
-yt's plot windows: a zoomed image about a center, fixed color limits, a scale
-bar, a timestamp and, when the plotfile has them, magnetic-field streamlines.
-Each frame is skipped if its PNG exists, as the yt scripts do.
+Draws, with Matplotlib, a zoomed slice or projection about a center, with
+fixed color limits, a scale bar, a timestamp and, when the plotfile has them,
+magnetic-field streamlines. Each frame is skipped if its PNG exists.
 
     plot_frames.py plt* --kind slice --axis x --field gasDensity --zoom 40 --zlim 1e-28 1e-23
     plot_frames.py plt* --kind projection --axis z --zoom 40 --zlim 1e-4 1

@@ -164,6 +164,18 @@ OUTPUT=amrexplorer.AppImage QML_SOURCES_PATHS=. \
   --plugin qt
 ```
 
+## Python analysis module
+
+`-DAMREXPLORER_ENABLE_PYTHON=ON` builds the `amrexplorer` Python package's
+nanobind extension into `<build>/python/amrexplorer`, importable with
+`PYTHONPATH=<build>/python`. It needs an interpreter with `nanobind` and
+`numpy`; point `-DPython_EXECUTABLE` at it if it is not the first on `PATH`.
+With `pytest` there too, ctest runs the package's tests as `python_analysis`.
+The GUI is not needed (`-DAMREXPLORER_ENABLE_QT=OFF
+-DAMREXPLORER_ENABLE_REMOTE=OFF` is the usual pairing), and `pip install .`
+builds the module alone through `pyproject.toml`. See
+[python-analysis.md](python-analysis.md).
+
 ## Optional VTK module
 
 `AMREXPLORER_ENABLE_VTK` is currently deliberately unavailable. It remains off

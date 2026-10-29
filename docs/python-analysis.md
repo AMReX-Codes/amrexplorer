@@ -227,6 +227,29 @@ except (amrexplorer.AnalysisError, amrexplorer.PlotfileReadError,
 Catching `AnalysisError` alone does not catch read errors or cache-budget
 errors. Accessing an unrequested field in a chunk raises Python's `KeyError`.
 
+## Parallel reductions
+
+```python
+from amrexplorer import parallel
+
+total = parallel.map_reduce("plt00100", parallel.LeafCells(["gasDensity"]),
+                            lambda c: float(np.sum(c["gasDensity"] * c.cell_volume)),
+                            lambda a, b: a + b, executor="threads", workers=8)
+```
+
+Each worker opens its own handle and plans the same request; at most
+`max_in_flight` items are in progress at once; partials are combined in plan
+order, so the result is bit-for-bit the serial one. `executor="processes"`
+needs a picklable mapper. For MPI, plan on every rank and pass
+`items=plan.partition(rank, size)`. A `CancelToken` stops reads in progress.
+
+## Batches
+
+`amrexplorer.sequence.find_plotfiles(directory)` lists a run's plotfiles in
+step order, `open_each(paths)` opens them one at a time, and `output_path` /
+`needs_output` skip outputs already written. Long operations take
+`progress=` callbacks and `cancel=` tokens.
+
 ## Development build
 
 For a CMake build instead of a pip install, activate a virtual environment

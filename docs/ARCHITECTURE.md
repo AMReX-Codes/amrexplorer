@@ -38,10 +38,10 @@ turns a `SliceRequest` into a displayable `SliceDisplayResult` — raster image,
 contour polylines, vector glyphs, resolved color range — with no Qt dependency.
 
 Beside the display path, `src/analysis` (on `io` and `core`) serves scripts
-rather than screens: exact leaf-cell traversal, in native values. `python/`
-binds it with nanobind into the `amrexplorer` package (built when
-`AMREXPLORER_ENABLE_PYTHON=ON`, or by `pip install .`). See
-[python-analysis.md](python-analysis.md).
+rather than screens: exact leaf-cell traversal and block statistics, in
+native values. `python/` binds it with nanobind into the
+`amrexplorer` package (built when `AMREXPLORER_ENABLE_PYTHON=ON`, or by
+`pip install .`). See [python-analysis.md](python-analysis.md).
 
 ## The GUI layer
 

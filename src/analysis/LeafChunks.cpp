@@ -541,7 +541,7 @@ std::shared_ptr<const LeafChunk> readLeafChunk(
                 for (auto j = lo[1]; j <= hi[1]; ++j) {
                     const auto row = (k * extent[1] + j) * extent[0];
                     std::fill(covered.begin() + row + lo[0],
-                        covered.begin() + row + hi[0] + 1, 1);
+                        covered.begin() + row + hi[0] + 1, std::uint8_t{1});
                 }
             }
         }

@@ -148,6 +148,22 @@ double FabValues::operator[](std::size_t index) const noexcept
     }, m_storage);
 }
 
+std::span<const float> FabValues::singleValues() const noexcept
+{
+    if (const auto* values = std::get_if<std::vector<float>>(&m_storage)) {
+        return *values;
+    }
+    return {};
+}
+
+std::span<const double> FabValues::doubleValues() const noexcept
+{
+    if (const auto* values = std::get_if<std::vector<double>>(&m_storage)) {
+        return *values;
+    }
+    return {};
+}
+
 PlotfileBlockReader::PlotfileBlockReader(
     std::filesystem::path plotfile, std::shared_ptr<const DatasetMetadata> metadata)
     : m_plotfile(std::move(plotfile))

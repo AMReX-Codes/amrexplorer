@@ -4,6 +4,8 @@ The `amrexplorer` Python package reads AMReX plotfiles through the same
 Qt-free C++ readers the viewer uses, and gives scripts exact, native-unit
 access to them: every leaf cell exactly once, in chunks a script can reduce
 serially or in parallel, and per-block statistics.
+`tools/analysis_validation/run_comparisons.sh` compares it with yt and
+Kangaroo.
 
 Values are always the plotfile's own numbers. Nothing reads a unit system or
 converts anything: a script that wants solar masses divides by the gram value

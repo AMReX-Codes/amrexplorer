@@ -41,8 +41,6 @@ struct GridRecord {
 
 struct ParsedHeader {
     ParticleSpeciesMetadata metadata;
-    std::vector<std::string> realNames;
-    std::vector<std::string> intNames;
     bool expandedIds = false;
     bool checkpoint = false;
     int finestLevel = 0;
@@ -174,8 +172,7 @@ ParsedHeader parseHeader(const std::filesystem::path& path,
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
         }
-        result.realNames.push_back(
-            readRequired<std::string>(input, "real component name"));
+        (void)readRequired<std::string>(input, "real component name");
     }
     result.metadata.intComponentCount
         = readRequired<int>(input, "integer component count");
@@ -188,8 +185,7 @@ ParsedHeader parseHeader(const std::filesystem::path& path,
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
         }
-        result.intNames.push_back(
-            readRequired<std::string>(input, "integer component name"));
+        (void)readRequired<std::string>(input, "integer component name");
     }
     const auto checkpointFlag = readRequired<int>(input, "checkpoint flag");
     if (checkpointFlag != 0 && checkpointFlag != 1) {
@@ -636,194 +632,6 @@ ParticleSample readParticleSample(
                     seed, cancellation, maximumPoints, result.points, result.io);
             }
         }
-    }
-    return result;
-}
-
-ParticleSpeciesLayout readParticleSpeciesLayout(
-    const std::filesystem::path& plotfile, const std::string& species,
-    StopToken cancellation)
-{
-    const auto header
-        = parseHeader(plotfile / species / "Header", species, cancellation);
-    if (!header.checkpoint) {
-        throw ParticleReadError(
-            "non-checkpoint particle data is unsupported because it has no "
-            "ID/CPU identity words");
-    }
-    ParticleSpeciesLayout layout;
-    layout.metadata = header.metadata;
-    layout.realComponentNames = header.realNames;
-    layout.intComponentNames = header.intNames;
-    int previousLevel = -1;
-    int grid = 0;
-    for (const auto& record : header.grids) {
-        if (record.level != previousLevel) {
-            previousLevel = record.level;
-            grid = 0;
-        }
-        layout.grids.push_back({record.level, grid++, record.count});
-    }
-    return layout;
-}
-
-ParticleGridData readParticleGrid(const std::filesystem::path& plotfile,
-    const ParticleSpeciesLayout& layout, std::size_t gridIndex,
-    const std::vector<int>& realColumns, const std::vector<int>& intComponents,
-    StopToken cancellation)
-{
-    const auto& species = layout.metadata.name;
-    const auto speciesPath = plotfile / species;
-    // Parsed again rather than trusted from the layout: the offsets and file
-    // numbers are not part of it, and the file may have changed since.
-    const auto header
-        = parseHeader(speciesPath / "Header", species, cancellation);
-    if (gridIndex >= header.grids.size()
-        || header.grids.size() != layout.grids.size()) {
-        throw ParticleReadError("particle grid " + std::to_string(gridIndex)
-            + " of species '" + species + "' is unavailable");
-    }
-    const auto& record = header.grids[gridIndex];
-    const auto dimension = header.metadata.dimension;
-    const auto realCount = dimension + header.metadata.realComponentCount;
-    for (const auto column : realColumns) {
-        if (column < 0 || column >= realCount) {
-            throw ParticleReadError("particle real column is out of range");
-        }
-    }
-    for (const auto component : intComponents) {
-        if (component < 0 || component >= header.metadata.intComponentCount) {
-            throw ParticleReadError("particle integer component is out of range");
-        }
-    }
-
-    ParticleGridData result;
-    result.level = layout.grids[gridIndex].level;
-    result.grid = layout.grids[gridIndex].grid;
-    result.precision = header.metadata.precision;
-    const bool single = header.metadata.precision == ParticleRealPrecision::Single;
-    if (single) {
-        result.singleReals.resize(realColumns.size());
-    } else {
-        result.doubleReals.resize(realColumns.size());
-    }
-    result.ints.resize(intComponents.size());
-    if (record.count == 0) {
-        return result;
-    }
-
-    const auto dataPaths = particleDataPaths(speciesPath,
-        std::vector<GridRecord>{record}, result.io);
-    const auto& dataPath = dataPaths.at({record.level, record.fileNumber});
-    std::error_code sizeError;
-    const auto dataFileSize = std::filesystem::file_size(dataPath, sizeError);
-    if (sizeError) {
-        throw ParticleReadError("cannot determine particle data file size for '"
-            + dataPath.string() + "'");
-    }
-    std::ifstream input(dataPath, std::ios::binary);
-    if (!input) {
-        throw ParticleReadError(
-            "cannot open particle data file '" + dataPath.string() + "'");
-    }
-    ++result.io.dataFilesOpened;
-
-    const auto realSize = single ? sizeof(float) : sizeof(double);
-    const auto [intRecordBytes, realRecordBytes]
-        = particleRecordBytes(header, realSize);
-    const auto integerBytes
-        = checkedProduct(record.count, intRecordBytes, "integer data");
-    const auto realBytes
-        = checkedProduct(record.count, realRecordBytes, "real data");
-    if (record.offset > dataFileSize
-        || integerBytes > dataFileSize - record.offset
-        || realBytes > dataFileSize - record.offset - integerBytes) {
-        throw ParticleReadError("truncated particle grid data");
-    }
-    input.seekg(static_cast<std::streamoff>(record.offset));
-    if (!input) {
-        throw ParticleReadError("cannot seek in particle data file");
-    }
-
-    // The file's evidence bounds every reservation below: the grid's records
-    // fit in the file, checked above.
-    const auto count = static_cast<std::size_t>(record.count);
-    std::vector<bool> valid(count, false);
-    result.ids.reserve(count);
-    result.cpus.reserve(count);
-    for (auto& column : result.ints) {
-        column.reserve(count);
-    }
-    std::vector<char> buffer;
-    std::vector<std::int32_t> words(
-        static_cast<std::size_t>(2 + header.metadata.intComponentCount));
-    for (std::uint64_t first = 0; first < record.count;) {
-        if (cancellation.stop_requested()) {
-            throw ReadCancelled();
-        }
-        const auto chunk = chunkRecordCount(record.count - first, intRecordBytes);
-        readChunk(input, buffer, chunk, intRecordBytes, "integer data");
-        result.io.integerBytesRead += static_cast<std::uint64_t>(chunk)
-            * intRecordBytes;
-        for (std::size_t relative = 0; relative < chunk; ++relative) {
-            std::memcpy(words.data(),
-                buffer.data() + relative * static_cast<std::size_t>(intRecordBytes),
-                static_cast<std::size_t>(intRecordBytes));
-            const auto idcpu
-                = decodeIdCpu(words[0], words[1], header.expandedIds);
-            if (!idcpu) {
-                continue;
-            }
-            valid[static_cast<std::size_t>(first) + relative] = true;
-            // AMReX's ParticleIDWrapper and ParticleCPUWrapper: 39 bits of id
-            // above 24 bits of CPU, under the validity bit.
-            result.ids.push_back(static_cast<std::int64_t>(
-                (*idcpu >> 24U) & ((std::uint64_t{1} << 39U) - 1U)));
-            result.cpus.push_back(static_cast<std::int32_t>(
-                *idcpu & ((std::uint64_t{1} << 24U) - 1U)));
-            for (std::size_t c = 0; c < intComponents.size(); ++c) {
-                result.ints[c].push_back(
-                    words[2 + static_cast<std::size_t>(intComponents[c])]);
-            }
-        }
-        first += chunk;
-    }
-
-    const auto gatherReals = [&]<typename Real>(
-        std::vector<std::vector<Real>>& columns) {
-        for (auto& column : columns) {
-            column.reserve(result.ids.size());
-        }
-        std::vector<Real> values(static_cast<std::size_t>(realCount));
-        for (std::uint64_t first = 0; first < record.count;) {
-            if (cancellation.stop_requested()) {
-                throw ReadCancelled();
-            }
-            const auto chunk
-                = chunkRecordCount(record.count - first, realRecordBytes);
-            readChunk(input, buffer, chunk, realRecordBytes, "real data");
-            result.io.realBytesRead += static_cast<std::uint64_t>(chunk)
-                * realRecordBytes;
-            for (std::size_t relative = 0; relative < chunk; ++relative) {
-                if (!valid[static_cast<std::size_t>(first) + relative]) {
-                    continue;
-                }
-                std::memcpy(values.data(),
-                    buffer.data()
-                        + relative * static_cast<std::size_t>(realRecordBytes),
-                    static_cast<std::size_t>(realRecordBytes));
-                for (std::size_t c = 0; c < realColumns.size(); ++c) {
-                    columns[c].push_back(
-                        values[static_cast<std::size_t>(realColumns[c])]);
-                }
-            }
-            first += chunk;
-        }
-    };
-    if (single) {
-        gatherReals(result.singleReals);
-    } else {
-        gatherReals(result.doubleReals);
     }
     return result;
 }

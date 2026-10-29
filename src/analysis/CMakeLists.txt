@@ -1,10 +1,6 @@
 add_library(amrexplorer_analysis
     Blocks.cpp
-    Deposition.cpp
     LeafChunks.cpp
-    Projection.cpp
-    Surfaces.cpp
-    Tiles.cpp
 )
 add_library(amrexplorer::analysis ALIAS amrexplorer_analysis)
 

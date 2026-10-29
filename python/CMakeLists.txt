@@ -29,8 +29,7 @@ set(AMREXPLORER_PYTHON_PACKAGE_DIR "${PROJECT_BINARY_DIR}/python/amrexplorer")
 
 nanobind_add_module(_amrexplorer NB_STATIC src/module.cpp)
 target_link_libraries(_amrexplorer PRIVATE
-    amrexplorer::analysis amrexplorer::pipeline amrexplorer::render2d
-    amrexplorer::render3d amrexplorer::query amrexplorer::io amrexplorer::core)
+    amrexplorer::analysis amrexplorer::io amrexplorer::core)
 set_target_properties(_amrexplorer PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${AMREXPLORER_PYTHON_PACKAGE_DIR}")
 

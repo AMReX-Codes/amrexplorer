@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Run the ported field-agnostic analysis scripts (python/examples) against
-# the Kangaroo scripts they replace on synthetic plotfiles, compare leaf cells
-# with yt on real plotfiles, and report whether the outputs agree.
+# Run the ported per-FAB extrema script (python/examples) against the Kangaroo
+# script it replaces on synthetic plotfiles, compare leaf cells with yt on
+# real plotfiles, and report whether the outputs agree.
 #
 # Usage: tools/analysis_validation/run_comparisons.sh BUILD_DIR WORK_DIR
 #
@@ -49,44 +49,13 @@ have_kangaroo() {
     [[ -x "$kangaroo_python" && -d "$kangaroo/scripts" ]]
 }
 
-rm -rf "$work/plt_part" "$work/plt_nan"
-"$python" "$here/make_particle_fixture.py" "$work/plt_part"
+rm -rf "$work/plt_amr" "$work/plt_nan"
+"$python" "$here/make_amr_fixture.py" "$work/plt_amr"
 "$python" "$here/make_nan_fixture.py" "$work/plt_nan"
 
 if have_kangaroo; then
-    # --- Kangaroo: cell-average slice --------------------------------------
-    # Planes in the lower half of a level-0 cell and off every face. Kangaroo
-    # locates the plane on level 0 and refines that index (base_index *
-    # ratio), so on finer levels it reads the lowest fine cell under the
-    # coarse one, which is the right cell only there; its default plane, the
-    # middle level-0 cell's center, lies on a level-1 face.
-    # tests/python/test_slices.py checks the upper-half case against the
-    # fixture's own values.
-    for args in "--var gasDensity --coord=-2.3e21" \
-                "--var gasDensity --axis x --zoom 1.5 --resolution 37,29 --coord=7.7e20" \
-                "--var gasDensity --axis y --coord=1.3e21 --resolution 64,64"; do
-        read -r -a options <<< "$args"
-        "$python" "$examples/plotfile_slice.py" "$work/plt_part" "${options[@]}" \
-            --no-plot --npz "$work/slice_ax.npz"
-        (cd "$kangaroo" && "$kangaroo_python" "$here/kangaroo_slice_array.py" \
-            "$work/plt_part" "$work/slice_k.npz" "${options[@]}" > /dev/null 2>&1)
-        status=0
-        "$python" - "$work/slice_ax.npz" "$work/slice_k.npz" <<'EOF2' || status=1
-import sys
-import numpy as np
-a, b = np.load(sys.argv[1]), np.load(sys.argv[2])
-x, y = a["slice"], b["slice"]
-finite = np.isfinite(y)
-ok = (x.shape == y.shape and np.array_equal(np.isnan(x), np.isnan(y))
-      and np.array_equal(a["rect"], b["rect"])
-      and np.all(np.abs(x[finite] - y[finite]) <= 1e-13 * np.abs(y[finite])))
-sys.exit(0 if ok else 1)
-EOF2
-        report $status "cell-average slice vs Kangaroo, rtol 1e-13 ($args)"
-    done
-
     # --- Kangaroo: per-FAB extrema -----------------------------------------
-    for plotfile in plt_part plt_nan; do
+    for plotfile in plt_amr plt_nan; do
         for args in "" "--level 1" "--level 0 --fab 1"; do
             read -r -a options <<< "$args"
             "$python" "$examples/plotfile_fab_minmax.py" "$work/$plotfile" \
@@ -121,26 +90,7 @@ EOF
     fi
     report $status "Quokka leaf cells and phase masses vs yt ($QUOKKA_PLOTFILE)"
     if have_kangaroo; then
-        # Kangaroo on the real plotfile: a slice whose plane lies in the first
-        # finest cell above a level-0 face (where Kangaroo's refined plane
-        # index is right on every level), and the level-0 FAB extrema.
-        "$python" "$examples/plotfile_slice.py" "$QUOKKA_PLOTFILE" --var gasDensity \
-            --coord=1e10 --no-plot --npz "$work/q_slice_ax.npz"
-        (cd "$kangaroo" && "$kangaroo_python" "$here/kangaroo_slice_array.py" \
-            "$QUOKKA_PLOTFILE" "$work/q_slice_k.npz" --var gasDensity --coord=1e10 \
-            > /dev/null 2>&1)
-        status=0
-        "$python" - "$work/q_slice_ax.npz" "$work/q_slice_k.npz" <<'EOF2' || status=1
-import sys
-import numpy as np
-a, b = np.load(sys.argv[1]), np.load(sys.argv[2])
-x, y = a["slice"], b["slice"]
-f = np.isfinite(y)
-ok = (x.shape == y.shape and np.array_equal(np.isfinite(x), f)
-      and np.all(np.abs(x[f] - y[f]) <= 1e-12 * np.abs(y[f])))
-sys.exit(0 if ok else 1)
-EOF2
-        report $status "Quokka cell-average slice vs Kangaroo, rtol 1e-12"
+        # Kangaroo on the real plotfile: the level-0 FAB extrema.
         "$python" "$examples/plotfile_fab_minmax.py" "$QUOKKA_PLOTFILE" --level 0 \
             > "$work/q_minmax_ax.txt"
         (cd "$kangaroo" && "$kangaroo_python" scripts/plotfile_fab_minmax.py \

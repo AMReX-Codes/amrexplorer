@@ -2,11 +2,10 @@
 
 The `amrexplorer` Python package reads AMReX plotfiles through the same
 Qt-free C++ readers the viewer uses, and gives scripts exact, native-unit
-access to them: every leaf cell exactly once, complete particle attributes,
-exact projections and slices, per-block statistics, surface areas for flux
-integrals, ghost-cell tiles for stencils, and conservative particle
-deposition. `tools/analysis_validation/run_comparisons.sh` compares it with
-yt and Kangaroo.
+access to them: every leaf cell exactly once, in chunks a script can reduce
+serially or in parallel, and per-block statistics.
+`tools/analysis_validation/run_comparisons.sh` compares it with yt and
+Kangaroo.
 
 Values are always the plotfile's own numbers. Nothing reads a unit system or
 converts anything: a script that wants solar masses divides by the gram value
@@ -78,16 +77,6 @@ ds = amrexplorer.open_plotfile("plt00100", derived=[("vx", "${x-GasMomentum}/gas
 `cache_bytes=` sets the block cache, otherwise `AMREXPLORER_CACHE_SIZE_MB` or
 1 GiB. A plan refuses, with the grid named, any item that might not fit.
 
-## Particles
-
-```python
-for chunk in ds.particle_chunks("StochasticStellarPop_particles", ["mass"]):
-    chunk.x, chunk.y, chunk.z, chunk["mass"], chunk.id, chunk.cpu
-```
-
-One chunk per grid holding particles, in level and grid order, with every
-real and integer attribute by name (`ds.particle_species` lists them).
-
 ## Parallel reductions
 
 ```python
@@ -104,49 +93,21 @@ order, so the result is bit-for-bit the serial one. `executor="processes"`
 needs a picklable mapper. For MPI, plan on every rank and pass
 `items=plan.partition(rank, size)`. A `CancelToken` stops reads in progress.
 
-## Images
+## Grids
 
-- `ds.project(field, axis, ...)`: the exact column integral of the leaf
-  cells over each pixel (fractional overlap, conservative); `weight=` gives a
-  weighted average. Returns a `Projection` with `image`, `coverage` and the
-  rectangle.
-- `ds.slice(field, axis, coordinate, ...)`: the viewer's sampled slice,
-  with validity, source level, sampling policy and pixel coordinates.
-- `ds.slice_cell_average(...)`: the exact area-weighted average of the cells
-  a plane passes through.
-- `ds.deposit_particles(species, weight, axis, ...)`: conservative,
-  AMR-aware CIC deposition projected onto the same pixels as `project`;
-  `mask=` filters each particle chunk.
-
-For pictures rather than numbers, `amrexplorer.render.slice_image(...)`
-colours a sampled slice exactly as the viewer does (its palettes and
-logarithmic mapping), and `render.volume_image(...)` ray-casts a volume
-rendering with the viewer's renderer; both return RGBA arrays, and
-`render.save_png` writes them.
-
-## Grids, surfaces and stencils
-
-- `ds.blocks()` lists every grid with its box, bounds and covered fraction;
-  `ds.block_statistics(fields)` gives per-grid minima and maxima from the
-  decoded data, NaN ignored.
-- `amrexplorer.surfaces.sphere_area_in_cells(chunk, center, r)` and
-  `cylinder_area_in_cells(chunk, center, r, half_height)` give per-cell areas
-  and normals for flux integrals; plan with `surfaces.sphere_region(...)` or
-  `cylinder_region(...)`, which pad the region so no crossing cell is missed.
-- `ds.plan_tiles(fields, ghost=n)` / `ds.tiles(...)` yield grids grown by
-  ghost cells, filled from neighbors and coarser levels, as Fortran-ordered
-  arrays with a `leaf_mask` for reductions.
+`ds.blocks()` lists every grid with its box, bounds and covered fraction;
+`ds.block_statistics(fields)` gives per-grid minima and maxima from the
+decoded data, NaN ignored.
 
 ## Batches
 
 `amrexplorer.sequence.find_plotfiles(directory)` lists a run's plotfiles in
 step order, `open_each(paths)` opens them one at a time, and `output_path` /
-`needs_output` skip frames already written. Long operations take
+`needs_output` skip outputs already written. Long operations take
 `progress=` callbacks and `cancel=` tokens.
 
 ## Examples
 
-`python/examples/` holds field-agnostic scripts: ports of Kangaroo's
-`plotfile_slice.py` and `plotfile_fab_minmax.py`, keeping their arguments and
-outputs, and `plot_frames.py` for slice and projection image sequences. Each
-says in its docstring what it validates.
+`python/examples/plotfile_fab_minmax.py` ports Kangaroo's script of the same
+name, keeping its arguments and output, and says in its docstring what it
+validates.

@@ -3,7 +3,7 @@
 The layout is AMReX's own (HyperCLaw-V1.1 Header, one VisMF Cell_H per level,
 Cell_D_* payloads), so the C++ readers see what a real simulation writes:
 per-level precision, stored ghost cells, version-1 FAB headers or version-2
-headerless payloads, and AMReX particle containers.
+and headerless payloads.
 
 Field values come from callables of (level, i, j, k) index arrays over the
 *grown* box, so a test can compute the same values independently. Stored
@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import warnings
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Sequence, Tuple
 
 import numpy as np
 
@@ -37,19 +37,6 @@ class Level:
     ghost: int = 0
     # Grids per Cell_D file; AMReX groups several FABs per file.
     grids_per_file: int = 2
-
-
-@dataclass
-class ParticleSpecies:
-    """Particles of one species, all stored on level 0 grid by grid."""
-
-    name: str
-    real_names: List[str]
-    int_names: List[str]
-    # Per grid: (positions (n, dim), reals (n, nreal), ints (n, nint), ids (n,))
-    grids: Dict[int, Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]
-    dtype: str = "float64"
-    level: int = 0
 
 
 def _box_text(lower, upper, dim, nodal=None):
@@ -78,7 +65,6 @@ def write_plotfile(
     vismf_version: int = 1,
     fill_ghosts: bool = False,
     coord_sys: int = 0,
-    particles: Sequence[ParticleSpecies] = (),
     quokka_metadata: bool = False,
 ) -> str:
     """Write a plotfile directory and return its path."""
@@ -119,8 +105,6 @@ def write_plotfile(
                      fill_ghosts)
     with open(os.path.join(path, "Header"), "w") as out:
         out.write("\n".join(lines) + "\n")
-    for species in particles:
-        _write_particles(path, species, dim, levels)
     if quokka_metadata:
         # What yt's Quokka frontend recognizes a Quokka plotfile by; unit 1
         # on every axis, so yt's code units are the stored cgs numbers.
@@ -208,71 +192,3 @@ def _write_level(path, lev, level, dim, names, fields, version, fill_ghosts):
     with open(os.path.join(directory, "Cell_H"), "w") as out:
         out.write("\n".join(header) + "\n")
 
-
-def _write_particles(path, species, dim, levels):
-    """An AMReX particle container as WritePlotFile writes it: Header plus
-    Level_l/Particle_H and DATA_ files holding, per grid, the integer records
-    (id, cpu, then int components) and then the real records (positions, then
-    real components)."""
-    directory = os.path.join(path, species.name)
-    lev = species.level
-    os.makedirs(os.path.join(directory, f"Level_{lev}"), exist_ok=True)
-    nreal = len(species.real_names)
-    nint = len(species.int_names)
-    ngrids = len(levels[lev].boxes)
-    total = sum(len(g[0]) for g in species.grids.values())
-    max_id = max([int(g[3].max()) for g in species.grids.values()
-                  if len(g[3])] + [0])
-    # AMReX's plotfile layout: Version_Two_Dot_Zero, the identity words
-    # written as (id, cpu), and the header's legacy checkpoint flag 1.
-    version = ("Version_Two_Dot_Zero_double" if species.dtype == "float64"
-               else "Version_Two_Dot_Zero_single")
-    real_dtype = np.dtype(species.dtype).newbyteorder("<")
-    header = [version, str(dim), str(nreal), *species.real_names,
-              str(nint), *species.int_names, "1", str(total), str(max_id + 1),
-              str(len(levels) - 1)]
-    for level_index in range(len(levels)):
-        header.append(str(len(levels[level_index].boxes)))
-    data = bytearray()
-    level_lines = []
-    for level_index in range(len(levels)):
-        for grid in range(len(levels[level_index].boxes)):
-            entry = species.grids.get(grid) if level_index == lev else None
-            count = 0 if entry is None else len(entry[0])
-            if count == 0:
-                if level_index == lev:
-                    level_lines.append("0 0 0")
-                continue
-            positions, reals, ints, ids = entry
-            offset = len(data)
-            int_block = np.zeros((count, 2 + nint), dtype="<i4")
-            int_block[:, 0] = ids
-            int_block[:, 1] = 3
-            if nint:
-                int_block[:, 2:] = ints
-            data += int_block.tobytes()
-            real_block = np.zeros((count, dim + nreal), dtype=real_dtype)
-            real_block[:, :dim] = positions
-            if nreal:
-                real_block[:, dim:] = reals
-            data += real_block.tobytes()
-            level_lines.append(f"0 {count} {offset}")
-    for level_index in range(len(levels)):
-        if level_index == lev:
-            header.extend(level_lines)
-        else:
-            header.extend("0 0 0" for _ in levels[level_index].boxes)
-    with open(os.path.join(directory, "Header"), "w") as out:
-        out.write("\n".join(header) + "\n")
-    with open(os.path.join(directory, f"Level_{lev}", "DATA_00000"), "wb") as out:
-        out.write(bytes(data))
-    for level_index in range(len(levels)):
-        os.makedirs(os.path.join(directory, f"Level_{level_index}"),
-                    exist_ok=True)
-        with open(os.path.join(directory, f"Level_{level_index}",
-                               "Particle_H"), "w") as out:
-            boxes = levels[level_index].boxes
-            out.write(f"({len(boxes)} 0\n")
-            for lower, upper in boxes:
-                out.write(_box_text(lower, upper, dim) + "\n")
-            out.write(")\n")

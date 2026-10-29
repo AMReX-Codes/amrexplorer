@@ -23,10 +23,6 @@ def add(left, right):
     return left + right
 
 
-def particle_mass(chunk):
-    return float(np.sum(chunk["mass"]))
-
-
 def serial_reference(path):
     with ax.open_plotfile(path) as ds:
         total = None
@@ -95,30 +91,6 @@ def test_unordered_reduction_has_the_same_total_count(refined_3d):
                                 executor="threads", workers=4, ordered=False)
     with ax.open_plotfile(path) as ds:
         assert count == request.plan(ds).total_cells
-
-
-def test_particles_in_parallel(tmp_path):
-    from plotfile_writer import Level, ParticleSpecies, write_plotfile
-
-    rng = np.random.default_rng(5)
-    grids = {g: (rng.random((50 + g, 2)), rng.random((50 + g, 1)),
-                 np.zeros((50 + g, 0), dtype=int),
-                 np.arange(1000 * g + 1, 1000 * g + 51 + g)) for g in range(4)}
-    path = write_plotfile(
-        tmp_path / "pltpp", dim=2, domain_cells=(8, 8),
-        fields={"density": density},
-        levels=[Level([((0, 0), (3, 3)), ((4, 0), (7, 3)), ((0, 4), (3, 7)),
-                       ((4, 4), (7, 7))])],
-        particles=[ParticleSpecies("stars", ["mass"], [], grids)])
-    request = parallel.Particles("stars", ["mass"])
-    serial = parallel.map_reduce(path, request, particle_mass, add,
-                                 executor="serial")
-    threads = parallel.map_reduce(path, request, particle_mass, add,
-                                  executor="threads", workers=3)
-    processes = parallel.map_reduce(path, request, particle_mass, add,
-                                    executor="processes", workers=2)
-    assert serial == threads == processes
-    assert serial == pytest.approx(sum(g[1].sum() for g in grids.values()))
 
 
 def test_executor_errors_propagate(refined_3d):

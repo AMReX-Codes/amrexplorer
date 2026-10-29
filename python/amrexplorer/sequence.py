@@ -3,7 +3,7 @@
     from amrexplorer import sequence
 
     for ds in sequence.open_each(sequence.find_plotfiles("outputs/")):
-        out = sequence.output_path(ds.path, "_projection_z.png")
+        out = sequence.output_path(ds.path, "_phase.json")
         if sequence.needs_output(out):
             ...
 """

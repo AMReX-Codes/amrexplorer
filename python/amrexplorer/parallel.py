@@ -1,8 +1,7 @@
 """Parallel map-reduce over plan items.
 
-Each work item -- one grid's leaf cells or one grid's particles -- is read and
-mapped to a partial result by a worker, and the partials are combined with a
-reduction. Three things are fixed by design:
+Each work item -- one grid's leaf cells -- is read and mapped to a partial
+result by a worker, and the partials are combined with a reduction. Three things are fixed by design:
 
 * Ownership. By default every worker opens its own dataset handle on the same
   plotfile, definitions and cache budget, and plans the same request itself.
@@ -23,7 +22,7 @@ reduction. Three things are fixed by design:
 
 A plan is deterministic, so a worker that plans the same request on its own
 handle gets the same items with the same indices; the executor checks that
-the item count and cell or particle total agree before using it.
+the item count and cell total agree before using it.
 
 For MPI, plan on every rank and process ``plan.partition(rank, size)`` (or
 pass ``items=`` here); combine rank results with the same ordered rule.
@@ -63,26 +62,6 @@ class LeafCells:
     @staticmethod
     def read(ds: Dataset, item, cancel=None):
         return ds.read_leaf_chunk(item, cancel=cancel)
-
-
-@dataclass(frozen=True)
-class Particles:
-    """A particle request, planned identically on every worker."""
-
-    species: str
-    fields: Optional[Sequence[str]] = None
-
-    def plan(self, ds: Dataset):
-        return ds.plan_particle_chunks(
-            self.species, None if self.fields is None else list(self.fields))
-
-    @staticmethod
-    def total(plan) -> int:
-        return plan.total_particles
-
-    @staticmethod
-    def read(ds: Dataset, item, cancel=None):
-        return ds.read_particle_chunk(item, cancel=cancel)
 
 
 @dataclass(frozen=True)
@@ -184,7 +163,7 @@ def map_reduce(dataset, request, mapper: Callable, reduce: Callable,
 
     dataset: an open Dataset, or a plotfile path (then `derived` and
         `cache_bytes` say how to open it).
-    request: LeafCells(...) or Particles(...).
+    request: LeafCells(...).
     mapper: chunk -> partial. Must be picklable for executor="processes".
     reduce: (accumulated, partial) -> accumulated.
     initial: the starting value; omitted, the first partial starts.
@@ -335,4 +314,4 @@ def _drain(pool, run, combiner, positions, max_in_flight, progress,
         raise
 
 
-__all__ = ["LeafCells", "Particles", "map_reduce"]
+__all__ = ["LeafCells", "map_reduce"]

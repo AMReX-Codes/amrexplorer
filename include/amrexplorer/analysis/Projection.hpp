@@ -9,8 +9,7 @@
 #include <string>
 #include <vector>
 
-// Exact projection of leaf cells onto a uniform image
-// (docs/analysis-scripting-interface.md, "Numeric projections"). Unlike a
+// Exact projection of leaf cells onto a uniform image. Unlike a
 // face-on view made by summing sampled pixels, every leaf cell contributes
 // its value times the volume it shares with each pixel's column, so nothing
 // is resampled and the projected total is conservative by construction:

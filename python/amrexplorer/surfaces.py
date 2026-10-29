@@ -1,4 +1,4 @@
-"""Per-cell areas of spheres and z-aligned cylinders (milestone 7).
+"""Per-cell areas of spheres and z-aligned cylinders.
 
 For flux integrals through a surface: the geometry helpers return, for every
 cell of a leaf chunk, the area the surface has in it (Kangaroo's

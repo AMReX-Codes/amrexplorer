@@ -1,4 +1,4 @@
-"""Milestone 8: tiles with ghost cells. Validates analysis totals (masked
+"""Tiles with ghost cells. Validates analysis totals (masked
 tile reductions equal leaf-chunk totals) and raw values (ghost fill)."""
 
 import numpy as np

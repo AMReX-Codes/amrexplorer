@@ -1,4 +1,4 @@
-"""Milestone 7: surface-intersection geometry. Validates analysis totals:
+"""Surface-intersection geometry. Validates analysis totals:
 summed areas converge to the analytic surface areas on uniform and
 multilevel grids, disk moments are exact, and faces are counted once."""
 

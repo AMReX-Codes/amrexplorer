@@ -1,4 +1,4 @@
-"""Batch helpers for plotfile sequences (milestone 5).
+"""Batch helpers for plotfile sequences.
 
     from amrexplorer import sequence
 

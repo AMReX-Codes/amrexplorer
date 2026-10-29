@@ -16,10 +16,9 @@
 #include <vector>
 
 // Exact traversal of a plotfile's leaf cells, for analysis rather than
-// display (docs/analysis-scripting-interface.md). A plan partitions the leaf
-// cells -- those no finer level covers -- of a region into work items, one
-// per grid (FAB) that has any; reading an item copies its selected cells'
-// native values into arrays the chunk owns. Nothing here resamples: a value
+// display. A plan partitions the leaf cells -- those no finer level covers --
+// of a region into work items, one per grid (FAB) that has any; reading an
+// item copies its selected cells' native values into arrays the chunk owns. Nothing here resamples: a value
 // in a chunk is a value the plotfile stores, or a derived field evaluated on
 // those values, widened or narrowed only to the plan's dtype.
 

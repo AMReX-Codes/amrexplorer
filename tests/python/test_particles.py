@@ -1,4 +1,4 @@
-"""Milestone 2: complete particle attributes, one chunk per grid.
+"""Complete particle attributes, one chunk per grid.
 
 Validates raw source values: every attribute of every particle, against the
 arrays the fixture wrote."""

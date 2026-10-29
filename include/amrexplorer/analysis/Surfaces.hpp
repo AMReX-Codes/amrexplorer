@@ -5,9 +5,8 @@
 #include <vector>
 
 // Per-cell areas of spheres and z-aligned cylinders, for flux integrals
-// through them (docs/analysis-scripting-interface.md, "Surface-intersection
-// geometry"). The geometry is Kangaroo's tangent-plane approximation, not the
-// exact curved-surface area:
+// through them. The geometry is Kangaroo's tangent-plane approximation, not
+// the exact curved-surface area:
 //
 // - a cell gets nonzero area only if the true sphere or finite cylinder meets
 //   its box; only then is the tangent-plane area computed, so a plane that

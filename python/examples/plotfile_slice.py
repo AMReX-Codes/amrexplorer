@@ -2,7 +2,7 @@
 """Slice a plotfile with an exact AMR cell average and plot the result.
 
 A port of Kangaroo's ``scripts/plotfile_slice.py`` to amrexplorer
-(docs/analysis-scripting-interface.md). The arguments and image are
+(docs/python-analysis.md). The arguments and image are
 Kangaroo's: each pixel is the area-weighted average of the leaf cells the
 plane passes through (Dataset.slice_cell_average). ``--npz`` additionally
 saves the numbers; ``--sampled`` draws the viewer's point-sampled slice

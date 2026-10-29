@@ -5,10 +5,8 @@ Qt-free C++ readers the viewer uses, and gives scripts exact, native-unit
 access to them: every leaf cell exactly once, complete particle attributes,
 exact projections and slices, per-block statistics, surface areas for flux
 integrals, ghost-cell tiles for stencils, and conservative particle
-deposition. The design and its guarantees are in
-[analysis-scripting-interface.md](analysis-scripting-interface.md); the
-comparisons against yt and Kangaroo are in
-[analysis-validation.md](analysis-validation.md).
+deposition. `tools/analysis_validation/run_comparisons.sh` compares it with
+yt and Kangaroo.
 
 Values are always the plotfile's own numbers. Nothing reads a unit system or
 converts anything: a script that wants solar masses divides by the gram value

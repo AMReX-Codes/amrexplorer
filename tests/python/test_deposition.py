@@ -1,4 +1,4 @@
-"""Milestone 9: conservative AMR-aware CIC deposition. Validates analysis
+"""Conservative AMR-aware CIC deposition. Validates analysis
 totals: pixel plus outside weight equals the direct sum, with particles next
 to block, coarse-fine and domain boundaries, and agreement with a NumPy
 reference deposit on a uniform grid."""

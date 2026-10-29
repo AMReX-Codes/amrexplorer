@@ -1,4 +1,4 @@
-"""Exact projections of leaf cells (milestone 4)."""
+"""Exact projections of leaf cells."""
 
 from __future__ import annotations
 

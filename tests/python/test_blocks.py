@@ -1,4 +1,4 @@
-"""Milestone 6: block metadata and per-block statistics. Validates raw
+"""Block metadata and per-block statistics. Validates raw
 source values: extrema against the decoded fixture, ghost cells and NaN
 included as the design specifies."""
 

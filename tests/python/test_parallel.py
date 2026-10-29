@@ -1,4 +1,4 @@
-"""Milestone 3: parallel execution. Validates parallel execution: serial,
+"""Parallel execution. Validates parallel execution: serial,
 thread and process executors give bit-identical ordered reductions on
 multilevel data, under either ownership model."""
 

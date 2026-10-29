@@ -1,6 +1,6 @@
 """Exact, native-unit analysis of AMReX plotfiles.
 
-The interface follows docs/analysis-scripting-interface.md. Values are the
+Usage is in docs/python-analysis.md. Values are the
 numbers the plotfile stores -- no units are read, attached, or converted --
 and leaf-cell traversal partitions the AMR hierarchy exactly: every leaf
 cell appears in exactly one chunk, and no covered coarse cell appears at all.

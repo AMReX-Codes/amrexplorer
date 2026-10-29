@@ -1,4 +1,4 @@
-"""Milestone 4: exact leaf-cell projections. Validates analysis totals:
+"""Exact leaf-cell projections. Validates analysis totals:
 conservation against a direct leaf-cell sum with matching (fractional
 overlap) region semantics, and pixel values against an independent NumPy
 reference."""

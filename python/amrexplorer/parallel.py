@@ -1,4 +1,4 @@
-"""Parallel map-reduce over plan items (milestone 3).
+"""Parallel map-reduce over plan items.
 
 Each work item -- one grid's leaf cells or one grid's particles -- is read and
 mapped to a partial result by a worker, and the partials are combined with a
@@ -7,9 +7,10 @@ reduction. Three things are fixed by design:
 * Ownership. By default every worker opens its own dataset handle on the same
   plotfile, definitions and cache budget, and plans the same request itself.
   PlotfileDataset serializes block reads per handle, so a shared handle
-  serializes every miss; worker-local handles read in parallel (see
-  docs/analysis-validation.md for the measurements). ``ownership="shared"``
-  keeps one handle for every thread instead, sharing one cache.
+  serializes every miss; worker-local handles read in parallel
+  (tools/analysis_validation/benchmark_parallel.py measures both).
+  ``ownership="shared"`` keeps one handle for every thread instead, sharing
+  one cache.
 * Scheduling. At most ``max_in_flight`` items are read or mapped at once, so
   memory is bounded by that many chunks plus the partials waiting to be
   combined. Items are handed out dynamically, in plan order.

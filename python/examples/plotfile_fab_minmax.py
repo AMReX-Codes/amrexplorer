@@ -2,7 +2,7 @@
 """Print per-component min/max for each FAB in a plotfile.
 
 A port of Kangaroo's ``scripts/plotfile_fab_minmax.py`` to amrexplorer's
-block statistics (docs/analysis-scripting-interface.md), printing the same
+block statistics (docs/python-analysis.md), printing the same
 report. Extrema are computed from the decoded data over each whole on-disk
 FAB -- covered cells and stored ghost cells included -- with NaN ignored; a
 FAB whose values are all NaN reports nan.

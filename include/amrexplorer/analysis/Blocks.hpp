@@ -9,10 +9,9 @@
 #include <vector>
 
 // The plotfile's own grid structure, rather than a partition of its leaf
-// cells (docs/analysis-scripting-interface.md, "Block metadata and
-// statistics"). Blocks are listed by level and then native FAB index, the
-// order the level header lists them, and each says its FAB index so output
-// and selection match tools that address FABs by plotfile position.
+// cells. Blocks are listed by level and then native FAB index, the order the
+// level header lists them, and each says its FAB index so output and
+// selection match tools that address FABs by plotfile position.
 
 namespace amrvis {
 

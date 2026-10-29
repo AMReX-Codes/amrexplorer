@@ -1,4 +1,4 @@
-"""Milestone 1: exact leaf-cell traversal (docs/analysis-scripting-interface.md).
+"""Exact leaf-cell traversal.
 
 These tests validate raw source values and analysis totals against an
 independent NumPy reconstruction of the fixture plotfiles."""

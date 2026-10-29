@@ -2627,7 +2627,7 @@ target_link_libraries(
     fuzz_expression PRIVATE amrexplorer::expression amrexplorer::warnings)
 amrexplorer_add_fuzz_target(fuzz_expression)
 
-# The Python analysis package (docs/analysis-scripting-interface.md), tested
+# The Python analysis package (docs/python-analysis.md), tested
 # with pytest against the module this build just made. Skipped, not failed,
 # where the configured interpreter has no pytest.
 if(AMREXPLORER_ENABLE_PYTHON)

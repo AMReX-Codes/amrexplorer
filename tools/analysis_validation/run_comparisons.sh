@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Run the ported field-agnostic analysis scripts (python/examples) against
 # the Kangaroo scripts they replace on synthetic plotfiles, compare leaf cells
-# with yt on real plotfiles, and report whether the outputs agree. Results are
-# summarized in docs/analysis-validation.md.
+# with yt on real plotfiles, and report whether the outputs agree.
 #
 # Usage: tools/analysis_validation/run_comparisons.sh BUILD_DIR WORK_DIR
 #
@@ -60,9 +59,9 @@ if have_kangaroo; then
     # locates the plane on level 0 and refines that index (base_index *
     # ratio), so on finer levels it reads the lowest fine cell under the
     # coarse one, which is the right cell only there; its default plane, the
-    # middle level-0 cell's center, lies on a level-1 face. See
-    # docs/analysis-validation.md; tests/python/test_slices.py checks the
-    # upper-half case against the fixture's own values.
+    # middle level-0 cell's center, lies on a level-1 face.
+    # tests/python/test_slices.py checks the upper-half case against the
+    # fixture's own values.
     for args in "--var gasDensity --coord=-2.3e21" \
                 "--var gasDensity --axis x --zoom 1.5 --resolution 37,29 --coord=7.7e20" \
                 "--var gasDensity --axis y --coord=1.3e21 --resolution 64,64"; do

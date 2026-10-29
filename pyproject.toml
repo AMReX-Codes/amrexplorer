@@ -1,4 +1,4 @@
-# The amrexplorer Python analysis package (docs/analysis-scripting-interface.md).
+# The amrexplorer Python analysis package (docs/python-analysis.md).
 # `pip install .` builds the nanobind extension through CMake with the GUI,
 # the remote protocol and the tests switched off; the C++ build is otherwise
 # the one docs/building.md describes.

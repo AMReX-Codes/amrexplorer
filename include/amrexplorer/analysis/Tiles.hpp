@@ -7,9 +7,8 @@
 #include <memory>
 #include <vector>
 
-// Grids grown by ghost cells, for stencil operations such as gradients
-// (docs/analysis-scripting-interface.md, "Tiles with ghost cells"). One tile
-// per FAB that has leaf cells in the region, matching the leaf-chunk plan
+// Grids grown by ghost cells, for stencil operations such as gradients. One
+// tile per FAB that has leaf cells in the region, matching the leaf-chunk plan
 // item for item. Ghost cells are filled the way AMReX's FillPatch fills them:
 //
 // - from a same-level grid's valid cells where one covers the ghost cell

@@ -1,4 +1,4 @@
-"""Milestone 5: numeric slices. Validates raw source values: the sampled
+"""Numeric slices. Validates raw source values: the sampled
 slice (through the viewer's query layer) and the exact cell-average slice,
 against the fixture's analytic values."""
 

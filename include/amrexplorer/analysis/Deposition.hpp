@@ -10,9 +10,8 @@
 #include <vector>
 
 // Conservative, AMR-aware cloud-in-cell deposition of particles, projected
-// onto a uniform image (docs/analysis-scripting-interface.md, "Particle
-// deposition"). Every selected particle's whole weight reaches the image or
-// is counted as outside it:
+// onto a uniform image. Every selected particle's whole weight reaches the
+// image or is counted as outside it:
 //
 // - kernel: 2-D CIC weights over the four nearest cell centers in the image
 //   axes, at the cell size of the level the particle is stored on, in the

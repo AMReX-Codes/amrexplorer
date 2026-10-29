@@ -1,4 +1,4 @@
-"""Milestone 5: batch ergonomics -- cancellation, progress and sequences."""
+"""Batch ergonomics -- cancellation, progress and sequences."""
 
 import threading
 

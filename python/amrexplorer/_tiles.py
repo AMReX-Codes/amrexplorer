@@ -1,4 +1,4 @@
-"""Tiles: grids grown by ghost cells, for stencils (milestone 8)."""
+"""Tiles: grids grown by ghost cells, for stencils."""
 
 from __future__ import annotations
 

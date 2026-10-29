@@ -1,6 +1,11 @@
 # Analysis scripting interface
 
-Status: design proposal, 2026-09-27. No interface described here is implemented yet.
+Status: implemented, 2026-10-28 (proposed 2026-09-27). The C++ layer is
+`src/analysis` (`include/amrexplorer/analysis`), the binding `python/`, the
+user guide [python-analysis.md](python-analysis.md), and the evidence for
+each milestone [analysis-validation.md](analysis-validation.md). Decisions
+this document left open are recorded under "Implementation notes" at the
+end.
 
 ## Goal
 
@@ -493,3 +498,54 @@ The public Python examples and tests should say whether they validate raw
 source values, analysis totals, visual equivalence, or parallel execution.
 Passing a slice or import smoke test does not establish exact leaf-cell
 correctness.
+
+## Implementation notes
+
+Choices made while implementing, where the text above left room:
+
+- **Region selection** is half-open by cell center, `lower <= center <
+  upper` on each axis, decided with the same center arithmetic the chunk's
+  coordinate arrays report, so adjacent regions partition the leaf cells. A
+  region outside the domain gives an empty plan rather than an error; one
+  with non-finite or unordered bounds is an error.
+- **Precision per level** comes from the level's VisMF `RealDescriptor`, or,
+  for a version-1 header that has none, from the first grid's FAB header
+  (one short read per level, no payload).
+- **The planning estimate** counts a fixed 4 KiB per block for bookkeeping.
+- **Worker ownership** (milestone 3): worker-local dataset handles, measured
+  against a shared handle in analysis-validation.md. `amrexplorer.parallel`
+  re-plans the request on each worker and checks the plan matches, bounds the
+  items in flight, and combines partials in item order by default, which
+  reproduces the serial result bit for bit.
+- **Projection pixels** (milestone 4): `image[j, i]`, shape (height, width),
+  `j = 0` at the lower image bound. Without a weight a pixel holds the
+  integral over its column divided by its area; with one, the weighted
+  average. Boundary cells contribute the part of them inside the slab
+  (fractional overlap). `coverage` is the filled fraction of each column.
+  Sampled and exact operations have separate names: `slice` samples through
+  the query layer, `slice_cell_average` and `project` are exact.
+- **Tiles** (milestone 8): ghost cells outside a non-periodic domain are
+  invalid (NaN), since a plotfile records no boundary condition;
+  periodicity is the caller's to state. Coarse-to-fine interpolation is
+  linear with central slopes by default (exact for linear fields), with the
+  MC-limited and piecewise-constant schemes as options. The planning check
+  bounds the largest single FAB a ghost fill reads, since the fill reads
+  them one at a time; each item lists every FAB it touches.
+- **Deposition** (milestone 9): a cell covered by a finer level shares its
+  weight equally among the covering image-plane columns, in the fine layer
+  along the line of sight that holds the particle. Weight that reaches a
+  level with no grid goes to the coarser parent without refining again, so
+  grids not aligned to the refinement ratio cannot cycle. The `mask`
+  callable receives each `ParticleChunk`.
+- **Headless rendering** is `amrexplorer.render`: the viewer's
+  `ScalarRenderer` and palettes over a sampled slice, and `VolumeQuery` plus
+  `VolumeRaycaster` for volumes, returning RGBA arrays. It calls the
+  rendering layers directly rather than `SlicePipeline`, whose request and
+  result types carry the GUI's view state.
+- **Particle identities** are AMReX's `id` and `cpu`, decoded from either
+  identity layout; particles marked invalid are left out, as the display
+  sample leaves them out.
+- **Kangaroo comparisons** found several behaviors of Kangaroo's own that
+  the ports do not reproduce (ghost cells, slice planes, cylinder caps on
+  block faces); they are listed in analysis-validation.md.
+

@@ -38,14 +38,21 @@ public:
     // caller of metadata() see one list that never changes. Editing the
     // definitions therefore means opening a new dataset, which is what the GUI
     // does.
+    //
+    // `derivedFieldPolicy` is Skip for the viewer, for the reasons above. An
+    // unattended analysis passes Strict instead: a definition that does not
+    // resolve then throws DerivedFieldError here, at open, rather than leaving
+    // a reduction to run without the field it asked for.
     PlotfileDataset(
         std::filesystem::path plotfile, DatasetId id,
         std::uint64_t cacheBudgetBytes, StopToken cancellation = {},
-        std::vector<DerivedFieldDefinition> derivedFields = {});
+        std::vector<DerivedFieldDefinition> derivedFields = {},
+        DerivedFieldPolicy derivedFieldPolicy = DerivedFieldPolicy::Skip);
     PlotfileDataset(std::filesystem::path dataRoot, DatasetId id,
         std::uint64_t cacheBudgetBytes, PlotfileMetadataResult metadata,
         StopToken cancellation = {},
-        std::vector<DerivedFieldDefinition> derivedFields = {});
+        std::vector<DerivedFieldDefinition> derivedFields = {},
+        DerivedFieldPolicy derivedFieldPolicy = DerivedFieldPolicy::Skip);
 
     [[nodiscard]] const DatasetMetadata& metadata() const noexcept;
     [[nodiscard]] const MetadataReadMetrics& metadataReadMetrics() const noexcept;
@@ -73,6 +80,11 @@ public:
     // How many of metadata().fields this dataset stores; the derived ones
     // follow them, in the order their definitions were given.
     [[nodiscard]] std::size_t storedFieldCount() const noexcept;
+    // The program that computes a derived field, or null for a stored one --
+    // what a caller bounding a read in advance walks to find every block the
+    // evaluation would pin.
+    [[nodiscard]] const DerivedFieldProgram* derivedFieldProgram(
+        FieldId field) const noexcept;
     // The definitions this dataset could not install, with the reason. A
     // definition written for another plotfile does not stop this one from
     // opening (DerivedFieldPolicy::Skip); it lands here instead, for whoever
@@ -104,6 +116,10 @@ public:
     // The block pool this dataset reports; the mapped grid's pool follows the
     // budget (setCacheBudget) and the clear, but is not part of the metrics.
     [[nodiscard]] CacheMetrics cacheMetrics() const;
+    // False when pinned blocks already exceed the new budget. The new budget
+    // is stored either way (ByteLruCache::setBudget), on this pool and the
+    // mapped grid's; a caller that must not keep a budget it could not honour
+    // restores the previous one itself.
     [[nodiscard]] bool setCacheBudget(std::uint64_t bytes);
     void clearUnpinnedCache();
 
@@ -136,7 +152,8 @@ private:
     };
     [[nodiscard]] static Fields installFields(
         const PlotfileMetadataResult& source,
-        std::span<const DerivedFieldDefinition> definitions);
+        std::span<const DerivedFieldDefinition> definitions,
+        DerivedFieldPolicy policy);
     [[nodiscard]] BlockReadResult readDerivedBlock(const BlockRequest& request,
         const DerivedFieldProgram& program, StopToken cancellation);
 

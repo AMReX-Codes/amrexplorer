@@ -37,6 +37,14 @@ file or wire I/O itself. `SlicePipeline` (and the query/render layers under it)
 turns a `SliceRequest` into a displayable `SliceDisplayResult` — raster image,
 contour polylines, vector glyphs, resolved color range — with no Qt dependency.
 
+Beside the display path, `src/analysis` (on `io` and `core`) serves scripts
+rather than screens: exact leaf-cell traversal, projections and cell-average
+slices, block statistics, surface areas, ghost-cell tiles and particle
+deposition, all in native values. `python/` binds it with nanobind into the
+`amrexplorer` package (built when `AMREXPLORER_ENABLE_PYTHON=ON`, or by
+`pip install .`). See [analysis-scripting-interface.md](analysis-scripting-interface.md)
+and [python-analysis.md](python-analysis.md).
+
 ## The GUI layer
 
 `MainWindow` is the one window; it owns the plane views (`PlaneViewState`

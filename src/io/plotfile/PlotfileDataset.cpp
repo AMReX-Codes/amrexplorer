@@ -60,7 +60,8 @@ constexpr std::size_t derivedChunkPoints = 512;
 
 PlotfileDataset::Fields PlotfileDataset::installFields(
     const PlotfileMetadataResult& source,
-    std::span<const DerivedFieldDefinition> definitions)
+    std::span<const DerivedFieldDefinition> definitions,
+    DerivedFieldPolicy policy)
 {
     if (!source.metadata) {
         throw std::invalid_argument("dataset metadata is unavailable");
@@ -71,7 +72,7 @@ PlotfileDataset::Fields PlotfileDataset::installFields(
     auto metadata = std::make_shared<DatasetMetadata>(*source.metadata);
     const auto storedCount = metadata->fields.size();
     auto installation = installDerivedFields(
-        *metadata, definitions, DerivedFieldPolicy::Skip);
+        *metadata, definitions, policy);
     return {std::move(metadata), std::move(installation.programs), storedCount,
         std::move(installation.skipped),
         {definitions.begin(), definitions.end()}};
@@ -80,11 +81,13 @@ PlotfileDataset::Fields PlotfileDataset::installFields(
 PlotfileDataset::PlotfileDataset(
     std::filesystem::path plotfile, DatasetId id,
     std::uint64_t cacheBudgetBytes, StopToken cancellation,
-    std::vector<DerivedFieldDefinition> derivedFields)
+    std::vector<DerivedFieldDefinition> derivedFields,
+    DerivedFieldPolicy derivedFieldPolicy)
     : m_plotfile(sourceDataRoot(plotfile))
     , m_id(id)
     , m_metadataResult(readDatasetMetadata(plotfile, cancellation))
-    , m_fields(installFields(m_metadataResult, derivedFields))
+    , m_fields(installFields(
+          m_metadataResult, derivedFields, derivedFieldPolicy))
     , m_particleSpecies(std::filesystem::is_directory(plotfile)
             ? discoverParticleSpecies(m_plotfile, cancellation)
             : std::vector<ParticleSpeciesMetadata>{})
@@ -99,14 +102,16 @@ PlotfileDataset::PlotfileDataset(
 
 PlotfileDataset::PlotfileDataset(std::filesystem::path root, DatasetId id,
     std::uint64_t cacheBudgetBytes, PlotfileMetadataResult metadata,
-    StopToken cancellation, std::vector<DerivedFieldDefinition> derivedFields)
+    StopToken cancellation, std::vector<DerivedFieldDefinition> derivedFields,
+    DerivedFieldPolicy derivedFieldPolicy)
     : m_plotfile(std::move(root))
     , m_id(id)
     , m_metadataResult(std::move(metadata))
     // Rejects a missing metadata result, which used to be the constructor
     // body's job -- the field list has to be built before the block reader is
     // constructed, so the check has to happen there too.
-    , m_fields(installFields(m_metadataResult, derivedFields))
+    , m_fields(installFields(
+          m_metadataResult, derivedFields, derivedFieldPolicy))
     , m_particleSpecies(
           discoverParticlesForPlotfileRoot(m_plotfile, cancellation))
     , m_blockReader(m_plotfile, m_fields.metadata)
@@ -124,7 +129,7 @@ PlotfileDataset::PlotfileDataset(MappedGridTag, std::filesystem::path root,
     : m_plotfile(std::move(root))
     , m_id(id)
     , m_metadataResult{std::move(metadata), {}, {}, {}}
-    , m_fields(installFields(m_metadataResult, {}))
+    , m_fields(installFields(m_metadataResult, {}, DerivedFieldPolicy::Skip))
     , m_blockReader(m_plotfile, m_fields.metadata)
     , m_cache(cacheBudgetBytes)
 {
@@ -177,6 +182,16 @@ PlotfileDataset::derivedFieldDefinitions() const noexcept
 std::size_t PlotfileDataset::storedFieldCount() const noexcept
 {
     return m_fields.storedCount;
+}
+
+const DerivedFieldProgram* PlotfileDataset::derivedFieldProgram(
+    FieldId field) const noexcept
+{
+    if (!isDerivedField(field)) {
+        return nullptr;
+    }
+    return &m_fields.programs[static_cast<std::size_t>(field.value)
+        - m_fields.storedCount];
 }
 
 const std::vector<DerivedFieldSkip>& PlotfileDataset::skippedDerivedFields()

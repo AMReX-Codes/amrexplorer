@@ -80,6 +80,8 @@ option(AMREXPLORER_ENABLE_VTK "Build the optional VTK volume module" OFF)
 option(AMREXPLORER_ENABLE_REMOTE
     "Build production remote client/server support" ${AMREXPLORER_ENABLE_QT})
 option(AMREXPLORER_BUILD_TESTS "Build unit and integration tests" ON)
+option(AMREXPLORER_ENABLE_PYTHON
+    "Build the amrexplorer Python analysis module (needs nanobind)" OFF)
 option(AMREXPLORER_ENABLE_SERVER_TEST_HOOKS
     "Enable internal remote-server synchronization hooks for tests" OFF)
 option(AMREXPLORER_BUILD_MACOS_APP_BUNDLE
@@ -222,6 +224,12 @@ if(NOT AMREXPLORER_HAS_REQUIRED_CXX20_SUPPORT)
         "would succeed.")
 endif()
 
+# The Python module is a shared library, so every static library it links has
+# to be position independent.
+if(AMREXPLORER_ENABLE_PYTHON)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(amrexplorer_warnings)
 
@@ -249,6 +257,7 @@ add_subdirectory(src/expression)
 add_subdirectory(src/core)
 add_subdirectory(src/cache)
 add_subdirectory(src/io)
+add_subdirectory(src/analysis)
 add_subdirectory(src/query)
 add_subdirectory(src/render3d)
 add_subdirectory(src/data)
@@ -318,6 +327,10 @@ if(AMREXPLORER_ENABLE_VTK)
     message(FATAL_ERROR
         "AMREXPLORER_ENABLE_VTK is not yet supported. The system VTK package "
         "is Qt 5-based and must not be linked into this Qt 6 application.")
+endif()
+
+if(AMREXPLORER_ENABLE_PYTHON)
+    add_subdirectory(python)
 endif()
 
 add_subdirectory(tools/dataset_inspect)

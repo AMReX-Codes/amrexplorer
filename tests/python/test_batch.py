@@ -11,7 +11,7 @@ from conftest import density, temperature
 from plotfile_writer import Level, write_plotfile
 
 
-def test_cancel_token_stops_reads(refined_3d):
+def test_cancel_token_stops_reads_and_block_statistics(refined_3d):
     path, _ = refined_3d
     token = ax.CancelToken()
     assert not token.cancelled
@@ -22,6 +22,8 @@ def test_cancel_token_stops_reads(refined_3d):
         assert token.cancelled
         with pytest.raises(ax.ReadCancelled):
             ds.read_leaf_chunk(plan[0], cancel=token)
+        with pytest.raises(ax.ReadCancelled):
+            ds.block_statistics(["density"], cancel=token)
         with pytest.raises(ax.ReadCancelled):
             list(ds.leaf_cells(["density"], cancel=token))
 

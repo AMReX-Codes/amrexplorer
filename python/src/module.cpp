@@ -6,6 +6,7 @@
 // The ergonomic surface (open_plotfile, context management, region and dtype
 // spellings) lives in the pure-Python package around this module.
 
+#include <amrexplorer/analysis/Blocks.hpp>
 #include <amrexplorer/analysis/LeafChunks.hpp>
 #include <amrexplorer/cache/ByteLruCache.hpp>
 #include <amrexplorer/core/CacheConfig.hpp>
@@ -346,6 +347,67 @@ public:
         return readLeafChunk(*keep, item, token);
     }
 
+    nb::list blocks(std::optional<int> level) const
+    {
+        const auto& data = dataset();
+        const auto dimension = data.metadata().dimension;
+        nb::list result;
+        for (const auto& block : listBlocks(data, level)) {
+            nb::dict entry;
+            entry["level"] = block.level;
+            entry["grid"] = block.grid;
+            entry["box"] = boxTuple(block.box, dimension);
+            entry["lower"] = realVector(block.bounds.lower, dimension);
+            entry["upper"] = realVector(block.bounds.upper, dimension);
+            entry["cells"] = block.cells;
+            entry["covered_cells"] = block.coveredCells;
+            entry["file"] = block.file;
+            entry["offset"] = block.offset;
+            result.append(entry);
+        }
+        return result;
+    }
+
+    nb::list blockStatistics(const std::vector<std::string>& fields,
+        std::optional<int> level, std::optional<int> grid,
+        const CancelToken* cancel)
+    {
+        auto keep = m_dataset;
+        if (!keep) {
+            throw DatasetClosed();
+        }
+        const auto dimension = keep->metadata().dimension;
+        std::vector<BlockExtrema> extrema;
+        {
+            const auto token = tokenOf(cancel);
+            nb::gil_scoped_release release;
+            extrema = amrvis::blockStatistics(*keep, fields, level, grid, token);
+        }
+        nb::list result;
+        for (const auto& block : extrema) {
+            nb::dict entry;
+            entry["level"] = block.level;
+            entry["grid"] = block.grid;
+            nb::dict minimum;
+            nb::dict maximum;
+            nb::dict boxes;
+            nb::dict ghost;
+            for (std::size_t field = 0; field < fields.size(); ++field) {
+                const auto name = nb::str(fields[field].c_str());
+                minimum[name] = block.minimum[field];
+                maximum[name] = block.maximum[field];
+                boxes[name] = boxTuple(block.boxes[field], dimension);
+                ghost[name] = static_cast<bool>(block.includesGhostCells[field]);
+            }
+            entry["minimum"] = minimum;
+            entry["maximum"] = maximum;
+            entry["box"] = boxes;
+            entry["includes_ghost_cells"] = ghost;
+            result.append(entry);
+        }
+        return result;
+    }
+
 private:
     std::shared_ptr<PlotfileDataset> m_dataset;
 };
@@ -437,7 +499,10 @@ NB_MODULE(_amrexplorer, m)
             [](Dataset& self, const PlanItem& item, const CancelToken* cancel) {
                 return self.read(item.item(), cancel);
             },
-            "item"_a, "cancel"_a.none() = nb::none());
+            "item"_a, "cancel"_a.none() = nb::none())
+        .def("blocks", &Dataset::blocks, "level"_a.none())
+        .def("block_statistics", &Dataset::blockStatistics, "fields"_a,
+            "level"_a.none(), "grid"_a.none(), "cancel"_a.none() = nb::none());
 
     nb::class_<LeafChunkPlan>(m, "_LeafChunkPlan")
         .def("__len__",

@@ -3,7 +3,7 @@
 The `amrexplorer` Python package reads AMReX plotfiles through the same
 Qt-free C++ readers the viewer uses, and gives scripts exact, native-unit
 access to them: every leaf cell exactly once, in chunks a script can reduce
-serially or in parallel.
+serially or in parallel, and per-block statistics.
 
 Values are always the plotfile's own numbers. Nothing reads a unit system or
 converts anything: a script that wants solar masses divides by the gram value
@@ -91,9 +91,21 @@ order, so the result is bit-for-bit the serial one. `executor="processes"`
 needs a picklable mapper. For MPI, plan on every rank and pass
 `items=plan.partition(rank, size)`. A `CancelToken` stops reads in progress.
 
+## Grids
+
+`ds.blocks()` lists every grid with its box, bounds and covered fraction;
+`ds.block_statistics(fields)` gives per-grid minima and maxima from the
+decoded data, NaN ignored.
+
 ## Batches
 
 `amrexplorer.sequence.find_plotfiles(directory)` lists a run's plotfiles in
 step order, `open_each(paths)` opens them one at a time, and `output_path` /
 `needs_output` skip outputs already written. Long operations take
 `progress=` callbacks and `cancel=` tokens.
+
+## Examples
+
+`python/examples/plotfile_fab_minmax.py` ports Kangaroo's script of the same
+name, keeping its arguments and output, and says in its docstring what it
+validates.

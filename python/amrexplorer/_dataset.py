@@ -425,6 +425,35 @@ class Dataset:
                 progress(done, len(plan))
             yield chunk
 
+    # Blocks -------------------------------------------------------------------
+    def blocks(self, level: Optional[int] = None) -> list:
+        """The plotfile's grids (FABs), by level and then native FAB index:
+        each with its level, FAB index ("grid"), valid index box, physical
+        bounds, cell count, the cells the next finer level covers
+        ("covered_cells") and "covered_fraction", and its data file and
+        offset."""
+        blocks = [dict(block) for block in self._native.blocks(level)]
+        for block in blocks:
+            block["box"] = tuple(tuple(side) for side in block["box"])
+            block["covered_fraction"] = block["covered_cells"] / block["cells"]
+        return blocks
+
+    def block_statistics(self, fields: Iterable[str], level: Optional[int] = None,
+                         grid: Optional[int] = None, *, cancel=None) -> list:
+        """Per-block minima and maxima of each field, from the decoded data
+        with NaN ignored (a block of all NaN reports NaN). A stored field's
+        extrema cover the whole on-disk FAB, covered cells and stored ghost
+        cells included; a derived field's cover its valid box. Each entry
+        says which box ("box", "includes_ghost_cells", per field)."""
+        if isinstance(fields, str):
+            fields = [fields]
+        entries = [dict(entry) for entry in self._native.block_statistics(
+            list(fields), level, grid, cancel)]
+        for entry in entries:
+            entry["box"] = {name: tuple(tuple(side) for side in box)
+                            for name, box in entry["box"].items()}
+        return entries
+
     def __repr__(self) -> str:
         state = "closed" if self.closed else f"{self.dimension}-D"
         return f"Dataset({self._native.path if not self.closed else ''!r}, {state})"

@@ -134,6 +134,12 @@ int main()
                 == static_cast<double>(singleValues[index]),
             "single-precision FAB value mismatch");
     }
+    const auto singleSpan = firstAccess.handle->values.singleValues();
+    require(singleSpan.size() == singleValues.size()
+            && std::equal(singleSpan.begin(), singleSpan.end(), singleValues.begin()),
+        "single-precision FAB span does not hold the stored floats");
+    require(firstAccess.handle->values.doubleValues().empty(),
+        "single-precision FAB offered a double span");
     const auto expectedPayloadBytes = singleValues.size() * sizeof(float);
     require(firstAccess.io.bytesRead > expectedPayloadBytes,
         "single-precision read omitted its FAB header bytes");
@@ -197,6 +203,12 @@ int main()
         require(doubleAccess.handle->values[index] == doubleValues[index],
             "double-precision FAB value mismatch");
     }
+    const auto doubleSpan = doubleAccess.handle->values.doubleValues();
+    require(doubleSpan.size() == doubleValues.size()
+            && std::equal(doubleSpan.begin(), doubleSpan.end(), doubleValues.begin()),
+        "double-precision FAB span does not hold the stored doubles");
+    require(doubleAccess.handle->values.singleValues().empty(),
+        "double-precision FAB offered a float span");
 
     std::filesystem::remove_all(root);
     return 0;

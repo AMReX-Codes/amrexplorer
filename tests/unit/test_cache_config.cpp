@@ -50,4 +50,17 @@ int main()
     const auto overflow = std::to_string(maximumMegabytes + 1);
     require(initialCacheBudget(overflow.c_str()) == defaultInitialCacheBudget,
         "overflowing cache size did not use the default");
+
+    // The strict parse the analysis binding uses: the same accepted values,
+    // and no default for the rejected ones -- it raises instead.
+    using amrvis::parseCacheSizeMegabytes;
+    require(parseCacheSizeMegabytes("2048") == 2048ULL * 1024ULL * 1024ULL,
+        "strict parse rejected a valid cache size");
+    require(!parseCacheSizeMegabytes("0"), "strict parse accepted zero");
+    require(!parseCacheSizeMegabytes(""), "strict parse accepted empty text");
+    require(!parseCacheSizeMegabytes("12x"),
+        "strict parse accepted trailing text");
+    require(!parseCacheSizeMegabytes(overflow), "strict parse accepted overflow");
+    require(amrvis::cacheSizeEnvironmentValue() == std::string_view("768"),
+        "the environment value was not read");
 }

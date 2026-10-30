@@ -1,0 +1,37 @@
+# The amrexplorer Python analysis package (docs/python-analysis.md).
+# `pip install .` builds the nanobind extension through CMake with the GUI,
+# the remote protocol and the tests switched off; the C++ build is otherwise
+# the one docs/building.md describes.
+[build-system]
+requires = ["scikit-build-core>=0.10", "nanobind>=2.4"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "amrexplorer"
+dynamic = ["version"]
+description = "Exact, native-unit analysis of AMReX plotfiles"
+readme = "docs/python-analysis.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+dependencies = ["numpy>=1.22"]
+
+[project.optional-dependencies]
+examples = ["matplotlib"]
+test = ["pytest", "matplotlib"]
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+build-dir = "build-pip/{wheel_tag}"
+wheel.packages = []
+cmake.build-type = "Release"
+
+[tool.scikit-build.cmake.define]
+AMREXPLORER_ENABLE_QT = "OFF"
+AMREXPLORER_ENABLE_REMOTE = "OFF"
+AMREXPLORER_BUILD_TESTS = "OFF"
+AMREXPLORER_ENABLE_PYTHON = "ON"
+
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.regex"
+input = "include/amrexplorer/core/Version.hpp"
+regex = 'kVersion\s*=\s*"(?P<value>[0-9]+\.[0-9]+\.[0-9]+)'

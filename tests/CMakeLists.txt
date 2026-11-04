@@ -2699,6 +2699,28 @@ target_link_libraries(
     fuzz_expression PRIVATE amrexplorer::expression amrexplorer::warnings)
 amrexplorer_add_fuzz_target(fuzz_expression)
 
+# The Python analysis package (docs/python-analysis.md), tested
+# with pytest against the module this build just made. Skipped, not failed,
+# where the configured interpreter has no pytest.
+if(AMREXPLORER_ENABLE_PYTHON)
+    execute_process(
+        COMMAND "${Python_EXECUTABLE}" -c "import pytest, numpy"
+        RESULT_VARIABLE amrexplorer_pytest_status
+        OUTPUT_QUIET ERROR_QUIET)
+    if(amrexplorer_pytest_status EQUAL 0)
+        add_test(NAME python_analysis
+            COMMAND "${Python_EXECUTABLE}" -m pytest -q
+                "${CMAKE_CURRENT_SOURCE_DIR}/python"
+                -p no:cacheprovider)
+        set_tests_properties(python_analysis PROPERTIES
+            ENVIRONMENT "PYTHONPATH=${PROJECT_BINARY_DIR}/python"
+            TIMEOUT 600)
+    else()
+        message(STATUS "pytest or numpy is missing for ${Python_EXECUTABLE}; "
+            "the python_analysis test is not registered")
+    endif()
+endif()
+
 add_executable(test_leaf_chunks integration/test_leaf_chunks.cpp)
 target_link_libraries(test_leaf_chunks PRIVATE amrexplorer::analysis
     amrexplorer::warnings)

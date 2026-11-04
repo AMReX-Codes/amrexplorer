@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <variant>
 #include <vector>
@@ -33,6 +34,11 @@ public:
     [[nodiscard]] std::size_t elementBytes() const noexcept;
     [[nodiscard]] std::uint64_t residentBytes() const noexcept;
     [[nodiscard]] double operator[](std::size_t index) const noexcept;
+    // The payload in its own precision, for a caller copying many values
+    // that would otherwise dispatch on the precision once per value. Empty
+    // when the payload has the other precision.
+    [[nodiscard]] std::span<const float> singleValues() const noexcept;
+    [[nodiscard]] std::span<const double> doubleValues() const noexcept;
 
 private:
     using Storage = std::variant<std::vector<float>, std::vector<double>>;

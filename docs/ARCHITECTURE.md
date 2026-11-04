@@ -37,6 +37,9 @@ file or wire I/O itself. `SlicePipeline` (and the query/render layers under it)
 turns a `SliceRequest` into a displayable `SliceDisplayResult` — raster image,
 contour polylines, vector glyphs, resolved color range — with no Qt dependency.
 
+Beside the display path, `src/analysis` (on `io` and `core`) serves scripts
+rather than screens: exact leaf-cell traversal, in native values.
+
 ## The GUI layer
 
 `MainWindow` is the one window; it owns the plane views (`PlaneViewState`

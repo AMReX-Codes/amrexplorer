@@ -2,7 +2,8 @@
 
 The `amrexplorer` Python package reads AMReX plotfiles through the same
 Qt-free C++ readers the viewer uses, and gives scripts exact, native-unit
-access to them: every leaf cell exactly once, in chunks.
+access to them: every leaf cell exactly once, in chunks a script can reduce
+serially or in parallel.
 
 Values are always the plotfile's own numbers. Nothing reads a unit system or
 converts anything: a script that wants solar masses divides by the gram value
@@ -73,3 +74,26 @@ ds = amrexplorer.open_plotfile("plt00100", derived=[("vx", "${x-GasMomentum}/gas
 
 `cache_bytes=` sets the block cache, otherwise `AMREXPLORER_CACHE_SIZE_MB` or
 1 GiB. A plan refuses, with the grid named, any item that might not fit.
+
+## Parallel reductions
+
+```python
+from amrexplorer import parallel
+
+total = parallel.map_reduce("plt00100", parallel.LeafCells(["gasDensity"]),
+                            lambda c: float(np.sum(c["gasDensity"] * c.cell_volume)),
+                            lambda a, b: a + b, executor="threads", workers=8)
+```
+
+Each worker opens its own handle and plans the same request; at most
+`max_in_flight` items are in progress at once; partials are combined in plan
+order, so the result is bit-for-bit the serial one. `executor="processes"`
+needs a picklable mapper. For MPI, plan on every rank and pass
+`items=plan.partition(rank, size)`. A `CancelToken` stops reads in progress.
+
+## Batches
+
+`amrexplorer.sequence.find_plotfiles(directory)` lists a run's plotfiles in
+step order, `open_each(paths)` opens them one at a time, and `output_path` /
+`needs_output` skip outputs already written. Long operations take
+`progress=` callbacks and `cancel=` tokens.

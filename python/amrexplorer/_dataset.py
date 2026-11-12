@@ -334,7 +334,7 @@ class Dataset:
 
     @property
     def path(self) -> str:
-        return self._native.path
+        return os.fspath(self._native.path)
 
     @property
     def fields(self) -> list:
@@ -427,7 +427,7 @@ class Dataset:
 
     def __repr__(self) -> str:
         state = "closed" if self.closed else f"{self.dimension}-D"
-        return f"Dataset({self._native.path if not self.closed else ''!r}, {state})"
+        return f"Dataset({self.path if not self.closed else ''!r}, {state})"
 
 
 def open_plotfile(path, derived=(), cache_bytes: Optional[int] = None) -> Dataset:

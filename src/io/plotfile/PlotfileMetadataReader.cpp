@@ -481,7 +481,8 @@ void indexLevelBlocks(const std::filesystem::path& plotfile,
             throw ReadCancelled();
         }
         const auto dataPrefix = plotfile / level.dataPath;
-        const auto indexPath = std::filesystem::path(dataPrefix.string() + "_H");
+        auto indexPath = dataPrefix;
+        indexPath += "_H";
         const auto visMf = detail::readVisMfIndex(indexPath, metadata.dimension, cancellation);
         ++metrics.filesRead;
         metrics.bytesRead += visMf.bytesRead;

@@ -4,6 +4,7 @@ These tests validate raw source values and analysis totals against an
 independent NumPy reconstruction of the fixture plotfiles."""
 
 import gc
+import shutil
 
 import numpy as np
 import pytest
@@ -41,6 +42,23 @@ def test_metadata(refined_3d):
         assert info[1]["cell_size"] == [2.0 / 32] * 3
         assert ds.widest_dtype == np.float64
         assert ds.field_centering("density") == "cell"
+
+
+@pytest.mark.parametrize("as_string", [False, True])
+def test_unicode_path(refined_3d, tmp_path, as_string):
+    source, _ = refined_3d
+    path = tmp_path / "données_測試_🌌" / "plt00100"
+    shutil.copytree(source, path)
+    with ax.open_plotfile(str(path) if as_string else path) as ds:
+        assert isinstance(ds.path, str)
+        assert ds.path == str(path)
+        assert "données_測試_🌌" in repr(ds)
+        chunks = list(ds.leaf_cells(["density"]))
+        assert chunks
+        for chunk in chunks:
+            i, j, k = chunk.indices()
+            np.testing.assert_array_equal(
+                chunk["density"], density(chunk.level, i, j, k))
 
 
 def test_full_domain_partition_is_exact(refined_3d):

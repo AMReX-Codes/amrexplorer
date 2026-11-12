@@ -17,6 +17,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/array.h>
+#include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
@@ -26,6 +27,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -138,7 +140,7 @@ std::uint64_t defaultCacheBudget()
 
 class Dataset {
 public:
-    Dataset(const std::string& path,
+    Dataset(const std::filesystem::path& path,
         const std::vector<std::pair<std::string, std::string>>& derived,
         std::optional<std::uint64_t> cacheBytes)
     {
@@ -401,7 +403,7 @@ NB_MODULE(_amrexplorer, m)
         });
 
     nb::class_<Dataset>(m, "_Dataset")
-        .def(nb::init<const std::string&,
+        .def(nb::init<const std::filesystem::path&,
                  const std::vector<std::pair<std::string, std::string>>&,
                  std::optional<std::uint64_t>>(),
             "path"_a, "derived"_a, "cache_bytes"_a.none())
@@ -420,7 +422,7 @@ NB_MODULE(_amrexplorer, m)
             [](const Dataset& self) { return self.metadata().finestLevel; })
         .def_prop_ro("path",
             [](const Dataset& self) {
-                return self.dataset().dataRoot().string();
+                return self.dataset().dataRoot();
             })
         .def_prop_ro("geometry", &Dataset::geometry)
         .def_prop_ro("levels", &Dataset::levels)

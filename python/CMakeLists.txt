@@ -3,10 +3,6 @@
 # ${PROJECT_BINARY_DIR}/python is an importable tree (PYTHONPATH) without an
 # install step. pip installs through scikit-build-core (pyproject.toml), which
 # sets SKBUILD and takes the install() rules below instead.
-find_package(Python 3.9 REQUIRED
-    COMPONENTS Interpreter Development.Module
-    OPTIONAL_COMPONENTS Development.SABIModule)
-
 if(NOT nanobind_DIR AND NOT nanobind_ROOT)
     execute_process(
         COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir

@@ -330,6 +330,11 @@ if(AMREXPLORER_ENABLE_VTK)
 endif()
 
 if(AMREXPLORER_ENABLE_PYTHON)
+    # Discover Python in the parent scope so the module and sibling tests
+    # directory use the same interpreter, even without -DPython_EXECUTABLE.
+    find_package(Python 3.9 REQUIRED
+        COMPONENTS Interpreter Development.Module
+        OPTIONAL_COMPONENTS Development.SABIModule)
     add_subdirectory(python)
 endif()
 

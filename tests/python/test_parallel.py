@@ -108,3 +108,84 @@ def test_executor_errors_propagate(refined_3d):
     with pytest.raises(ax.AnalysisError):
         parallel.map_reduce(path, parallel.LeafCells(["density"]), broken, add,
                             executor="gpu")
+
+
+def test_clear_unpinned_cache_releases_read_blocks(refined_3d):
+    path, _ = refined_3d
+    with ax.open_plotfile(path) as ds:
+        chunks = list(ds.leaf_cells(["density"]))
+        assert ds.cache_metrics()["resident_bytes"] > 0
+        ds.clear_unpinned_cache()
+        metrics = ds.cache_metrics()
+        assert metrics["resident_bytes"] == 0
+        assert metrics["pinned_bytes"] == 0
+        # Chunks are copies and outlive the cleared blocks.
+        assert all(chunk["density"].size == chunk.size for chunk in chunks)
+
+
+class _RecordingCells(parallel.LeafCells):
+    """Records each handle's resident cache bytes as a read starts."""
+
+    resident = []
+
+    @staticmethod
+    def read(ds, item, cancel=None):
+        _RecordingCells.resident.append(
+            (id(ds), ds.cache_metrics()["resident_bytes"]))
+        return parallel.LeafCells.read(ds, item, cancel)
+
+
+@pytest.mark.parametrize("executor", ["serial", "threads"])
+def test_worker_handles_hold_no_blocks_between_items(refined_3d, executor):
+    # With a path, every handle -- the serial executor's included -- is the
+    # call's own, so each is cleared after every item.
+    path, _ = refined_3d
+    _RecordingCells.resident = []
+    count = parallel.map_reduce(path, _RecordingCells(["density"]),
+                                lambda c: c.size, add, executor=executor,
+                                workers=2)
+    with ax.open_plotfile(path) as ds:
+        plan = ds.plan_leaf_chunks(["density"])
+        assert count == plan.total_cells
+        assert len(_RecordingCells.resident) == len(plan)
+    # Every worker reads several items, and each starts with an empty cache.
+    assert len({handle for handle, _ in _RecordingCells.resident}) <= 2
+    assert all(resident == 0 for _, resident in _RecordingCells.resident)
+
+
+@pytest.mark.parametrize("executor,ownership", [("threads", "shared"),
+                                                ("serial", "worker")])
+def test_callers_handle_keeps_its_cache(refined_3d, executor, ownership):
+    path, _ = refined_3d
+    with ax.open_plotfile(path) as ds:
+        parallel.map_reduce(ds, parallel.LeafCells(["density"]),
+                            lambda c: c.size, add, executor=executor,
+                            workers=2, ownership=ownership)
+        assert ds.cache_metrics()["resident_bytes"] > 0
+
+
+def test_default_workers(monkeypatch):
+    monkeypatch.delenv(parallel.WORKERS_VARIABLE, raising=False)
+    monkeypatch.setattr(parallel, "_available_cpus", lambda: 128)
+    assert parallel.default_workers() == parallel.DEFAULT_MAX_WORKERS == 8
+    monkeypatch.setattr(parallel, "_available_cpus", lambda: 3)
+    assert parallel.default_workers() == 3
+    # The variable is taken as given, above the cap and the CPU count alike.
+    monkeypatch.setenv(parallel.WORKERS_VARIABLE, "32")
+    assert parallel.default_workers() == 32
+    for bad in ("0", "-2", "many"):
+        monkeypatch.setenv(parallel.WORKERS_VARIABLE, bad)
+        with pytest.raises(ax.AnalysisError, match=parallel.WORKERS_VARIABLE):
+            parallel.default_workers()
+
+
+def test_workers_argument_overrides_the_variable(refined_3d, monkeypatch):
+    path, _ = refined_3d
+    monkeypatch.setenv(parallel.WORKERS_VARIABLE, "not a number")
+    count = parallel.map_reduce(path, parallel.LeafCells(["density"]),
+                                lambda c: c.size, add, executor="threads",
+                                workers=2)
+    assert count > 0
+    with pytest.raises(ax.AnalysisError, match="at least 1"):
+        parallel.map_reduce(path, parallel.LeafCells(["density"]),
+                            lambda c: c.size, add, workers=0)

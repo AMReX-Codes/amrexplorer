@@ -7,12 +7,18 @@ result by a worker, and the partials are combined with a reduction. Three things
   plotfile, definitions and cache budget, and plans the same request itself.
   PlotfileDataset serializes block reads per handle, so a shared handle
   serializes every miss; worker-local handles read in parallel
-  (tools/analysis_validation/benchmark_parallel.py measures both).
-  ``ownership="shared"`` keeps one handle for every thread instead, sharing
-  one cache.
-* Scheduling. At most ``max_in_flight`` items are read or mapped at once, so
-  memory is bounded by that many chunks plus the partials waiting to be
-  combined. Items are handed out dynamically, in plan order.
+  (tools/analysis_validation/benchmark_parallel.py measures both). Each item
+  is read once, so a worker's cache would never be hit again: a worker drops
+  its unpinned blocks after every item rather than keep up to ``cache_bytes``
+  resident. ``ownership="shared"`` keeps one handle, and one cache, for every
+  thread instead; that handle may be the caller's, so it is never cleared.
+* Scheduling. At most ``max_in_flight`` items are read or mapped at once.
+  Resident memory is bounded by that many items' blocks and chunks, plus the
+  partials waiting to be combined, plus whatever the caller's own handle
+  already caches when one is passed in. A handle opened for a path is cleared
+  like a worker's. Items are handed out dynamically, in plan order.
+* Workers. The default is ``AMREXPLORER_WORKERS`` if set, otherwise the CPUs
+  this process may run on, at most 8; pass ``workers=`` to override either.
 * Reduction. With ``ordered=True`` (the default) partials are combined in
   item order, ``reduce(reduce(initial, p0), p1), ...``, exactly as a serial
   loop would, so floating-point results are bit-for-bit identical to the
@@ -24,8 +30,11 @@ A plan is deterministic, so a worker that plans the same request on its own
 handle gets the same items with the same indices; the executor checks that
 the item count and cell total agree before using it.
 
-For MPI, plan on every rank and process ``plan.partition(rank, size)`` (or
-pass ``items=`` here); combine rank results with the same ordered rule.
+For MPI, plan on every rank, pass ``items=plan.partition(rank, size)``, gather
+the rank results and fold them in rank order. ``partition`` is round-robin, so
+that fold groups partials differently from a serial loop: the result is the
+same from run to run for a given number of ranks, but floating-point sums may
+differ from the serial result in the last bits.
 """
 
 from __future__ import annotations
@@ -41,6 +50,35 @@ from . import _amrexplorer as _native
 from ._dataset import Dataset, open_plotfile
 
 _NOTHING = object()
+
+#: Largest default worker count; more needs ``workers=`` or the variable.
+DEFAULT_MAX_WORKERS = 8
+WORKERS_VARIABLE = "AMREXPLORER_WORKERS"
+
+
+def _available_cpus() -> int:
+    if hasattr(os, "process_cpu_count"):  # Python 3.13+
+        return os.process_cpu_count() or 1
+    if hasattr(os, "sched_getaffinity"):  # Linux
+        return len(os.sched_getaffinity(0)) or 1
+    return os.cpu_count() or 1
+
+
+def default_workers() -> int:
+    """The worker count map_reduce uses when ``workers`` is not given:
+    ``AMREXPLORER_WORKERS`` if set, otherwise the CPUs this process may run
+    on, at most DEFAULT_MAX_WORKERS."""
+    value = os.environ.get(WORKERS_VARIABLE, "").strip()
+    if value:
+        try:
+            workers = int(value)
+        except ValueError:
+            workers = 0
+        if workers < 1:
+            raise _native.AnalysisError(
+                f"{WORKERS_VARIABLE} must be a positive integer, not {value!r}")
+        return workers
+    return min(DEFAULT_MAX_WORKERS, _available_cpus())
 
 
 @dataclass(frozen=True)
@@ -146,7 +184,11 @@ def _process_init(source, request, expected):
 
 def _process_run(mapper, position):
     state = _process_state
-    chunk = state["request"].read(state["ds"], state["plan"][position])
+    ds = state["ds"]
+    try:
+        chunk = state["request"].read(ds, state["plan"][position])
+    finally:
+        ds.clear_unpinned_cache()
     return position, mapper(chunk)
 
 
@@ -168,10 +210,12 @@ def map_reduce(dataset, request, mapper: Callable, reduce: Callable,
     reduce: (accumulated, partial) -> accumulated.
     initial: the starting value; omitted, the first partial starts.
     executor: "serial", "threads", or "processes".
-    workers: worker count (default: os.cpu_count()).
+    workers: worker count (default: default_workers(), which reads
+        AMREXPLORER_WORKERS or else uses the available CPUs, at most 8).
     max_in_flight: items read or mapped at once (default: 2 * workers).
     ordered: combine in item order, reproducing the serial result exactly.
-    ownership: "worker" (a handle per worker) or "shared" (threads only).
+    ownership: "worker" (a handle per worker, cleared after each item) or
+        "shared" (threads only: one handle and cache; less memory, slower).
     items: plan positions to process (default: all), e.g. a rank's
         plan.partition(rank, size) as [item.index for item in ...].
     progress: called as progress(done, total) after each item completes.
@@ -187,7 +231,11 @@ def map_reduce(dataset, request, mapper: Callable, reduce: Callable,
     if ownership == "shared" and executor == "processes":
         raise _native.AnalysisError(
             "processes cannot share a dataset handle; use ownership='worker'")
-    workers = max(1, int(workers or os.cpu_count() or 1))
+    if workers is None:
+        workers = default_workers()
+    elif int(workers) < 1:
+        raise _native.AnalysisError("workers must be at least 1")
+    workers = int(workers)
     max_in_flight = max(1, int(max_in_flight or 2 * workers))
 
     source = _source_of(dataset, derived, cache_bytes)
@@ -208,7 +256,11 @@ def map_reduce(dataset, request, mapper: Callable, reduce: Callable,
         if executor == "serial":
             for done, position in enumerate(positions, start=1):
                 _check_cancel(cancel)
-                chunk = request.read(coordinator, plan[position], cancel)
+                try:
+                    chunk = request.read(coordinator, plan[position], cancel)
+                finally:
+                    if owned is not None:
+                        owned.clear_unpinned_cache()
                 combiner.add(position, mapper(chunk))
                 if progress:
                     progress(done, total)
@@ -253,7 +305,12 @@ def _run_threads(coordinator, plan, request, source, mapper, combiner,
     def run(position):
         _check_cancel(cancel)
         ds, worker = worker_plan()
-        return position, mapper(request.read(ds, worker[position], cancel))
+        try:
+            chunk = request.read(ds, worker[position], cancel)
+        finally:
+            if ownership == "worker":
+                ds.clear_unpinned_cache()
+        return position, mapper(chunk)
 
     try:
         with futures.ThreadPoolExecutor(max_workers=workers) as pool:
@@ -314,4 +371,5 @@ def _drain(pool, run, combiner, positions, max_in_flight, progress,
         raise
 
 
-__all__ = ["LeafCells", "map_reduce"]
+__all__ = ["DEFAULT_MAX_WORKERS", "LeafCells", "default_workers",
+           "map_reduce"]

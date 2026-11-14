@@ -229,26 +229,150 @@ errors. Accessing an unrequested field in a chunk raises Python's `KeyError`.
 
 ## Parallel reductions
 
+`amrexplorer.parallel.map_reduce` reads each chunk, maps it to a partial
+result with your function, and combines the partials with a second
+function. It reads several chunks at once:
+
 ```python
+import numpy as np
 from amrexplorer import parallel
 
-total = parallel.map_reduce("plt00100", parallel.LeafCells(["gasDensity"]),
-                            lambda c: float(np.sum(c["gasDensity"] * c.cell_volume)),
-                            lambda a, b: a + b, executor="threads", workers=8)
+mass = parallel.map_reduce(
+    "plt00100", parallel.LeafCells(["density"]),
+    lambda chunk: float(np.sum(chunk["density"] * chunk.cell_volume)),
+    lambda total, partial: total + partial, 0.0,
+    executor="threads", workers=8)
+print(mass)
 ```
 
-Each worker opens its own handle and plans the same request; at most
-`max_in_flight` items are in progress at once; partials are combined in plan
-order, so the result is bit-for-bit the serial one. `executor="processes"`
-needs a picklable mapper. For MPI, plan on every rank and pass
-`items=plan.partition(rank, size)`. A `CancelToken` stops reads in progress.
+`LeafCells` takes the same `fields`, `region`, and `dtype` as
+`plan_leaf_chunks`. The first argument is a plotfile path or an open
+dataset. The third positional argument, here `0.0`, is the starting value;
+omit it and the first partial starts the reduction.
+
+| Keyword | Default | Meaning |
+| --- | --- | --- |
+| `executor` | `"threads"` | `"serial"`, `"threads"`, or `"processes"`. |
+| `workers` | `AMREXPLORER_WORKERS`, otherwise the CPUs available to the process, at most 8 | Threads or processes to run. |
+| `max_in_flight` | `2 * workers` | Chunks being read, mapped, or waiting to be combined at once. |
+| `ordered` | `True` | Combine partials in plan order, so the result is bit-for-bit the serial loop's. `False` combines them as they finish, which can change the last bits of floating-point sums from run to run. |
+| `ownership` | `"worker"` | `"worker"` gives each worker its own dataset handle. `"shared"` (threads only) uses one handle for every thread. |
+| `items` | every item | Plan positions or plan items to process; see MPI below. |
+| `cache_bytes`, `derived` | as `open_plotfile` | How each handle opens the plotfile. |
+| `progress`, `cancel` | none | `progress(done, total)` after each item; a `CancelToken` to stop. |
+
+Memory: with `ownership="worker"`, each worker drops its cached blocks after
+every chunk, because no chunk is read twice. Peak memory is about
+`max_in_flight` chunks and their blocks, plus waiting partials, plus
+whatever the dataset you passed in already caches; when you pass a path, the
+handle opened for it is cleared the same way. Raise
+`workers` or `max_in_flight` and memory grows with them. `ownership="shared"`
+keeps one cache of up to `cache_bytes` and never clears it, since the handle
+may be yours. It serializes every block read through that one handle, so it
+is slower, and can be slower than `executor="serial"`.
+
+### Processes
+
+Threads parallelize the reads, but a mapper doing a lot of pure-Python work
+holds the GIL; processes avoid that. Each worker process imports your
+script's module, so the mapper and reducer must be module-level functions,
+not lambdas, and the call must run under `if __name__ == "__main__":`.
+Without the guard, the `spawn` start method (the default on macOS and
+Windows) and `forkserver` (the default on Linux from Python 3.14) fail with
+an error about the bootstrapping phase. A complete script:
+
+```python
+import sys
+
+import numpy as np
+from amrexplorer import parallel
+
+
+def mass(chunk):
+    return float(np.sum(chunk["density"] * chunk.cell_volume))
+
+
+def add(total, partial):
+    return total + partial
+
+
+if __name__ == "__main__":
+    print(parallel.map_reduce(sys.argv[1], parallel.LeafCells(["density"]),
+                              mass, add, 0.0, executor="processes"))
+```
+
+### MPI
+
+The package does not depend on MPI; install `mpi4py` yourself. Every rank
+plans the same request, processes its share of the plan, and rank 0 combines
+the rank results:
+
+```python
+from functools import reduce
+
+import numpy as np
+from mpi4py import MPI
+
+import amrexplorer
+from amrexplorer import parallel
+
+
+def mass(chunk):
+    return float(np.sum(chunk["density"] * chunk.cell_volume))
+
+
+def add(total, partial):
+    return total + partial
+
+
+comm = MPI.COMM_WORLD
+request = parallel.LeafCells(["density"])
+with amrexplorer.open_plotfile("plt00100") as ds:
+    plan = request.plan(ds)
+    mine = parallel.map_reduce(ds, request, mass, add, 0.0, executor="serial",
+                               items=plan.partition(comm.rank, comm.size))
+partials = comm.gather(mine, root=0)
+if comm.rank == 0:
+    print(reduce(add, partials))  # in rank order
+```
+
+Run it with `mpiexec -n 4 python mass.py`. `partition(rank, size)` deals the
+plan's items round-robin, so each rank gets a similar mix of coarse and fine
+grids. Combining the gathered results in rank order makes the answer the same
+from run to run for a given number of ranks. It groups the partials
+differently from a serial loop, though, so floating-point sums can differ
+from the serial result in the last bits. Each rank above reads serially; to
+use threads within a rank too, set `executor="threads"` and choose `workers`
+(or `AMREXPLORER_WORKERS`) so ranks times workers fits the node's cores.
 
 ## Batches
 
-`amrexplorer.sequence.find_plotfiles(directory)` lists a run's plotfiles in
-step order, `open_each(paths)` opens them one at a time, and `output_path` /
-`needs_output` skip outputs already written. Long operations take
-`progress=` callbacks and `cancel=` tokens.
+`amrexplorer.sequence` handles a run's whole series of plotfiles.
+`find_plotfiles(directory)` lists the plotfiles in step order, skipping
+non-plotfile entries such as images written beside them. `open_each(paths)`
+opens them one at a time, closing each before the next, so only one cache is
+alive. `output_path(plotfile, suffix)` names the output for a plotfile, by
+default beside it, and `needs_output(path)` is false when that output already
+exists, so a rerun after a failure or time limit skips finished plotfiles:
+
+```python
+import json
+
+import numpy as np
+from amrexplorer import sequence
+
+for ds in sequence.open_each(sequence.find_plotfiles("outputs/")):
+    out = sequence.output_path(ds.path, "_mass.json")
+    if not sequence.needs_output(out):
+        continue
+    mass = sum(float(np.sum(c["density"] * c.cell_volume))
+               for c in ds.leaf_cells(["density"]))
+    out.write_text(json.dumps({"time": ds.time, "mass": mass}))
+```
+
+Pass `overwrite=True` to `needs_output` to redo everything, or
+`directory=` to `output_path` to write elsewhere. Inside the loop,
+`parallel.map_reduce(ds, ...)` parallelizes each plotfile.
 
 ## Development build
 

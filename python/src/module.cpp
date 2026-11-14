@@ -413,6 +413,13 @@ public:
             + " bytes are pinned; the budget is unchanged");
     }
 
+    void clearUnpinnedCache()
+    {
+        auto& data = dataset();
+        nb::gil_scoped_release release;
+        data.clearUnpinnedCache();
+    }
+
     nb::dict cacheMetrics() const
     {
         const auto metrics = dataset().cacheMetrics();
@@ -624,6 +631,7 @@ NB_MODULE(_amrexplorer, m)
         .def_prop_ro("widest_dtype", &Dataset::widestDtype)
         .def_prop_ro("cache_bytes", &Dataset::cacheBytes)
         .def("set_cache_bytes", &Dataset::setCacheBytes, "bytes"_a)
+        .def("clear_unpinned_cache", &Dataset::clearUnpinnedCache)
         .def("cache_metrics", &Dataset::cacheMetrics)
         .def("plan_leaf_chunks", &Dataset::plan, "fields"_a,
             "region"_a.none(), "dtype"_a.none(),

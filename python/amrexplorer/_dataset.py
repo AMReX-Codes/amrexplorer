@@ -457,6 +457,11 @@ class Dataset:
         the budget unchanged, if pinned blocks exceed the new one."""
         self._native.set_cache_bytes(int(n))
 
+    def clear_unpinned_cache(self) -> None:
+        """Drop every cached block no read is using. Chunks already read are
+        copies and are unaffected."""
+        self._native.clear_unpinned_cache()
+
     def cache_metrics(self) -> dict:
         return dict(self._native.cache_metrics())
 

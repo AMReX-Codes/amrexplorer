@@ -142,8 +142,10 @@ Expressions can use stored fields, earlier derived fields, and coordinates
 `x`, `y`, and `z` where available. A name containing punctuation outside
 letters, digits, `_`, and `.` needs `${...}` quoting: for example,
 `${x-momentum}/density`. See the [expression reference](user-guide.md#derived-fields)
-for syntax. Invalid definitions raise `DerivedFieldError` when the dataset
-opens. Definitions saved in the viewer are not loaded by Python.
+for syntax. `derived=` also accepts a `{name: expression}` dictionary, or a
+list of `amrexplorer.DerivedField(name, expression)` entries; later
+definitions can use earlier ones. Invalid definitions raise
+`DerivedFieldError` when the dataset opens. Definitions saved in the viewer are not loaded by Python.
 
 ## Dataset reference
 
@@ -158,8 +160,8 @@ path-like object and returns a dataset. Use it as a context manager or call
 | `field_centering(name)` | The named field's centering; leaf-cell reads require cell-centered fields. |
 | `time`, `dimension`, `finest_level` | Native simulation time, spatial dimension, and highest level index (levels start at zero). |
 | `geometry` | Dictionary with `dimension`, `coordinate_system`, `coordinate_system_code`, `domain_lower`, `domain_upper`, `mapped_grid`, and `physical_geometry`. |
-| `levels` | Per-level dictionaries with `level`, `step`, `domain`, `cell_size`, `index_origin`, `ghost_cells`, `num_grids`, and `dtype`. |
-| `widest_dtype` | Widest stored field precision across levels, as a NumPy dtype. |
+| `levels` | Per-level dictionaries with `level`, `step`, `domain`, `cell_size`, `index_origin`, `ghost_cells`, `num_grids`, and `dtype` (`None` when it can only be read from a missing or unreadable FAB). |
+| `widest_dtype` | Widest stored field precision across levels, as a NumPy dtype, or `None` if any level's `dtype` is `None`. |
 | `leaf_cells(fields, region=None, dtype=None)` | Iterate over chunks. Also accepts `cancel=token` and `progress=callback`; the callback receives `(items_read, total_items)`. |
 | `plan_leaf_chunks(fields, region=None, dtype=None)` | Create a plan. |
 | `read_leaf_chunk(item, cancel=None)` | Read one item; `cancel` is a keyword argument. |
@@ -204,6 +206,10 @@ Exceptions are exported from `amrexplorer`:
 | `CacheBudgetExceeded` | A read cannot fit its required blocks, or a budget reduction cannot accommodate pinned blocks. | `MemoryError` |
 | `DatasetClosed` | An operation needs a dataset that has been closed. | `RuntimeError` |
 | `ReadCancelled` | A read was cancelled using a `CancelToken`. | `RuntimeError` |
+
+Pressing Ctrl-C during a read raises `KeyboardInterrupt` promptly, and a
+`signal` handler that calls `token.cancel()` stops a read that uses that
+token.
 
 For example, a batch script can report a failed plotfile and continue:
 

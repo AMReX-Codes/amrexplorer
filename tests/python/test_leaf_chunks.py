@@ -3,8 +3,12 @@
 These tests validate raw source values and analysis totals against an
 independent NumPy reconstruction of the fixture plotfiles."""
 
+import _thread
 import gc
 import shutil
+import signal
+import sys
+import threading
 
 import numpy as np
 import pytest
@@ -392,3 +396,108 @@ def test_region_over_a_huge_domain_is_not_empty(tmp_path):
                                                   ds.geometry["domain_upper"]))
         assert len(full) == 1 and full.total_cells == 64
         assert len(ds.plan_leaf_chunks(["u"])) == 1
+
+
+def test_derived_spellings(refined_2d):
+    path, _ = refined_2d
+    with ax.open_plotfile(path, derived={"p": "density*temperature",
+                                         "vx": "p + x"}) as ds:
+        assert ds.derived_fields == ["p", "vx"]
+        for chunk in ds.leaf_cells(["p", "vx"]):
+            np.testing.assert_allclose(chunk["vx"], chunk["p"] + chunk.x,
+                                       rtol=1e-15)
+    # A bare string would otherwise unpack per character ('vx' -> v = x).
+    with pytest.raises(TypeError, match="string"):
+        ax.open_plotfile(path, derived=["vx"])
+    with pytest.raises(TypeError, match="string"):
+        ax.open_plotfile(path, derived="vx")
+    with pytest.raises(TypeError, match="pair"):
+        ax.open_plotfile(path, derived=[("a", "density", "extra")])
+
+
+def test_metadata_survives_a_missing_fab(refined_3d, tmp_path):
+    source, _ = refined_3d
+    path = tmp_path / "partial"
+    shutil.copytree(source, path)
+    # Version-1 headers record no precision; level 0's comes from its first
+    # FAB, which a partial copy lacks.
+    (path / "Level_0" / "Cell_D_00000").unlink()
+    with ax.open_plotfile(path) as ds:
+        assert [l["dtype"] for l in ds.levels] == [None, "float32", "float32"]
+        assert ds.widest_dtype is None
+        with pytest.raises(ax.AnalysisError, match="precision"):
+            ds.plan_leaf_chunks(["density"])
+
+
+def test_read_error_names_a_unicode_path(refined_2d, tmp_path):
+    # Version-2 headers record precision, so planning reads no FAB and the
+    # missing file is first touched by the read.
+    source, _ = refined_2d
+    path = tmp_path / "données_測試_🌌" / "plt00100"
+    shutil.copytree(source, path)
+    (path / "Level_1" / "Cell_D_00000").unlink()
+    with ax.open_plotfile(path) as ds:
+        plan = ds.plan_leaf_chunks(["density"])
+        item = next(item for item in plan if item.level == 1)
+        with pytest.raises(ax.BlockReadError) as error:
+            ds.read_leaf_chunk(item)
+        assert "données_測試_🌌" in str(error.value)
+
+
+@pytest.fixture
+def slow_read(tmp_path):
+    """A dataset and one plan item whose cold read takes most of a second:
+    one 96^3 grid and sixteen derived fields of transcendental functions,
+    evaluated on the first read. Reads check for cancellation between
+    fields."""
+    n = 96
+    levels = [Level([((0, 0, 0), (n - 1,) * 3)], dtype="float64", ghost=0)]
+    path = write_plotfile(tmp_path / "slow", dim=3, domain_cells=(n,) * 3,
+                          fields={"density": density}, levels=levels)
+    derived = [(f"d{i}", " + ".join(
+        f"sqrt(density*density + {i + m}) * exp(-x*x*{m + 1})"
+        f" * log(1 + y*y*{m})" for m in range(6))) for i in range(16)]
+    with ax.open_plotfile(path, derived=derived) as ds:
+        item = ds.plan_leaf_chunks([name for name, _ in derived],
+                                   dtype="float32")[0]
+        yield ds, item
+
+
+def _interrupt_soon():
+    timer = threading.Timer(0.05, _thread.interrupt_main,
+                            args=(signal.SIGINT,))
+    timer.start()
+    return timer
+
+
+@pytest.mark.skipif(sys.version_info < (3, 10),
+                    reason="interrupt_main(signum) needs Python 3.10")
+def test_signal_handler_cancels_a_read_in_progress(slow_read):
+    ds, item = slow_read
+    token = ax.CancelToken()
+    previous = signal.signal(signal.SIGINT, lambda *_: token.cancel())
+    timer = _interrupt_soon()
+    try:
+        # Python runs the handler only between bytecodes; the read must give
+        # it the chance, or the read finishes and returns a chunk.
+        with pytest.raises(ax.ReadCancelled):
+            ds.read_leaf_chunk(item, cancel=token)
+    finally:
+        timer.cancel()
+        signal.signal(signal.SIGINT, previous)
+    assert token.cancelled
+
+
+@pytest.mark.skipif(sys.version_info < (3, 10),
+                    reason="interrupt_main(signum) needs Python 3.10")
+def test_keyboard_interrupt_stops_a_read(slow_read):
+    ds, item = slow_read
+    timer = _interrupt_soon()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            ds.read_leaf_chunk(item)
+    finally:
+        timer.cancel()
+    # The interrupted read let go of its pins; the dataset still reads.
+    assert ds.cache_metrics()["pinned_bytes"] == 0
+    assert ds.read_leaf_chunk(item).size == 96 ** 3

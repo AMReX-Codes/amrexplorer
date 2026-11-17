@@ -28,14 +28,36 @@ class DerivedField:
 
 
 def _definitions(derived) -> list:
+    if derived is None:
+        return []
+    if isinstance(derived, (str, bytes)):
+        raise TypeError(
+            "derived takes a sequence of definitions or a {name: expression} "
+            "mapping, not a string")
+    if isinstance(derived, Mapping):
+        # {name: expression}, in the mapping's order.
+        return [(str(name), str(expression))
+                for name, expression in derived.items()]
     result = []
-    for entry in derived or ():
+    for entry in derived:
         if isinstance(entry, DerivedField):
             result.append((entry.name, entry.expression))
         elif isinstance(entry, Mapping):
             result.append((str(entry["name"]), str(entry["expression"])))
+        elif isinstance(entry, (str, bytes)):
+            # A bare string would otherwise unpack character by character.
+            raise TypeError(
+                f"derived definition {entry!r} is a string; give a "
+                "DerivedField, a (name, expression) pair, or a mapping with "
+                "'name' and 'expression'")
         else:
-            name, expression = entry
+            try:
+                name, expression = entry
+            except (TypeError, ValueError):
+                raise TypeError(
+                    f"derived definition {entry!r} is not a DerivedField, a "
+                    "(name, expression) pair, or a mapping with 'name' and "
+                    "'expression'") from None
             result.append((str(name), str(expression)))
     return result
 
@@ -373,12 +395,16 @@ class Dataset:
     @property
     def levels(self) -> list:
         """Per level: index domain, cell size, index origin, stored ghost
-        cells, grid count, and stored dtype."""
+        cells, grid count, and stored dtype. The dtype is None when it can
+        only be read from a FAB that is missing or unreadable."""
         return [dict(level) for level in self._native.levels]
 
     @property
-    def widest_dtype(self) -> np.dtype:
-        return np.dtype(self._native.widest_dtype)
+    def widest_dtype(self) -> Optional[np.dtype]:
+        """The widest stored dtype across levels, or None when a level's
+        dtype cannot be read (see levels)."""
+        name = self._native.widest_dtype
+        return None if name is None else np.dtype(name)
 
     # Cache -----------------------------------------------------------------
     @property
@@ -408,7 +434,8 @@ class Dataset:
 
     def read_leaf_chunk(self, item: PlanItem, *, cancel=None) -> LeafChunk:
         """Copy one item's selected cells into arrays the chunk owns.
-        `cancel` is an optional CancelToken."""
+        `cancel` is an optional CancelToken. Signal handlers run while the
+        read is in progress, so Ctrl-C raises KeyboardInterrupt promptly."""
         if not isinstance(item, PlanItem):
             raise TypeError("read_leaf_chunk takes a PlanItem")
         return LeafChunk(self._native.read_leaf_chunk(item._native, cancel))
@@ -433,8 +460,9 @@ class Dataset:
 def open_plotfile(path, derived=(), cache_bytes: Optional[int] = None) -> Dataset:
     """Open a plotfile for analysis.
 
-    derived: derived-field definitions, each a DerivedField, a (name,
-        expression) pair, or a mapping with "name" and "expression". A
+    derived: derived-field definitions: a {name: expression} mapping, or a
+        sequence of entries, each a DerivedField, a (name, expression) pair,
+        or a mapping with "name" and "expression". A
         definition that does not resolve raises DerivedFieldError here.
         The viewer's saved definitions are never loaded.
     cache_bytes: the block-cache budget. None uses AMREXPLORER_CACHE_SIZE_MB

@@ -5,6 +5,7 @@
 #include <iostream>
 #include <limits>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -63,4 +64,16 @@ int main()
     require(!parseCacheSizeMegabytes(overflow), "strict parse accepted overflow");
     require(amrvis::cacheSizeEnvironmentValue() == std::string_view("768"),
         "the environment value was not read");
+
+    // Read again on every call, on every platform: a script that changes the
+    // variable between opens gets the new budget.
+#if defined(_WIN32)
+    _putenv_s("AMREXPLORER_CACHE_SIZE_MB", "512");
+#else
+    setenv("AMREXPLORER_CACHE_SIZE_MB", "512", 1);
+#endif
+    require(amrvis::cacheSizeEnvironmentValue() == std::string_view("512"),
+        "a changed environment value was not re-read");
+    require(initialCacheBudget() == 512ULL * 1024ULL * 1024ULL,
+        "the budget did not follow a changed environment value");
 }

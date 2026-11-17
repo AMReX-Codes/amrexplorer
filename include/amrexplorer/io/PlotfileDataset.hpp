@@ -122,6 +122,10 @@ public:
     // mapped grid's; a caller that must not keep a budget it could not honour
     // restores the previous one itself.
     [[nodiscard]] bool setCacheBudget(std::uint64_t bytes);
+    // setCacheBudget, but a no-op returning false when pinned blocks exceed
+    // the new budget: nothing is stored and nothing is evicted, so a refused
+    // change keeps the warm cache and cannot be seen by a concurrent read.
+    [[nodiscard]] bool trySetCacheBudget(std::uint64_t bytes);
     void clearUnpinnedCache();
 
 private:

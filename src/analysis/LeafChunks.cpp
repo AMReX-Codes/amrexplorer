@@ -3,6 +3,7 @@
 #include <amrexplorer/cache/ByteLruCache.hpp>
 #include <amrexplorer/core/CoordinateSystem.hpp>
 #include <amrexplorer/core/DerivedField.hpp>
+#include <amrexplorer/core/PathText.hpp>
 #include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 
@@ -267,7 +268,7 @@ AnalysisValueType storedValueType(const PlotfileDataset& dataset, int levelIndex
         if (!input || !detail::readBoundedLine<AnalysisError>(input, line)
             || !line.starts_with("FAB ")) {
             throw AnalysisError("cannot read the FAB header of level "
-                + std::to_string(levelIndex) + " grid 0 in '" + path.string()
+                + std::to_string(levelIndex) + " grid 0 in '" + pathText(path)
                 + "' to find the level's precision");
         }
         const auto start = line.find('(', 4);

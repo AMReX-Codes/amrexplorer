@@ -34,4 +34,6 @@ AMREXPLORER_ENABLE_PYTHON = "ON"
 [tool.scikit-build.metadata.version]
 provider = "scikit_build_core.metadata.regex"
 input = "include/amrexplorer/core/Version.hpp"
-regex = 'kVersion\s*=\s*"(?P<value>[0-9]+\.[0-9]+\.[0-9]+)'
+# The whole string, suffix included: PEP 440 normalizes "0.7.0-dev" to
+# "0.7.0.dev0", which sorts before the 0.7.0 release.
+regex = 'kVersion\s*=\s*"(?P<value>[^"]+)"'

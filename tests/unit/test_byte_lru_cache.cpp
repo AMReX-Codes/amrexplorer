@@ -72,6 +72,20 @@ int main()
         return std::make_shared<const std::string>(text);
     };
 
+    // --- trySetBudget: a refused change stores and evicts nothing ---------
+    amrvis::ByteLruCache<int, std::string> trial(100);
+    auto trialPin = trial.insertAndPin(1, make("held"), 40);
+    {
+        auto warm = trial.insertAndPin(2, make("warm"), 30);
+    }
+    require(!trial.trySetBudget(30), "trySetBudget accepted a budget below the pins");
+    require(trial.metrics().budgetBytes == 100, "a refused trySetBudget stored its budget");
+    require(trial.metrics().residentBytes == 70, "a refused trySetBudget evicted a block");
+    require(trial.trySetBudget(50), "trySetBudget refused a budget the pins fit");
+    require(trial.metrics().budgetBytes == 50, "an accepted trySetBudget kept the old budget");
+    require(trial.metrics().residentBytes == 40, "an accepted trySetBudget did not evict");
+    trialPin = {};
+
     // --- hit/miss accounting: peekAndPin records neither ------------------
     amrvis::ByteLruCache<int, std::string> metrics(100);
     require(!metrics.peekAndPin(1), "peek on an absent key returned a value");

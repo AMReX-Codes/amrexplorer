@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <limits>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <system_error>
 
@@ -50,33 +51,34 @@ inline std::uint64_t initialCacheBudget(const char* configuredValue) noexcept
         .value_or(defaultInitialCacheBudget);
 }
 
-// The environment variable's value, or nullopt when it is unset.
-[[nodiscard]] inline std::optional<std::string_view>
-cacheSizeEnvironmentValue() noexcept
+// The environment variable's value, or nullopt when it is unset. Read on every
+// call, on every platform, so a change made after the first read (a test, or
+// a script setting os.environ between opens) is seen the same way everywhere.
+[[nodiscard]] inline std::optional<std::string> cacheSizeEnvironmentValue()
 {
 #if defined(_MSC_VER)
-    // _dupenv_s allocates; keep the copy for the process's lifetime so the
-    // view stays valid. Read once: the variable is configuration, not state.
-    static const char* const value = [] {
-        char* configuredValue = nullptr;
-        std::size_t configuredValueSize = 0;
-        if (::_dupenv_s(&configuredValue, &configuredValueSize,
-                cacheSizeEnvironmentVariable.data())
-            != 0) {
-            return static_cast<const char*>(nullptr);
-        }
-        return static_cast<const char*>(configuredValue);
-    }();
+    char* configuredValue = nullptr;
+    std::size_t configuredValueSize = 0;
+    if (::_dupenv_s(&configuredValue, &configuredValueSize,
+            cacheSizeEnvironmentVariable.data())
+            != 0
+        || configuredValue == nullptr) {
+        std::free(configuredValue);
+        return std::nullopt;
+    }
+    std::string value(configuredValue);
+    std::free(configuredValue);
+    return value;
 #else
     const char* const value = std::getenv(cacheSizeEnvironmentVariable.data());
-#endif
     if (value == nullptr) {
         return std::nullopt;
     }
-    return std::string_view(value);
+    return std::string(value);
+#endif
 }
 
-inline std::uint64_t initialCacheBudget() noexcept
+inline std::uint64_t initialCacheBudget()
 {
     const auto configured = cacheSizeEnvironmentValue();
     if (!configured) {

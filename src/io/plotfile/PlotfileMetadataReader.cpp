@@ -1,4 +1,5 @@
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
+#include <amrexplorer/core/PathText.hpp>
 #include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
 #include <amrexplorer/io/detail/VisMfIndex.hpp>
@@ -289,12 +290,12 @@ detail::VisMfIndex detail::readVisMfIndex(
     std::error_code sizeError;
     const auto headerSize = std::filesystem::file_size(headerPath, sizeError);
     if (sizeError) {
-        throw MetadataReadError("cannot stat VisMF Header '" + headerPath.string()
+        throw MetadataReadError("cannot stat VisMF Header '" + pathText(headerPath)
             + "': " + sizeError.message());
     }
     std::ifstream input(headerPath, std::ios::binary);
     if (!input) {
-        throw MetadataReadError("cannot open VisMF Header '" + headerPath.string() + "'");
+        throw MetadataReadError("cannot open VisMF Header '" + pathText(headerPath) + "'");
     }
 
     VisMfIndex index;
@@ -636,13 +637,13 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
     std::error_code sizeError;
     const auto headerSize = std::filesystem::file_size(headerPath, sizeError);
     if (sizeError) {
-        throw MetadataReadError("cannot stat plotfile Header '" + headerPath.string()
+        throw MetadataReadError("cannot stat plotfile Header '" + pathText(headerPath)
             + "': " + sizeError.message());
     }
 
     std::ifstream input(headerPath, std::ios::binary);
     if (!input) {
-        throw MetadataReadError("cannot open plotfile Header '" + headerPath.string() + "'");
+        throw MetadataReadError("cannot open plotfile Header '" + pathText(headerPath) + "'");
     }
     if (cancellation.stop_requested()) {
         throw ReadCancelled();

@@ -26,8 +26,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -45,9 +47,10 @@ namespace {
 // even one opened on the same path with the same definitions.
 std::atomic<std::uint64_t> nextDatasetId{1};
 
-// A cancellation flag a script can raise from another thread (or a signal
-// handler) to stop a read in progress; the operation then raises
-// ReadCancelled. One token may be shared by many operations, and
+// A cancellation flag a script can raise from another thread or a Python
+// signal handler to stop a read in progress; the operation then raises
+// ReadCancelled. Handlers run while a read is in progress because the read
+// polls for signals (Dataset::read). One token may be shared by many operations, and
 // once cancelled it stays cancelled.
 struct CancelToken {
     StopSource source;
@@ -58,6 +61,10 @@ StopToken tokenOf(const CancelToken* cancel)
     return cancel ? cancel->source.get_token() : StopToken{};
 }
 
+
+// How often a read in progress hands control back to Python's signal
+// handlers. A read that finishes sooner returns at once.
+constexpr std::chrono::milliseconds readPollInterval{20};
 
 class DatasetClosed : public std::runtime_error {
 public:
@@ -256,11 +263,33 @@ public:
                 level.ghostWidth.values.begin(),
                 level.ghostWidth.values.begin() + meta.dimension);
             entry["num_grids"] = level.blocks.size();
-            entry["dtype"] = dtypeName(
-                storedValueType(dataset(), static_cast<int>(index)));
+            entry["dtype"] = levelDtype(static_cast<int>(index));
             result.append(entry);
         }
         return result;
+    }
+
+    // A level's stored dtype, or None when it cannot be determined without
+    // a FAB that is missing or unreadable (a version-1 header records no
+    // precision, so the first FAB's header is read). Metadata stays
+    // inspectable on a partially copied plotfile; planning, which needs the
+    // dtype, raises there instead.
+    std::optional<std::string> levelDtype(int level) const
+    {
+        try {
+            return dtypeName(storedValueType(dataset(), level));
+        } catch (const AnalysisError&) {
+            return std::nullopt;
+        }
+    }
+
+    std::optional<std::string> widestDtype() const
+    {
+        try {
+            return dtypeName(widestStoredValueType(dataset()));
+        } catch (const AnalysisError&) {
+            return std::nullopt;
+        }
     }
 
     std::uint64_t cacheBytes() const
@@ -274,14 +303,12 @@ public:
             throw AnalysisError("cache_bytes must be positive");
         }
         auto& data = dataset();
-        const auto previous = data.cacheMetrics().budgetBytes;
-        if (data.setCacheBudget(bytes)) {
+        // trySetCacheBudget refuses without storing or evicting anything, so
+        // a failed call neither drops the warm cache nor exposes the smaller
+        // budget to a read on another thread.
+        if (data.trySetCacheBudget(bytes)) {
             return;
         }
-        // setCacheBudget has already stored the new budget on both pools;
-        // put the old one back before saying so, so a failed call changes
-        // nothing a later read could trip over.
-        static_cast<void>(data.setCacheBudget(previous));
         const auto pinned = data.cacheMetrics().pinnedBytes;
         throw CacheBudgetExceeded("cannot lower the cache budget to "
             + std::to_string(bytes) + " bytes while "
@@ -308,7 +335,12 @@ public:
             region,
         std::optional<std::string> dtype) const
     {
-        const auto& data = dataset();
+        // Held across planning, as in read(), so the GIL can be released.
+        auto keep = m_dataset;
+        if (!keep) {
+            throw DatasetClosed();
+        }
+        const auto& data = *keep;
         LeafChunkRequest request;
         request.fields = fields;
         if (region) {
@@ -330,6 +362,10 @@ public:
         if (dtype) {
             request.dtype = parseDtype(*dtype);
         }
+        // Planning walks every coarse/fine grid pair and may read FAB
+        // headers; other Python threads (parallel workers replanning) run
+        // meanwhile.
+        nb::gil_scoped_release release;
         return std::make_shared<const LeafChunkPlan>(
             planLeafChunks(data, request));
     }
@@ -343,9 +379,46 @@ public:
         if (!keep) {
             throw DatasetClosed();
         }
-        const auto token = tokenOf(cancel);
-        nb::gil_scoped_release release;
-        return readLeafChunk(*keep, item, token);
+        // The read runs on a worker thread while this one waits with the GIL
+        // released, taking it back every poll interval to run Python's
+        // signal handlers. Python runs them only on the main thread, between
+        // bytecodes, so a read that kept this thread in C++ for its whole
+        // length could be stopped neither by Ctrl-C nor by a handler that
+        // calls CancelToken.cancel(). The caller's token is polled too and
+        // forwarded to the read's own.
+        StopSource stop;
+        const auto requested = tokenOf(cancel);
+        if (requested.stop_requested()) {
+            static_cast<void>(stop.request_stop());
+        }
+        auto task = std::async(std::launch::async,
+            [keep, &item, token = stop.get_token()] {
+                return readLeafChunk(*keep, item, token);
+            });
+        for (;;) {
+            {
+                nb::gil_scoped_release release;
+                if (task.wait_for(readPollInterval)
+                    == std::future_status::ready) {
+                    break;
+                }
+            }
+            if (requested.stop_requested()) {
+                static_cast<void>(stop.request_stop());
+            }
+            if (PyErr_CheckSignals() != 0) {
+                // A handler raised (KeyboardInterrupt by default): stop the
+                // read, wait for the worker to let go of the dataset and the
+                // item, and raise what the handler raised.
+                static_cast<void>(stop.request_stop());
+                {
+                    nb::gil_scoped_release release;
+                    task.wait();
+                }
+                throw nb::python_error();
+            }
+        }
+        return task.get();
     }
 
 private:
@@ -426,10 +499,7 @@ NB_MODULE(_amrexplorer, m)
             })
         .def_prop_ro("geometry", &Dataset::geometry)
         .def_prop_ro("levels", &Dataset::levels)
-        .def_prop_ro("widest_dtype",
-            [](const Dataset& self) {
-                return dtypeName(widestStoredValueType(self.dataset()));
-            })
+        .def_prop_ro("widest_dtype", &Dataset::widestDtype)
         .def_prop_ro("cache_bytes", &Dataset::cacheBytes)
         .def("set_cache_bytes", &Dataset::setCacheBytes, "bytes"_a)
         .def("cache_metrics", &Dataset::cacheMetrics)

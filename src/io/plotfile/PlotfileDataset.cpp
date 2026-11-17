@@ -499,6 +499,20 @@ bool PlotfileDataset::setCacheBudget(std::uint64_t bytes)
     return m_cache.setBudget(bytes);
 }
 
+bool PlotfileDataset::trySetCacheBudget(std::uint64_t bytes)
+{
+    if (!m_cache.trySetBudget(bytes)) {
+        return false;
+    }
+    // The mapped grid's pool follows, as in setCacheBudget; its slice is not
+    // what a caller asked for, so its pins do not refuse the change.
+    if (m_mappedGrid) {
+        static_cast<void>(
+            m_mappedGrid->setCacheBudget(mappedGridCacheBudget(bytes)));
+    }
+    return true;
+}
+
 void PlotfileDataset::clearUnpinnedCache()
 {
     if (m_mappedGrid) {

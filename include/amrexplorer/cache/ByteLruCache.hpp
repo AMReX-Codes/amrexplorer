@@ -219,6 +219,20 @@ public:
         return m_state->metrics.residentBytes <= budgetBytes;
     }
 
+    // setBudget, but only when pinned bytes already fit: otherwise false, with
+    // the budget and every resident block left as they were.
+    [[nodiscard]] bool trySetBudget(std::uint64_t budgetBytes)
+    {
+        std::vector<std::shared_ptr<const Value>> doomed;
+        std::scoped_lock lock(m_state->mutex);
+        if (m_state->metrics.pinnedBytes > budgetBytes) {
+            return false;
+        }
+        m_state->metrics.budgetBytes = budgetBytes;
+        evictFor(*m_state, 0, doomed);
+        return true;
+    }
+
     void clearUnpinned()
     {
         // A full clear frees every unpinned payload; without this they would

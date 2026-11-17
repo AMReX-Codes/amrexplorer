@@ -12,6 +12,9 @@ import shutil
 import signal
 import sys
 import threading
+import time
+import traceback
+import warnings
 
 import numpy as np
 import pytest
@@ -622,3 +625,89 @@ def test_keyboard_interrupt_stops_a_read(slow_read):
     # The interrupted read let go of its pins; the dataset still reads.
     assert ds.cache_metrics()["pinned_bytes"] == 0
     assert ds.read_leaf_chunk(item).size == 96 ** 3
+
+
+def _in_forked_child(body, from_thread=False, timeout=60):
+    """Runs body() in a forked child, from the main thread or from another
+    one, and returns the child's exit code: 0 when body() returned true. A
+    child that hangs is killed and fails the test."""
+    def fork():
+        with warnings.catch_warnings():
+            # Python 3.12 warns about forking a process with threads.
+            warnings.simplefilter("ignore", DeprecationWarning)
+            pid = os.fork()
+        if pid == 0:
+            code = 1
+            try:
+                code = 0 if body() else 2
+            except BaseException:
+                traceback.print_exc()
+            finally:
+                os._exit(code)
+        return pid
+
+    if from_thread:
+        pids = []
+        thread = threading.Thread(target=lambda: pids.append(fork()))
+        thread.start()
+        thread.join()
+        pid = pids[0]
+    else:
+        pid = fork()
+    deadline = time.monotonic() + timeout
+    while True:
+        done, status = os.waitpid(pid, os.WNOHANG)
+        if done:
+            return os.waitstatus_to_exitcode(status)
+        if time.monotonic() > deadline:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            pytest.fail("the forked child hung")
+        time.sleep(0.01)
+
+
+needs_fork = pytest.mark.skipif(not hasattr(os, "fork"),
+                                reason="needs os.fork")
+
+
+@needs_fork
+def test_a_forked_child_opens_plans_and_reads(refined_2d):
+    # multiprocessing forks by default on Linux before Python 3.14: a child
+    # has none of its parent's threads, so nothing may wait on one.
+    path, _ = refined_2d
+    with ax.open_plotfile(path) as ds:
+        plan = ds.plan_leaf_chunks(["density"])
+        expected = ds.read_leaf_chunk(plan[0]).size
+
+        def child():
+            if ds.read_leaf_chunk(plan[0]).size != expected:
+                return False
+            with ax.open_plotfile(path) as fresh:
+                return sum(c.size for c in fresh.leaf_cells(["density"])) \
+                    == plan.total_cells
+
+        assert _in_forked_child(child) == 0
+
+
+@needs_fork
+@pytest.mark.skipif(sys.version_info < (3, 10),
+                    reason="interrupt_main(signum) needs Python 3.10")
+def test_signals_reach_a_read_in_a_child_forked_from_a_thread(slow_read):
+    # The forking thread is the child's main thread, so signal handlers run
+    # there, and a read on it must poll for them.
+    ds, item = slow_read
+
+    def child():
+        # A handler that cancels, not one that raises: KeyboardInterrupt
+        # would also surface after a read that ran to the end, whereas only
+        # a read that polled is stopped by the token.
+        token = ax.CancelToken()
+        signal.signal(signal.SIGINT, lambda *_: token.cancel())
+        with _Interrupter(ds):
+            try:
+                ds.read_leaf_chunk(item, cancel=token)
+            except ax.ReadCancelled:
+                return True
+        return False
+
+    assert _in_forked_child(child, from_thread=True) == 0

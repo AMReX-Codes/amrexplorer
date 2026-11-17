@@ -27,17 +27,12 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <filesystem>
-#include <functional>
 #include <future>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -71,80 +66,35 @@ StopToken tokenOf(const CancelToken* cancel)
 // Python's signal handlers. A call that finishes sooner returns at once.
 constexpr std::chrono::milliseconds signalPollInterval{20};
 
-// The interpreter's main thread, the only one Python runs signal handlers
-// on. Set when the module is imported.
-unsigned long mainThreadIdent = 0;
-
+// Whether this is the interpreter's main thread, the only one Python runs
+// signal handlers on. Asked each time, not remembered from import: a child
+// forked from another thread has that thread as its main thread.
 bool onMainThread()
 {
-    return PyThread_get_thread_ident() == mainThreadIdent;
+    const auto ident = nb::module_::import_("threading")
+                           .attr("main_thread")()
+                           .attr("ident");
+    return nb::cast<unsigned long>(ident) == PyThread_get_thread_ident();
 }
-
-// One thread that runs the main thread's blocking calls while the main
-// thread polls for signals, so a script reading thousands of chunks does not
-// create and join a thread for each. Only the main thread submits, and it
-// waits for each job (a signal handler that itself reads queues behind the
-// job it interrupted). Never destroyed: the thread is detached, and joining
-// it during static destruction or DLL unload could deadlock.
-class SignalWorker {
-public:
-    static SignalWorker& instance()
-    {
-        static auto* worker = new SignalWorker;
-        return *worker;
-    }
-
-    void post(std::function<void()> job)
-    {
-        {
-            std::scoped_lock lock(m_mutex);
-            m_jobs.push_back(std::move(job));
-        }
-        m_ready.notify_one();
-    }
-
-private:
-    SignalWorker()
-    {
-        std::thread([this] { run(); }).detach();
-    }
-
-    [[noreturn]] void run()
-    {
-        for (;;) {
-            std::function<void()> job;
-            {
-                std::unique_lock lock(m_mutex);
-                m_ready.wait(lock, [this] { return !m_jobs.empty(); });
-                job = std::move(m_jobs.front());
-                m_jobs.pop_front();
-            }
-            job();
-        }
-    }
-
-    std::mutex m_mutex;
-    std::condition_variable m_ready;
-    std::deque<std::function<void()>> m_jobs;
-};
 
 // Runs work(token) with the GIL released, so other Python threads run
 // meanwhile, and returns its result. Called with the GIL held.
 //
-// On the main thread the work runs on SignalWorker while this thread takes
-// the GIL back every poll interval to run Python's signal handlers: Python
-// runs them only there, between bytecodes, so work that kept the main thread
-// in C++ for its whole length could be stopped neither by Ctrl-C nor by a
-// handler that calls CancelToken.cancel(). The caller's token is polled too
-// and forwarded to the work's own.
+// On the main thread the work runs on a thread of its own while this one
+// takes the GIL back every poll interval to run Python's signal handlers:
+// Python runs them only there, between bytecodes, so work that kept the main
+// thread in C++ for its whole length could be stopped neither by Ctrl-C nor
+// by a handler that calls CancelToken.cancel(). The caller's token is polled
+// too and forwarded to the work's own. A thread per call, not a long-lived
+// one: a forked child has none of its parent's threads, and a handler that
+// itself reads must not queue behind the call it interrupted.
 //
 // Elsewhere no handler can run, so the work runs inline on the caller's
-// token: no thread hop, and no waking for the GIL.
+// token: no thread, and no waking for the GIL.
 template <typename Work>
 std::invoke_result_t<Work&, StopToken> runInterruptibly(
     Work&& work, const CancelToken* cancel)
 {
-    using Result = std::invoke_result_t<Work&, StopToken>;
     const auto requested = tokenOf(cancel);
     if (!onMainThread()) {
         nb::gil_scoped_release release;
@@ -154,11 +104,9 @@ std::invoke_result_t<Work&, StopToken> runInterruptibly(
     if (requested.stop_requested()) {
         static_cast<void>(stop.request_stop());
     }
-    // By reference: this function returns only after the task has run.
-    std::packaged_task<Result()> task(
+    // By reference: this function returns only after the work has.
+    auto future = std::async(std::launch::async,
         [&work, token = stop.get_token()] { return work(token); });
-    auto future = task.get_future();
-    SignalWorker::instance().post([&task] { task(); });
     for (;;) {
         {
             nb::gil_scoped_release release;
@@ -289,16 +237,10 @@ public:
                     DerivedFieldPolicy::Strict);
             },
             cancel);
-        m_levelTypes.resize(m_dataset->metadata().levels.size());
     }
 
-    PlotfileDataset& dataset() const
-    {
-        if (!m_dataset) {
-            throw DatasetClosed();
-        }
-        return *m_dataset;
-    }
+    // The dataset, for a caller that holds the GIL throughout.
+    PlotfileDataset& dataset() const { return *held(); }
 
     // The dataset, kept alive by the caller across a call that releases the
     // GIL, so close() from another thread cannot free it underneath.
@@ -415,17 +357,17 @@ public:
 
     // Each level's stored dtype, or nullopt when it cannot be determined
     // without a FAB that is missing or unreadable (a version-1 header records
-    // no precision, so the first FAB's header is read). Metadata stays
-    // inspectable on a partially copied plotfile; planning, which needs the
-    // dtype, raises there instead.
-    std::vector<std::optional<AnalysisValueType>> levelTypes(
-        const PlotfileDataset& data) const
+    // no precision, so the first FAB's header is read, once per dataset).
+    // Metadata stays inspectable on a partially copied plotfile; planning,
+    // which needs the dtype, raises there instead.
+    static std::vector<std::optional<AnalysisValueType>> levelTypes(
+        const PlotfileDataset& data)
     {
         std::vector<std::optional<AnalysisValueType>> types(
-            m_levelTypes.size());
+            data.metadata().levels.size());
         for (std::size_t level = 0; level < types.size(); ++level) {
             try {
-                types[level] = storedType(data, static_cast<int>(level));
+                types[level] = storedValueType(data, static_cast<int>(level));
             } catch (const AnalysisError&) {
             }
         }
@@ -437,42 +379,10 @@ public:
         auto keep = held();
         nb::gil_scoped_release release;
         try {
-            return dtypeName(widestType(*keep));
+            return dtypeName(widestStoredValueType(*keep));
         } catch (const AnalysisError&) {
             return std::nullopt;
         }
-    }
-
-    // storedValueType, read once per level: for a version-1 header it opens
-    // a FAB, which on a network filesystem is not cheap to repeat on every
-    // `levels` access. Only answers are kept, so a FAB copied in after a
-    // failure is still found.
-    AnalysisValueType storedType(const PlotfileDataset& data, int level) const
-    {
-        const auto index = static_cast<std::size_t>(level);
-        {
-            std::scoped_lock lock(m_levelTypesMutex);
-            if (m_levelTypes.at(index)) {
-                return *m_levelTypes[index];
-            }
-        }
-        const auto type = storedValueType(data, level);
-        std::scoped_lock lock(m_levelTypesMutex);
-        m_levelTypes[index] = type;
-        return type;
-    }
-
-    // widestStoredValueType through the per-level cache.
-    AnalysisValueType widestType(const PlotfileDataset& data) const
-    {
-        auto widest = AnalysisValueType::Float32;
-        for (std::size_t level = 0; level < m_levelTypes.size(); ++level) {
-            if (storedType(data, static_cast<int>(level))
-                == AnalysisValueType::Float64) {
-                widest = AnalysisValueType::Float64;
-            }
-        }
-        return widest;
     }
 
     std::uint64_t cacheBytes() const
@@ -545,12 +455,9 @@ public:
         }
         // Planning walks every coarse/fine grid pair and may read FAB
         // headers; other Python threads (parallel workers replanning) run
-        // meanwhile. The default dtype comes through the per-level cache.
+        // meanwhile.
         return runInterruptibly(
             [&](StopToken token) {
-                if (!request.dtype) {
-                    request.dtype = widestType(data);
-                }
                 return std::make_shared<const LeafChunkPlan>(
                     planLeafChunks(data, request, token));
             },
@@ -568,9 +475,6 @@ public:
 
 private:
     std::shared_ptr<PlotfileDataset> m_dataset;
-    // Per level, the stored dtype once read (storedType).
-    mutable std::mutex m_levelTypesMutex;
-    mutable std::vector<std::optional<AnalysisValueType>> m_levelTypes;
 };
 
 // A plan item, kept with the plan it came from so its selection outlives the
@@ -591,9 +495,6 @@ NB_MODULE(_amrexplorer, m)
     using namespace amrvis::python;
 
     m.doc() = "Native core of the amrexplorer analysis package.";
-
-    mainThreadIdent = nb::cast<unsigned long>(
-        nb::module_::import_("threading").attr("main_thread")().attr("ident"));
 
     auto analysisError = nb::exception<AnalysisError>(
         m, "AnalysisError", PyExc_ValueError);

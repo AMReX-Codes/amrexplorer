@@ -201,7 +201,10 @@ using detail::parseIntegers;
 // or crafted.
 void requireContainedPath(const std::string& value, std::string_view what)
 {
-    const std::filesystem::path path(value);
+    // Parsed as the reads will parse it (pathFromText): std::filesystem::path
+    // reads a std::string in the ANSI code page on Windows, which can split
+    // it into other components than the reads see, or throw.
+    const auto path = pathFromText(value);
     // Reject anything with a root: a root-name (drive/UNC) or a root-directory
     // (leading separator). is_absolute() is not enough — it is platform
     // specific, so a POSIX-style "/etc/..." reads as relative on Windows yet

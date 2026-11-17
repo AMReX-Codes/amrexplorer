@@ -1,11 +1,14 @@
 #include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/core/PathText.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
+#include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -160,6 +163,54 @@ std::shared_ptr<PlotfileDataset> PlotfileDataset::makeMappedGrid(
 std::shared_ptr<PlotfileDataset> PlotfileDataset::mappedGrid() const noexcept
 {
     return m_mappedGrid;
+}
+
+std::optional<std::string> PlotfileDataset::levelRealDescriptor(
+    int levelIndex, StopToken cancellation) const
+{
+    const auto& level
+        = metadata().levels.at(static_cast<std::size_t>(levelIndex));
+    if (!level.realDescriptor.empty()) {
+        return level.realDescriptor;
+    }
+    if (level.blocks.empty()) {
+        return std::nullopt;
+    }
+    const auto index = static_cast<std::size_t>(levelIndex);
+    {
+        std::scoped_lock lock(m_descriptorMutex);
+        m_levelDescriptors.resize(metadata().levels.size());
+        if (m_levelDescriptors[index]) {
+            return m_levelDescriptors[index];
+        }
+    }
+    if (cancellation.stop_requested()) {
+        throw ReadCancelled();
+    }
+    // Each FAB carries its RealDescriptor in the one-line header before its
+    // payload, and AMReX writes one precision per MultiFab, so the first
+    // grid's header speaks for the level.
+    const auto& block = level.blocks.front();
+    std::ifstream input(
+        m_plotfile / pathFromText(block.filePath), std::ios::binary);
+    input.seekg(static_cast<std::streamoff>(block.fileOffset), std::ios::beg);
+    std::string descriptor;
+    try {
+        std::string line;
+        if (!input || !detail::readBoundedLine<MetadataReadError>(input, line)
+            || !line.starts_with("FAB ")) {
+            return std::nullopt;
+        }
+        const auto start = line.find('(', 4);
+        const auto end
+            = detail::balancedExpressionEnd<MetadataReadError>(line, start);
+        descriptor = line.substr(start, end - start);
+    } catch (const MetadataReadError&) {
+        return std::nullopt;
+    }
+    std::scoped_lock lock(m_descriptorMutex);
+    m_levelDescriptors[index] = descriptor;
+    return descriptor;
 }
 
 const DatasetMetadata& PlotfileDataset::metadata() const noexcept

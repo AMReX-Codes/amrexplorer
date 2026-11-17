@@ -26,8 +26,11 @@ set(AMREXPLORER_PYTHON_PACKAGE_DIR "${PROJECT_BINARY_DIR}/python/amrexplorer")
 nanobind_add_module(_amrexplorer NB_STATIC src/module.cpp)
 target_link_libraries(_amrexplorer PRIVATE
     amrexplorer::analysis amrexplorer::io amrexplorer::core)
+# The generator expression stops multi-config generators (Visual Studio,
+# Xcode, Ninja Multi-Config) appending a per-configuration subdirectory: the
+# extension must sit beside the package's .py files to be importable.
 set_target_properties(_amrexplorer PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY "${AMREXPLORER_PYTHON_PACKAGE_DIR}")
+    LIBRARY_OUTPUT_DIRECTORY "$<1:${AMREXPLORER_PYTHON_PACKAGE_DIR}>")
 
 file(GLOB amrexplorer_python_sources CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/amrexplorer/*.py")

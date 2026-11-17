@@ -63,7 +63,9 @@ int main()
     // UTF-16 as Windows names are: a pair is one code point, and a lone
     // surrogate is escaped rather than thrown on.
     using amrvis::detail::utf16Text;
-    require(utf16Text(std::u16string_view(u"aé\U0001F30C"))
+    // Escaped, not a literal e-acute: MSVC reads this file in the system code
+    // page, since /utf-8 is private to the core target.
+    require(utf16Text(std::u16string_view(u"a\u00e9\U0001F30C"))
             == "a\xc3\xa9\xf0\x9f\x8c\x8c",
         "utf16Text mis-encoded a well-formed name");
     const char16_t lone[] = {u'a', 0xD83C, u'b', 0xDF0C, 0};

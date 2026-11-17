@@ -2722,8 +2722,11 @@ if(AMREXPLORER_ENABLE_PYTHON)
             COMMAND "${Python_EXECUTABLE}" -m pytest -q
                 "${CMAKE_CURRENT_SOURCE_DIR}/python"
                 -p no:cacheprovider)
+        # Prepended, not set: pytest and numpy may themselves be found
+        # through PYTHONPATH (modules, Spack), as the check above found them.
         set_tests_properties(python_analysis PROPERTIES
-            ENVIRONMENT "PYTHONPATH=${PROJECT_BINARY_DIR}/python"
+            ENVIRONMENT_MODIFICATION
+                "PYTHONPATH=path_list_prepend:${PROJECT_BINARY_DIR}/python"
             TIMEOUT 600)
     else()
         message(STATUS "pytest or numpy is missing for ${Python_EXECUTABLE}; "

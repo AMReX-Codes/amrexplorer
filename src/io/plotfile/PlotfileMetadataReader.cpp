@@ -201,6 +201,15 @@ using detail::parseIntegers;
 // or crafted.
 void requireContainedPath(const std::string& value, std::string_view what)
 {
+#ifdef _WIN32
+    // Windows names are UTF-16, so text that is not UTF-8 names no file,
+    // and converting it would throw std::system_error rather than this
+    // reader's MetadataReadError.
+    if (!isUtf8(value)) {
+        throw MetadataReadError(std::string(what) + " is not UTF-8: '"
+            + utf8Text(value) + "'");
+    }
+#endif
     // Parsed as the reads will parse it (pathFromText): std::filesystem::path
     // reads a std::string in the ANSI code page on Windows, which can split
     // it into other components than the reads see, or throw.
@@ -211,13 +220,14 @@ void requireContainedPath(const std::string& value, std::string_view what)
     // still escapes to the drive root when joined to the plotfile path.
     if (value.empty() || path.has_root_name() || path.has_root_directory()) {
         throw MetadataReadError(std::string(what)
-            + " must be a relative path inside the plotfile: '" + value + "'");
+            + " must be a relative path inside the plotfile: '"
+            + utf8Text(value) + "'");
     }
     for (const auto& component : path) {
         if (component == "..") {
             throw MetadataReadError(std::string(what)
                 + " must not contain a parent-directory component: '"
-                + value + "'");
+                + utf8Text(value) + "'");
         }
     }
 }

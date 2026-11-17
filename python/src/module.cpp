@@ -28,11 +28,13 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <future>
 #include <memory>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -486,6 +488,63 @@ struct PlanItem {
     const LeafChunkItem& item() const { return plan->items[index]; }
 };
 
+// The module's exception types, for the translator below.
+struct ErrorTypes {
+    PyObject* analysis = nullptr;
+    PyObject* derivedField = nullptr;
+    PyObject* cacheBudget = nullptr;
+    PyObject* plotfileRead = nullptr;
+    PyObject* blockRead = nullptr;
+    PyObject* closed = nullptr;
+    PyObject* cancelled = nullptr;
+};
+
+// Raises `type` with the error's message. Decoded with backslashreplace, not
+// strictly as nanobind's own translators do: a message can quote text from
+// a file -- a header's path, a name that is not UTF-8 -- and one that failed
+// to decode would raise UnicodeDecodeError in place of the error it
+// describes.
+void raise(PyObject* type, const std::exception& error)
+{
+    const char* what = error.what();
+    PyObject* message = PyUnicode_DecodeUTF8(
+        what, static_cast<Py_ssize_t>(std::strlen(what)), "backslashreplace");
+    if (message == nullptr) {
+        PyErr_Clear();
+        PyErr_SetString(type, "(the error message could not be decoded)");
+        return;
+    }
+    PyErr_SetObject(type, message);
+    Py_DECREF(message);
+}
+
+void translateError(const std::exception_ptr& error, void* payload)
+{
+    const auto& types = *static_cast<const ErrorTypes*>(payload);
+    // Most derived first. Anything else goes on to nanobind's translators.
+    try {
+        std::rethrow_exception(error);
+    } catch (const DerivedFieldError& e) {
+        raise(types.derivedField, e);
+    } catch (const AnalysisError& e) {
+        raise(types.analysis, e);
+    } catch (const CacheBudgetExceeded& e) {
+        raise(types.cacheBudget, e);
+    } catch (const BlockReadError& e) {
+        raise(types.blockRead, e);
+    } catch (const MetadataReadError& e) {
+        raise(types.plotfileRead, e);
+    } catch (const DatasetClosed& e) {
+        raise(types.closed, e);
+    } catch (const ReadCancelled& e) {
+        raise(types.cancelled, e);
+    } catch (const std::system_error& e) {
+        // A filesystem call that failed on a path (its message names the
+        // path, in whatever encoding the platform gave it).
+        raise(PyExc_OSError, e);
+    }
+}
+
 } // namespace
 } // namespace amrvis::python
 
@@ -498,14 +557,28 @@ NB_MODULE(_amrexplorer, m)
 
     auto analysisError = nb::exception<AnalysisError>(
         m, "AnalysisError", PyExc_ValueError);
-    nb::exception<DerivedFieldError>(m, "DerivedFieldError", analysisError);
-    nb::exception<CacheBudgetExceeded>(
+    auto derivedFieldError = nb::exception<DerivedFieldError>(
+        m, "DerivedFieldError", analysisError);
+    auto cacheBudgetExceeded = nb::exception<CacheBudgetExceeded>(
         m, "CacheBudgetExceeded", PyExc_MemoryError);
     auto readError = nb::exception<MetadataReadError>(
         m, "PlotfileReadError", PyExc_OSError);
-    nb::exception<BlockReadError>(m, "BlockReadError", readError);
-    nb::exception<DatasetClosed>(m, "DatasetClosed", PyExc_RuntimeError);
-    nb::exception<ReadCancelled>(m, "ReadCancelled", PyExc_RuntimeError);
+    auto blockReadError
+        = nb::exception<BlockReadError>(m, "BlockReadError", readError);
+    auto datasetClosed
+        = nb::exception<DatasetClosed>(m, "DatasetClosed", PyExc_RuntimeError);
+    auto readCancelled
+        = nb::exception<ReadCancelled>(m, "ReadCancelled", PyExc_RuntimeError);
+    // Registered after these, so it runs before their strict translators.
+    static ErrorTypes errorTypes;
+    errorTypes.analysis = analysisError.ptr();
+    errorTypes.derivedField = derivedFieldError.ptr();
+    errorTypes.cacheBudget = cacheBudgetExceeded.ptr();
+    errorTypes.plotfileRead = readError.ptr();
+    errorTypes.blockRead = blockReadError.ptr();
+    errorTypes.closed = datasetClosed.ptr();
+    errorTypes.cancelled = readCancelled.ptr();
+    nb::register_exception_translator(translateError, &errorTypes);
 
     m.attr("DEFAULT_CACHE_BYTES") = defaultInitialCacheBudget;
     m.attr("CACHE_SIZE_ENVIRONMENT_VARIABLE")
@@ -546,10 +619,6 @@ NB_MODULE(_amrexplorer, m)
             [](const Dataset& self) { return self.metadata().dimension; })
         .def_prop_ro("finest_level",
             [](const Dataset& self) { return self.metadata().finestLevel; })
-        .def_prop_ro("path",
-            [](const Dataset& self) {
-                return self.dataset().dataRoot();
-            })
         .def_prop_ro("geometry", &Dataset::geometry)
         .def_prop_ro("levels", &Dataset::levels)
         .def_prop_ro("widest_dtype", &Dataset::widestDtype)

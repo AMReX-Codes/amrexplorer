@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -50,5 +51,26 @@ int main()
             == "\\xf4\\x90\\x80\\x80",
         "pathText kept a code point past U+10FFFF");
 #endif
+
+    // utf8Text and isUtf8 on bytes, as header text arrives.
+    require(amrvis::utf8Text("plain/\xc3\xa9") == "plain/\xc3\xa9",
+        "utf8Text changed valid UTF-8");
+    require(amrvis::utf8Text("/\xe9tc") == "/\\xe9tc",
+        "utf8Text did not escape a stray byte");
+    require(amrvis::isUtf8("Level_0/Cell\xc3\xa9"), "isUtf8 refused UTF-8");
+    require(!amrvis::isUtf8("/\xe9tc"), "isUtf8 accepted a stray byte");
+
+    // UTF-16 as Windows names are: a pair is one code point, and a lone
+    // surrogate is escaped rather than thrown on.
+    using amrvis::detail::utf16Text;
+    require(utf16Text(std::u16string_view(u"aé\U0001F30C"))
+            == "a\xc3\xa9\xf0\x9f\x8c\x8c",
+        "utf16Text mis-encoded a well-formed name");
+    const char16_t lone[] = {u'a', 0xD83C, u'b', 0xDF0C, 0};
+    require(utf16Text(std::u16string_view(lone)) == "a\\ud83cb\\udf0c",
+        "utf16Text did not escape lone surrogates");
+    const char16_t trailing[] = {u'x', 0xD800, 0};
+    require(utf16Text(std::u16string_view(trailing)) == "x\\ud800",
+        "utf16Text did not escape a surrogate at the end");
     return 0;
 }

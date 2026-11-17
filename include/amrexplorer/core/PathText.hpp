@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -67,33 +69,120 @@ inline std::size_t utf8SequenceLength(std::string_view text, std::size_t at)
     return length;
 }
 
+// Appends code point `value` to `text` as UTF-8.
+inline void appendUtf8(std::string& text, char32_t value)
+{
+    if (value < 0x80) {
+        text += static_cast<char>(value);
+    } else if (value < 0x800) {
+        text += static_cast<char>(0xC0 | (value >> 6));
+        text += static_cast<char>(0x80 | (value & 0x3F));
+    } else if (value < 0x10000) {
+        text += static_cast<char>(0xE0 | (value >> 12));
+        text += static_cast<char>(0x80 | ((value >> 6) & 0x3F));
+        text += static_cast<char>(0x80 | (value & 0x3F));
+    } else {
+        text += static_cast<char>(0xF0 | (value >> 18));
+        text += static_cast<char>(0x80 | ((value >> 12) & 0x3F));
+        text += static_cast<char>(0x80 | ((value >> 6) & 0x3F));
+        text += static_cast<char>(0x80 | (value & 0x3F));
+    }
+}
+
+// Appends `digits` lowercase hex digits of `value` after `prefix`.
+inline void appendEscape(
+    std::string& text, const char* prefix, unsigned value, int digits)
+{
+    constexpr char hex[] = "0123456789abcdef";
+    text += prefix;
+    for (int shift = 4 * (digits - 1); shift >= 0; shift -= 4) {
+        text += hex[(value >> shift) & 0xF];
+    }
+}
+
+// UTF-16 code units as UTF-8, a lone surrogate written as a \udXXX escape
+// (Python's backslashreplace) rather than failing, as the standard
+// conversion does. Windows names are UTF-16 that NTFS does not require to be
+// well formed.
+template <typename Unit>
+std::string utf16Text(std::basic_string_view<Unit> units)
+{
+    static_assert(sizeof(Unit) == 2);
+    std::string text;
+    text.reserve(units.size());
+    for (std::size_t at = 0; at < units.size(); ++at) {
+        const auto unit = static_cast<char32_t>(
+            static_cast<std::uint16_t>(units[at]));
+        const bool high = unit >= 0xD800 && unit <= 0xDBFF;
+        const bool low = unit >= 0xDC00 && unit <= 0xDFFF;
+        if (high && at + 1 < units.size()) {
+            const auto next = static_cast<char32_t>(
+                static_cast<std::uint16_t>(units[at + 1]));
+            if (next >= 0xDC00 && next <= 0xDFFF) {
+                appendUtf8(text,
+                    0x10000 + ((unit - 0xD800) << 10) + (next - 0xDC00));
+                ++at;
+                continue;
+            }
+        }
+        if (high || low) {
+            appendEscape(text, "\\u", static_cast<unsigned>(unit), 4);
+            continue;
+        }
+        appendUtf8(text, unit);
+    }
+    return text;
+}
+
 } // namespace detail
 
-// A path as valid UTF-8 text, for messages. On Windows the name is UTF-8
-// already. A POSIX name is bytes, and bytes that are not UTF-8 are written
-// as \xNN escapes (Python's backslashreplace): an error message the Python
-// binding cannot decode would turn into a UnicodeDecodeError and hide the
-// error it describes.
-[[nodiscard]] inline std::string pathText(const std::filesystem::path& path)
+// Bytes as valid UTF-8 text, for messages: well-formed UTF-8 is kept, and
+// any other byte is written as a \xNN escape (Python's backslashreplace). An
+// error message the Python binding cannot decode would turn into a
+// UnicodeDecodeError and hide the error it describes.
+[[nodiscard]] inline std::string utf8Text(std::string_view bytes)
 {
-    const auto raw = pathString(path);
     std::string text;
-    text.reserve(raw.size());
+    text.reserve(bytes.size());
     std::size_t at = 0;
-    while (at < raw.size()) {
-        if (const auto length = detail::utf8SequenceLength(raw, at)) {
-            text.append(raw, at, length);
+    while (at < bytes.size()) {
+        if (const auto length = detail::utf8SequenceLength(bytes, at)) {
+            text.append(bytes, at, length);
             at += length;
             continue;
         }
-        constexpr char digits[] = "0123456789abcdef";
-        const auto value = static_cast<unsigned char>(raw[at]);
-        text += "\\x";
-        text += digits[value >> 4];
-        text += digits[value & 0xF];
+        detail::appendEscape(
+            text, "\\x", static_cast<unsigned char>(bytes[at]), 2);
         ++at;
     }
     return text;
+}
+
+// Whether `bytes` are well-formed UTF-8.
+[[nodiscard]] inline bool isUtf8(std::string_view bytes)
+{
+    std::size_t at = 0;
+    while (at < bytes.size()) {
+        const auto length = detail::utf8SequenceLength(bytes, at);
+        if (length == 0) {
+            return false;
+        }
+        at += length;
+    }
+    return true;
+}
+
+// A path as valid UTF-8 text, for messages and display. Never throws for a
+// name the filesystem gave: a POSIX name's bytes go through utf8Text, and a
+// Windows name's UTF-16 through detail::utf16Text, since path::u8string()
+// throws there for a lone surrogate.
+[[nodiscard]] inline std::string pathText(const std::filesystem::path& path)
+{
+#ifdef _WIN32
+    return detail::utf16Text(std::wstring_view(path.native()));
+#else
+    return utf8Text(pathString(path));
+#endif
 }
 
 } // namespace amrvis

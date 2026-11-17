@@ -491,6 +491,40 @@ def test_error_names_a_non_utf8_path(refined_2d, tmp_path):
     assert "donn\\xe9es" in str(error.value)
 
 
+def test_a_header_path_that_is_not_utf8_raises_a_read_error(refined_2d):
+    # The message quotes the header's text, escaped: undecodable, it would
+    # surface as UnicodeDecodeError instead of PlotfileReadError.
+    path, _ = refined_2d
+    header = pathlib.Path(path) / "Header"
+    raw = header.read_bytes()
+    assert b"Level_0/Cell" in raw
+    header.write_bytes(raw.replace(b"Level_0/Cell", b"/\xe9tc/Cell", 1))
+    with pytest.raises(ax.PlotfileReadError, match=r"\\xe9tc"):
+        ax.open_plotfile(path)
+
+
+def test_chunks_compare_by_identity(refined_2d):
+    path, _ = refined_2d
+    with ax.open_plotfile(path) as ds:
+        item = ds.plan_leaf_chunks(["density"])[0]
+        a, b = ds.read_leaf_chunk(item), ds.read_leaf_chunk(item)
+        assert a == a and a != b
+        assert a in [b, a] and b not in [a]
+        assert len({a, b, a}) == 2
+
+
+def test_path_reopens_a_standalone_multifab(refined_2d):
+    path, _ = refined_2d
+    header = pathlib.Path(path) / "Level_0" / "Cell_H"
+    # The native side reads from the file's directory; ds.path must still
+    # name the file, so reopening it opens the same MultiFab.
+    with ax.open_plotfile(header) as ds:
+        assert ds.path == str(header)
+        levels = ds.levels
+    with ax.open_plotfile(ds.path) as again:
+        assert again.levels == levels
+
+
 def test_cancelled_token_stops_open_plan_and_read(refined_2d):
     path, _ = refined_2d
     token = ax.CancelToken()

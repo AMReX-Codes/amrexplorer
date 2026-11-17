@@ -233,7 +233,13 @@ class LeafChunk(Mapping):
     """One grid's selected leaf cells, copied out of the block cache. Holds
     no cache pins and stays valid after the dataset closes. Every array is a
     read-only 1-D vector over the same cells in canonical order (x fastest),
-    so one boolean mask indexes all of them."""
+    so one boolean mask indexes all of them. Chunks compare and hash by
+    identity: Mapping's equality would compare the arrays elementwise, which
+    has no single truth value."""
+
+    __eq__ = object.__eq__
+    __ne__ = object.__ne__
+    __hash__ = object.__hash__
 
     def __init__(self, native):
         self._native = native
@@ -357,6 +363,10 @@ class Dataset:
         # Kept so another handle can be opened on the same definitions
         # (amrexplorer.parallel's worker-local datasets).
         self._definitions = _definitions(derived)
+        # As opened, not the directory the native side reads from: for a
+        # standalone FAB or MultiFab that is the file's parent, which does not
+        # reopen the same dataset.
+        self._path = os.fsdecode(os.fspath(path))
         self._native = _native._Dataset(
             os.fspath(path), self._definitions,
             None if cache_bytes is None else int(cache_bytes), cancel)
@@ -385,7 +395,9 @@ class Dataset:
 
     @property
     def path(self) -> str:
-        return os.fspath(self._native.path)
+        """The path the dataset was opened with, so open_plotfile(ds.path)
+        opens it again."""
+        return self._path
 
     @property
     def fields(self) -> list:

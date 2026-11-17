@@ -108,6 +108,12 @@ target_link_libraries(
 )
 add_test(NAME byte_lru_cache COMMAND test_byte_lru_cache)
 
+add_executable(test_path_text unit/test_path_text.cpp)
+target_link_libraries(
+    test_path_text PRIVATE amrexplorer::core amrexplorer::warnings
+)
+add_test(NAME path_text COMMAND test_path_text)
+
 add_executable(test_cache_config unit/test_cache_config.cpp)
 target_include_directories(test_cache_config PRIVATE "${CMAKE_SOURCE_DIR}/src/qt")
 target_link_libraries(test_cache_config PRIVATE amrexplorer::core amrexplorer::warnings)
@@ -591,19 +597,21 @@ target_link_libraries(fixture_materializer PRIVATE amrexplorer::warnings)
 # fixture directly; the output regex pins the run to a real parse, not just a
 # clean exit. query_benchmark and line_repro read FAB payloads, so each
 # materializes a fixture copy first (see tools_smoke_driver.cmake).
-add_test(NAME tool_dataset_inspect
-    COMMAND dataset_inspect "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d")
-set_tests_properties(tool_dataset_inspect PROPERTIES
-    PASS_REGULAR_EXPRESSION "dimension: 2")
-add_test(NAME tool_dataset_inspect_json
-    COMMAND dataset_inspect --json "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d")
-set_tests_properties(tool_dataset_inspect_json PROPERTIES
-    PASS_REGULAR_EXPRESSION "\"dimension\": 2")
-# The mapped-grid fixture reports its Nu_nd hierarchy.
-add_test(NAME tool_dataset_inspect_mapped
-    COMMAND dataset_inspect "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped")
-set_tests_properties(tool_dataset_inspect_mapped PROPERTIES
-    PASS_REGULAR_EXPRESSION "mapped_grid: 3 components")
+if(AMREXPLORER_BUILD_TOOLS)
+    add_test(NAME tool_dataset_inspect
+        COMMAND dataset_inspect "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d")
+    set_tests_properties(tool_dataset_inspect PROPERTIES
+        PASS_REGULAR_EXPRESSION "dimension: 2")
+    add_test(NAME tool_dataset_inspect_json
+        COMMAND dataset_inspect --json "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d")
+    set_tests_properties(tool_dataset_inspect_json PROPERTIES
+        PASS_REGULAR_EXPRESSION "\"dimension\": 2")
+    # The mapped-grid fixture reports its Nu_nd hierarchy.
+    add_test(NAME tool_dataset_inspect_mapped
+        COMMAND dataset_inspect "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped")
+    set_tests_properties(tool_dataset_inspect_mapped PROPERTIES
+        PASS_REGULAR_EXPRESSION "mapped_grid: 3 components")
+endif()
 
 # The mapped-grid fixture with its Cell and Nu_nd payloads, for the tests that
 # read node positions (FIXTURES_REQUIRED mapped_grid_materialized).
@@ -652,25 +660,27 @@ add_test(NAME mapped_grid_pipeline
 set_tests_properties(mapped_grid_pipeline PROPERTIES
     FIXTURES_REQUIRED mapped_grid_materialized)
 
-add_test(NAME tool_query_benchmark
-    COMMAND "${CMAKE_COMMAND}"
-        "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
-        "-DTOOL=$<TARGET_FILE:query_benchmark>"
-        "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
-        "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_tool_query_benchmark"
-        -DMODE=query-benchmark
-        -P "${CMAKE_CURRENT_SOURCE_DIR}/tools_smoke_driver.cmake")
-set_tests_properties(tool_query_benchmark PROPERTIES TIMEOUT 30)
+if(AMREXPLORER_BUILD_TOOLS)
+    add_test(NAME tool_query_benchmark
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DTOOL=$<TARGET_FILE:query_benchmark>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_tool_query_benchmark"
+            -DMODE=query-benchmark
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tools_smoke_driver.cmake")
+    set_tests_properties(tool_query_benchmark PROPERTIES TIMEOUT 30)
 
-add_test(NAME tool_line_repro
-    COMMAND "${CMAKE_COMMAND}"
-        "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
-        "-DTOOL=$<TARGET_FILE:line_repro>"
-        "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
-        "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_tool_line_repro"
-        -DMODE=line-repro
-        -P "${CMAKE_CURRENT_SOURCE_DIR}/tools_smoke_driver.cmake")
-set_tests_properties(tool_line_repro PROPERTIES TIMEOUT 60)
+    add_test(NAME tool_line_repro
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DTOOL=$<TARGET_FILE:line_repro>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_tool_line_repro"
+            -DMODE=line-repro
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tools_smoke_driver.cmake")
+    set_tests_properties(tool_line_repro PROPERTIES TIMEOUT 60)
+endif()
 
 if(TARGET amrexplorer_qt)
     # As above for the client -- and run with a platform plugin that cannot
@@ -2698,6 +2708,31 @@ target_include_directories(fuzz_expression PRIVATE
 target_link_libraries(
     fuzz_expression PRIVATE amrexplorer::expression amrexplorer::warnings)
 amrexplorer_add_fuzz_target(fuzz_expression)
+
+# The Python analysis package (docs/python-analysis.md), tested
+# with pytest against the module this build just made. Skipped, not failed,
+# where the configured interpreter has no pytest.
+if(AMREXPLORER_ENABLE_PYTHON)
+    execute_process(
+        COMMAND "${Python_EXECUTABLE}" -c "import pytest, numpy"
+        RESULT_VARIABLE amrexplorer_pytest_status
+        OUTPUT_QUIET ERROR_QUIET)
+    if(amrexplorer_pytest_status EQUAL 0)
+        add_test(NAME python_analysis
+            COMMAND "${Python_EXECUTABLE}" -m pytest -q
+                "${CMAKE_CURRENT_SOURCE_DIR}/python"
+                -p no:cacheprovider)
+        # Prepended, not set: pytest and numpy may themselves be found
+        # through PYTHONPATH (modules, Spack), as the check above found them.
+        set_tests_properties(python_analysis PROPERTIES
+            ENVIRONMENT_MODIFICATION
+                "PYTHONPATH=path_list_prepend:${PROJECT_BINARY_DIR}/python"
+            TIMEOUT 600)
+    else()
+        message(STATUS "pytest or numpy is missing for ${Python_EXECUTABLE}; "
+            "the python_analysis test is not registered")
+    endif()
+endif()
 
 add_executable(test_leaf_chunks integration/test_leaf_chunks.cpp)
 target_link_libraries(test_leaf_chunks PRIVATE amrexplorer::analysis

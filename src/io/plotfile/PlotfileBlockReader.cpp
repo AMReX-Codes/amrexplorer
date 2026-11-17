@@ -1,4 +1,5 @@
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
+#include <amrexplorer/core/PathText.hpp>
 #include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 
 #include <algorithm>
@@ -198,10 +199,10 @@ BlockReadResult PlotfileBlockReader::readBlock(
     }
 
     const auto& blockMetadata = level.blocks[static_cast<std::size_t>(request.gridIndex)];
-    const auto dataPath = m_plotfile / blockMetadata.filePath;
+    const auto dataPath = m_plotfile / pathFromText(blockMetadata.filePath);
     std::ifstream input(dataPath, std::ios::binary);
     if (!input) {
-        throw BlockReadError("cannot open FAB data file '" + dataPath.string() + "'");
+        throw BlockReadError("cannot open FAB data file '" + pathText(dataPath) + "'");
     }
     // Stat the file up front so a crafted box extent (which sizes the buffer
     // below) cannot force a huge transient allocation or bad_alloc: the
@@ -209,7 +210,7 @@ BlockReadResult PlotfileBlockReader::readBlock(
     std::error_code sizeError;
     const auto fileSize = std::filesystem::file_size(dataPath, sizeError);
     if (sizeError) {
-        throw BlockReadError("cannot stat FAB data file '" + dataPath.string()
+        throw BlockReadError("cannot stat FAB data file '" + pathText(dataPath)
             + "': " + sizeError.message());
     }
 

@@ -1,5 +1,7 @@
 #include "FabSelectorDock.hpp"
 
+#include <amrexplorer/core/PathText.hpp>
+
 #include <QAbstractTableModel>
 #include <QEvent>
 #include <QHeaderView>
@@ -135,7 +137,10 @@ public:
         case 1: return formatBox(entry.validBox, entry.dimension);
         case 2: return formatBox(entry.storedBox, entry.dimension);
         case 3: return entry.components;
-        case 4: return QString::fromStdString(entry.filePath.filename().string());
+        // pathText, not string(): string() throws on Windows for a name
+        // outside the ANSI code page, and data() must not throw.
+        case 4: return QString::fromStdString(
+            amrvis::pathText(entry.filePath.filename()));
         case 5: return static_cast<qulonglong>(entry.fileOffset);
         case 6: return entry.precision;
         default: return {};

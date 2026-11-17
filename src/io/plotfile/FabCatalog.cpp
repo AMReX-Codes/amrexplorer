@@ -1,4 +1,5 @@
 #include <amrexplorer/io/FabCatalog.hpp>
+#include <amrexplorer/core/PathText.hpp>
 #include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
@@ -76,7 +77,7 @@ std::optional<std::uint64_t> findNextFabHeader(
     }
     std::ifstream input(path, std::ios::binary);
     if (!input) {
-        throw MetadataReadError("cannot reopen FAB '" + path.string() + "'");
+        throw MetadataReadError("cannot reopen FAB '" + pathText(path) + "'");
     }
     input.seekg(static_cast<std::streamoff>(start));
     constexpr std::string_view marker = "FAB ";
@@ -102,7 +103,7 @@ bool startsWithFabHeader(
 {
     std::ifstream input(path, std::ios::binary);
     if (!input) {
-        throw MetadataReadError("cannot open FAB '" + path.string() + "'");
+        throw MetadataReadError("cannot open FAB '" + pathText(path) + "'");
     }
     input.seekg(static_cast<std::streamoff>(offset));
     std::array<char, 4> marker{};
@@ -114,7 +115,7 @@ bool startsWithFabHeader(
 std::filesystem::path companionHeaderPath(
     const std::filesystem::path& dataPath)
 {
-    const auto filename = dataPath.filename().string();
+    const auto filename = pathString(dataPath.filename());
     const auto marker = filename.rfind("_D_");
     if (marker == std::string::npos || marker + 3 == filename.size()
         || !std::all_of(filename.begin() + static_cast<std::ptrdiff_t>(marker + 3),
@@ -126,7 +127,7 @@ std::filesystem::path companionHeaderPath(
             "a companion MultiFab _H file");
     }
     return dataPath.parent_path()
-        / (filename.substr(0, marker) + "_H");
+        / pathFromText(filename.substr(0, marker) + "_H");
 }
 
 IntBox storedBox(
@@ -142,7 +143,7 @@ std::vector<FabRecord> recordsFromCompanion(
     if (!std::filesystem::is_regular_file(headerPath)) {
         throw MetadataReadError(
             "FAB data has no inline header and companion MultiFab header '"
-            + headerPath.string() + "' is unavailable");
+            + pathText(headerPath) + "' is unavailable");
     }
     const auto multifab = StandaloneMetadataReader{}.readMultiFab(headerPath);
     if (multifab.metadata->levels.size() != 1) {
@@ -158,7 +159,7 @@ std::vector<FabRecord> recordsFromCompanion(
     std::vector<FabRecord> records;
     for (std::size_t block = 0; block < level.blocks.size(); ++block) {
         const auto& metadata = level.blocks[block];
-        if (std::filesystem::path(metadata.filePath).filename()
+        if (pathFromText(metadata.filePath).filename()
             != dataPath.filename()) {
             continue;
         }
@@ -179,7 +180,7 @@ std::vector<FabRecord> recordsFromCompanion(
     if (records.empty()) {
         throw MetadataReadError(
             "companion MultiFab header contains no FabOnDisk record for '"
-            + dataPath.filename().string() + "'");
+            + pathText(dataPath.filename()) + "'");
     }
     return records;
 }
@@ -205,7 +206,7 @@ FabRecord inspectFabRecord(
     }
     std::ifstream input(path, std::ios::binary);
     if (!input) {
-        throw MetadataReadError("cannot open FAB '" + path.string() + "'");
+        throw MetadataReadError("cannot open FAB '" + pathText(path) + "'");
     }
     input.seekg(static_cast<std::streamoff>(offset));
     std::string line;
@@ -248,7 +249,7 @@ std::vector<FabRecord> scanFabFile(const std::filesystem::path& path)
     std::error_code error;
     const auto size = std::filesystem::file_size(path, error);
     if (error) {
-        throw MetadataReadError("cannot stat FAB '" + path.string()
+        throw MetadataReadError("cannot stat FAB '" + pathText(path)
             + "': " + error.message());
     }
     if (size == 0) {

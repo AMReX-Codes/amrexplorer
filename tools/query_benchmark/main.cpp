@@ -1,3 +1,4 @@
+#include <amrexplorer/core/PathText.hpp>
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 
@@ -97,7 +98,7 @@ int main(int argc, char* argv[])
         const auto& level = metadataResult.metadata->levels[static_cast<std::size_t>(levelIndex)];
         const auto& indexedBlock = level.blocks[static_cast<std::size_t>(gridIndex)];
         const auto payloadFileBytes = std::filesystem::file_size(
-            plotfile / indexedBlock.filePath);
+            plotfile / amrvis::pathFromText(indexedBlock.filePath));
 
         std::cout << "field: " << fieldName << '\n'
                   << "level: " << levelIndex << '\n'

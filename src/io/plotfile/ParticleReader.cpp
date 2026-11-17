@@ -1,4 +1,5 @@
 #include <amrexplorer/io/ParticleReader.hpp>
+#include <amrexplorer/core/PathText.hpp>
 #include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 
 #include <algorithm>
@@ -132,7 +133,7 @@ ParsedHeader parseHeader(const std::filesystem::path& path,
     std::ifstream input(path);
     if (!input) {
         throw ParticleReadError(
-            "cannot open particle Header '" + path.string() + "'");
+            "cannot open particle Header '" + pathText(path) + "'");
     }
 
     ParsedHeader result;
@@ -333,7 +334,7 @@ std::map<DataFileKey, std::filesystem::path> particleDataPaths(
             if (!entry.is_regular_file()) {
                 continue;
             }
-            const auto name = entry.path().filename().string();
+            const auto name = pathString(entry.path().filename());
             constexpr std::string_view prefix = "DATA_";
             if (!name.starts_with(prefix)) {
                 continue;
@@ -358,7 +359,7 @@ std::map<DataFileKey, std::filesystem::path> particleDataPaths(
                 = speciesPath / ("Level_" + std::to_string(level));
             throw ParticleReadError("cannot find particle DATA file "
                 + std::to_string(fileNumber) + " in '"
-                + levelPath.string() + "'");
+                + pathText(levelPath) + "'");
         }
     }
     return result;
@@ -584,7 +585,7 @@ std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
         }
         try {
             result.push_back(parseHeader(headerPath,
-                entry.path().filename().string(), cancellation).metadata);
+                pathString(entry.path().filename()), cancellation).metadata);
         } catch (const ParticleReadError&) {
             continue;
         }
@@ -607,7 +608,7 @@ ParticleSample readParticleSample(
     if (cancellation.stop_requested()) {
         throw ReadCancelled();
     }
-    const auto speciesPath = plotfile / species;
+    const auto speciesPath = plotfile / pathFromText(species);
     const auto header
         = parseHeader(speciesPath / "Header", species, cancellation);
     if (!header.checkpoint) {
@@ -646,7 +647,7 @@ ParticleSample readParticleSample(
         if (sizeError) {
             throw ParticleReadError(
                 "cannot determine particle data file size for '"
-                + dataPath.string() + "'");
+                + pathText(dataPath) + "'");
         }
         dataFileSizes.emplace(key, static_cast<std::uint64_t>(dataFileSize));
         totalDataBytes += static_cast<std::uint64_t>(dataFileSize);
@@ -677,7 +678,7 @@ ParticleSample readParticleSample(
         std::ifstream input(dataPath, std::ios::binary);
         if (!input) {
             throw ParticleReadError(
-                "cannot open particle data file '" + dataPath.string() + "'");
+                "cannot open particle data file '" + pathText(dataPath) + "'");
         }
         const auto dataFileSize = dataFileSizes.at(key);
         ++result.io.dataFilesOpened;

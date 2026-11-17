@@ -1,4 +1,5 @@
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
+#include <amrexplorer/core/PathText.hpp>
 #include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 #include <amrexplorer/io/FabCatalog.hpp>
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
@@ -38,7 +39,7 @@ int inferMultiFabDimension(const std::filesystem::path& headerPath)
 {
     std::ifstream input(headerPath);
     if (!input) {
-        throw MetadataReadError("cannot open MultiFab header '" + headerPath.string() + "'");
+        throw MetadataReadError("cannot open MultiFab header '" + pathText(headerPath) + "'");
     }
     std::string line;
     // Bounded like every other header line: a MultiFab header with no newline
@@ -86,6 +87,12 @@ void validateStandalone(const DatasetMetadata& metadata)
     }
 }
 
+// Whether a path names a VisMF header (<prefix>_H) rather than its prefix.
+bool hasHeaderSuffix(const std::filesystem::path& path)
+{
+    return path.filename().u8string().ends_with(u8"_H");
+}
+
 } // namespace
 
 PlotfileMetadataResult StandaloneMetadataReader::readFab(
@@ -102,11 +109,11 @@ PlotfileMetadataResult StandaloneMetadataReader::readFab(
     metadata->isFab = true;
     auto& level = metadata->levels.front();
     level.boxes.push_back(record.storedBox);
-    level.dataPath = fabPath.filename().generic_string();
+    level.dataPath = pathString(fabPath.filename());
     level.visMfHeaderVersion = record.visMfHeaderVersion;
     level.realDescriptor = record.realDescriptor;
     level.blocks.push_back({record.storedBox,
-        fabPath.filename().generic_string(), offset, std::nullopt});
+        pathString(fabPath.filename()), offset, std::nullopt});
     metadata->physicalDomain = sampleBounds(
         level, level.domain, record.dimension);
     validateStandalone(*metadata);
@@ -138,7 +145,7 @@ PlotfileMetadataResult makeSelectedFabMetadata(
         sourceBlock.box, sourceLevel.ghostWidth, source.dimension);
     if (sourceLevel.visMfHeaderVersion == 1) {
         storedBox = inspectFabRecord(
-            dataRoot / sourceBlock.filePath, sourceBlock.fileOffset).storedBox;
+            dataRoot / pathFromText(sourceBlock.filePath), sourceBlock.fileOffset).storedBox;
     }
 
     auto metadata = std::make_shared<DatasetMetadata>();
@@ -176,13 +183,16 @@ PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
     if (cancellation.stop_requested()) {
         throw ReadCancelled();
     }
+    // Path concatenation and u8string, not string(): string() fails on
+    // Windows for a name outside the ANSI code page.
     auto prefix = prefixOrHeader;
-    if (prefix.string().ends_with("_H")) {
-        auto value = prefix.string();
-        value.resize(value.size() - 2);
-        prefix = value;
+    if (hasHeaderSuffix(prefix)) {
+        auto name = prefix.filename().u8string();
+        name.resize(name.size() - 2);
+        prefix.replace_filename(name);
     }
-    const auto headerPath = std::filesystem::path(prefix.string() + "_H");
+    auto headerPath = prefix;
+    headerPath += "_H";
     const auto dimension = inferMultiFabDimension(headerPath);
     const auto index = detail::readVisMfIndex(headerPath, dimension, cancellation);
     if (index.boxes.empty() || index.components <= 0) {
@@ -202,7 +212,7 @@ PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
     auto& level = metadata->levels.front();
     level.boxes = index.boxes;
     level.ghostWidth = index.ghostWidth;
-    level.dataPath = prefix.filename().generic_string();
+    level.dataPath = pathString(prefix.filename());
     level.visMfHeaderVersion = index.version;
     level.realDescriptor = index.realDescriptor;
     metadata->physicalDomain = sampleBounds(level, level.domain, dimension);
@@ -236,9 +246,9 @@ PlotfileMetadataResult readDatasetMetadata(const std::filesystem::path& path,
         && std::filesystem::is_regular_file(path / "Header")) {
         return PlotfileMetadataReader{}.read(path, cancellation);
     }
-    if (path.string().ends_with("_H")
-        || std::filesystem::is_regular_file(
-            std::filesystem::path(path.string() + "_H"))) {
+    auto headerPath = path;
+    headerPath += "_H";
+    if (hasHeaderSuffix(path) || std::filesystem::is_regular_file(headerPath)) {
         return StandaloneMetadataReader{}.readMultiFab(path, cancellation);
     }
     return StandaloneMetadataReader{}.readFab(path, 0, cancellation);

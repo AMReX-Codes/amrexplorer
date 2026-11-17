@@ -1,4 +1,5 @@
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
+#include <amrexplorer/core/PathText.hpp>
 #include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
 #include <amrexplorer/io/detail/VisMfIndex.hpp>
@@ -200,20 +201,33 @@ using detail::parseIntegers;
 // or crafted.
 void requireContainedPath(const std::string& value, std::string_view what)
 {
-    const std::filesystem::path path(value);
+#ifdef _WIN32
+    // Windows names are UTF-16, so text that is not UTF-8 names no file,
+    // and converting it would throw std::system_error rather than this
+    // reader's MetadataReadError.
+    if (!isUtf8(value)) {
+        throw MetadataReadError(std::string(what) + " is not UTF-8: '"
+            + utf8Text(value) + "'");
+    }
+#endif
+    // Parsed as the reads will parse it (pathFromText): std::filesystem::path
+    // reads a std::string in the ANSI code page on Windows, which can split
+    // it into other components than the reads see, or throw.
+    const auto path = pathFromText(value);
     // Reject anything with a root: a root-name (drive/UNC) or a root-directory
     // (leading separator). is_absolute() is not enough — it is platform
     // specific, so a POSIX-style "/etc/..." reads as relative on Windows yet
     // still escapes to the drive root when joined to the plotfile path.
     if (value.empty() || path.has_root_name() || path.has_root_directory()) {
         throw MetadataReadError(std::string(what)
-            + " must be a relative path inside the plotfile: '" + value + "'");
+            + " must be a relative path inside the plotfile: '"
+            + utf8Text(value) + "'");
     }
     for (const auto& component : path) {
         if (component == "..") {
             throw MetadataReadError(std::string(what)
                 + " must not contain a parent-directory component: '"
-                + value + "'");
+                + utf8Text(value) + "'");
         }
     }
 }
@@ -289,12 +303,12 @@ detail::VisMfIndex detail::readVisMfIndex(
     std::error_code sizeError;
     const auto headerSize = std::filesystem::file_size(headerPath, sizeError);
     if (sizeError) {
-        throw MetadataReadError("cannot stat VisMF Header '" + headerPath.string()
+        throw MetadataReadError("cannot stat VisMF Header '" + pathText(headerPath)
             + "': " + sizeError.message());
     }
     std::ifstream input(headerPath, std::ios::binary);
     if (!input) {
-        throw MetadataReadError("cannot open VisMF Header '" + headerPath.string() + "'");
+        throw MetadataReadError("cannot open VisMF Header '" + pathText(headerPath) + "'");
     }
 
     VisMfIndex index;
@@ -480,8 +494,9 @@ void indexLevelBlocks(const std::filesystem::path& plotfile,
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
         }
-        const auto dataPrefix = plotfile / level.dataPath;
-        const auto indexPath = std::filesystem::path(dataPrefix.string() + "_H");
+        const auto dataPrefix = plotfile / pathFromText(level.dataPath);
+        auto indexPath = dataPrefix;
+        indexPath += "_H";
         const auto visMf = detail::readVisMfIndex(indexPath, metadata.dimension, cancellation);
         ++metrics.filesRead;
         metrics.bytesRead += visMf.bytesRead;
@@ -503,9 +518,9 @@ void indexLevelBlocks(const std::filesystem::path& plotfile,
         for (std::size_t block = 0; block < visMf.boxes.size(); ++block) {
             BlockMetadata blockMetadata;
             blockMetadata.box = visMf.boxes[block];
-            blockMetadata.filePath = (
-                std::filesystem::path(level.dataPath).parent_path()
-                / visMf.fileNames[block]).generic_string();
+            const auto filePath = (pathFromText(level.dataPath).parent_path()
+                / pathFromText(visMf.fileNames[block])).generic_u8string();
+            blockMetadata.filePath.assign(filePath.begin(), filePath.end());
             blockMetadata.fileOffset = visMf.fileOffsets[block];
             if (visMf.hasPerBlockStatistics
                 && visMf.minimum.size() == visMf.boxes.size()
@@ -635,13 +650,13 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
     std::error_code sizeError;
     const auto headerSize = std::filesystem::file_size(headerPath, sizeError);
     if (sizeError) {
-        throw MetadataReadError("cannot stat plotfile Header '" + headerPath.string()
+        throw MetadataReadError("cannot stat plotfile Header '" + pathText(headerPath)
             + "': " + sizeError.message());
     }
 
     std::ifstream input(headerPath, std::ios::binary);
     if (!input) {
-        throw MetadataReadError("cannot open plotfile Header '" + headerPath.string() + "'");
+        throw MetadataReadError("cannot open plotfile Header '" + pathText(headerPath) + "'");
     }
     if (cancellation.stop_requested()) {
         throw ReadCancelled();

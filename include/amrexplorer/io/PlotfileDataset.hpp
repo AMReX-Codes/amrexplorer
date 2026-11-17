@@ -13,7 +13,9 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace amrvis {
@@ -122,7 +124,23 @@ public:
     // mapped grid's; a caller that must not keep a budget it could not honour
     // restores the previous one itself.
     [[nodiscard]] bool setCacheBudget(std::uint64_t bytes);
+    // setCacheBudget, but a no-op returning false when pinned blocks exceed
+    // the new budget: nothing is stored and nothing is evicted, so a refused
+    // change keeps the warm cache and cannot be seen by a concurrent read.
+    // A refusal stores the pinned bytes that caused it in `pinnedBytes`.
+    [[nodiscard]] bool trySetCacheBudget(
+        std::uint64_t bytes, std::uint64_t* pinnedBytes = nullptr);
     void clearUnpinnedCache();
+
+    // The RealDescriptor a level's data is stored with: its VisMF header's,
+    // or, for a version-1 header that records none, the first grid's FAB
+    // header's -- one short read, kept for later calls, since on a network
+    // filesystem it is not cheap to repeat. nullopt when the level has no
+    // grids, or when that FAB is missing or unreadable; a failure is not
+    // kept, so a FAB copied in later is found. Throws ReadCancelled once
+    // `cancellation` is requested, before reading.
+    [[nodiscard]] std::optional<std::string> levelRealDescriptor(
+        int level, StopToken cancellation = {}) const;
 
 private:
     struct MappedGridTag {};
@@ -179,6 +197,9 @@ private:
     // PlotfileDataset non-movable, which is fine — it is only ever a stack
     // local or held via shared_ptr.)
     std::mutex m_ioMutex;
+    // levelRealDescriptor's answers, per level, once read.
+    mutable std::mutex m_descriptorMutex;
+    mutable std::vector<std::optional<std::string>> m_levelDescriptors;
 };
 
 } // namespace amrvis

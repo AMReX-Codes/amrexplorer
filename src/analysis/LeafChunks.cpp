@@ -3,12 +3,12 @@
 #include <amrexplorer/cache/ByteLruCache.hpp>
 #include <amrexplorer/core/CoordinateSystem.hpp>
 #include <amrexplorer/core/DerivedField.hpp>
+#include <amrexplorer/core/PathText.hpp>
 #include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 
 #include <algorithm>
 #include <cmath>
-#include <fstream>
 #include <limits>
 #include <set>
 #include <sstream>
@@ -246,46 +246,36 @@ std::vector<Output> gather(const FabBlock& block, const IntBox& validBox,
 
 } // namespace
 
-AnalysisValueType storedValueType(const PlotfileDataset& dataset, int levelIndex)
+AnalysisValueType storedValueType(
+    const PlotfileDataset& dataset, int levelIndex, StopToken cancellation)
 {
-    const auto& metadata = dataset.metadata();
-    const auto& level = metadata.levels.at(static_cast<std::size_t>(levelIndex));
-    std::string descriptor = level.realDescriptor;
-    if (descriptor.empty()) {
-        // A version-1 VisMF header records no precision of its own: each FAB
-        // carries its RealDescriptor in the one-line header before its
-        // payload. AMReX writes one precision per MultiFab, so the first
-        // grid's header speaks for the level -- one short read, not a payload.
-        if (level.blocks.empty()) {
-            return AnalysisValueType::Float32;
-        }
-        const auto& block = level.blocks.front();
-        const auto path = dataset.dataRoot() / block.filePath;
-        std::ifstream input(path, std::ios::binary);
-        input.seekg(static_cast<std::streamoff>(block.fileOffset), std::ios::beg);
-        std::string line;
-        if (!input || !detail::readBoundedLine<AnalysisError>(input, line)
-            || !line.starts_with("FAB ")) {
-            throw AnalysisError("cannot read the FAB header of level "
-                + std::to_string(levelIndex) + " grid 0 in '" + path.string()
-                + "' to find the level's precision");
-        }
-        const auto start = line.find('(', 4);
-        const auto end
-            = detail::balancedExpressionEnd<AnalysisError>(line, start);
-        descriptor = line.substr(start, end - start);
+    const auto& level = dataset.metadata().levels.at(
+        static_cast<std::size_t>(levelIndex));
+    if (level.blocks.empty() && level.realDescriptor.empty()) {
+        return AnalysisValueType::Float32;
     }
-    const auto parsed = detail::parseRealDescriptor<AnalysisError>(descriptor);
+    const auto descriptor
+        = dataset.levelRealDescriptor(levelIndex, cancellation);
+    if (!descriptor) {
+        const auto path = dataset.dataRoot()
+            / pathFromText(level.blocks.front().filePath);
+        throw AnalysisError("cannot read the FAB header of level "
+            + std::to_string(levelIndex) + " grid 0 in '" + pathText(path)
+            + "' to find the level's precision");
+    }
+    const auto parsed = detail::parseRealDescriptor<AnalysisError>(*descriptor);
     return parsed.bytes == sizeof(float) ? AnalysisValueType::Float32
                                          : AnalysisValueType::Float64;
 }
 
-AnalysisValueType widestStoredValueType(const PlotfileDataset& dataset)
+AnalysisValueType widestStoredValueType(
+    const PlotfileDataset& dataset, StopToken cancellation)
 {
     auto widest = AnalysisValueType::Float32;
     const auto levels = static_cast<int>(dataset.metadata().levels.size());
     for (int level = 0; level < levels; ++level) {
-        if (storedValueType(dataset, level) == AnalysisValueType::Float64) {
+        if (storedValueType(dataset, level, cancellation)
+            == AnalysisValueType::Float64) {
             widest = AnalysisValueType::Float64;
         }
     }
@@ -321,9 +311,15 @@ std::uint64_t estimateLeafChunkPinnedBytes(const PlotfileDataset& dataset,
     return perBlock * blocks.size();
 }
 
-LeafChunkPlan planLeafChunks(
-    const PlotfileDataset& dataset, const LeafChunkRequest& request)
+LeafChunkPlan planLeafChunks(const PlotfileDataset& dataset,
+    const LeafChunkRequest& request, StopToken cancellation)
 {
+    const auto checkCancelled = [&] {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
+    };
+    checkCancelled();
     const auto& metadata = dataset.metadata();
     requireSupportedGeometry(metadata);
     const auto dimension = metadata.dimension;
@@ -370,7 +366,12 @@ LeafChunkPlan planLeafChunks(
         }
     }
     selection->region = request.region;
-    selection->dtype = request.dtype.value_or(widestStoredValueType(dataset));
+    // Not value_or: its argument is evaluated even when a dtype is given, and
+    // reading every level's precision can fail on a grid the plan never
+    // touches.
+    selection->dtype = request.dtype
+        ? *request.dtype
+        : widestStoredValueType(dataset, cancellation);
 
     LeafChunkPlan plan;
     plan.selection = selection;
@@ -411,6 +412,7 @@ LeafChunkPlan planLeafChunks(
             }
         }
         for (std::size_t grid = 0; grid < level.blocks.size(); ++grid) {
+            checkCancelled();
             const auto& box = level.blocks[grid].box;
             const auto selected = intersect(box, regionBox, dimension);
             if (!selected) {

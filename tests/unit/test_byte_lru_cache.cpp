@@ -1,5 +1,6 @@
 #include <amrexplorer/cache/ByteLruCache.hpp>
 
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -71,6 +72,23 @@ int main()
     const auto make = [](const char* text) {
         return std::make_shared<const std::string>(text);
     };
+
+    // --- trySetBudget: a refused change stores and evicts nothing ---------
+    amrvis::ByteLruCache<int, std::string> trial(100);
+    auto trialPin = trial.insertAndPin(1, make("held"), 40);
+    {
+        auto warm = trial.insertAndPin(2, make("warm"), 30);
+    }
+    std::uint64_t refusedPins = 0;
+    require(!trial.trySetBudget(30, &refusedPins),
+        "trySetBudget accepted a budget below the pins");
+    require(refusedPins == 40, "a refused trySetBudget misreported its pins");
+    require(trial.metrics().budgetBytes == 100, "a refused trySetBudget stored its budget");
+    require(trial.metrics().residentBytes == 70, "a refused trySetBudget evicted a block");
+    require(trial.trySetBudget(50), "trySetBudget refused a budget the pins fit");
+    require(trial.metrics().budgetBytes == 50, "an accepted trySetBudget kept the old budget");
+    require(trial.metrics().residentBytes == 40, "an accepted trySetBudget did not evict");
+    trialPin = {};
 
     // --- hit/miss accounting: peekAndPin records neither ------------------
     amrvis::ByteLruCache<int, std::string> metrics(100);

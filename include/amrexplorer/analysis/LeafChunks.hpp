@@ -155,19 +155,24 @@ private:
 inline constexpr std::uint64_t leafChunkBlockAllowanceBytes = 4096;
 
 // The precision one level stores: its VisMF RealDescriptor, or, for a
-// version-1 header that has none, the first grid's FAB header.
+// version-1 header that has none, the first grid's FAB header, read once per
+// dataset (PlotfileDataset::levelRealDescriptor). Throws AnalysisError when
+// that FAB is missing or unreadable, and ReadCancelled once `cancellation`
+// is requested.
 [[nodiscard]] AnalysisValueType storedValueType(
-    const PlotfileDataset& dataset, int level);
+    const PlotfileDataset& dataset, int level, StopToken cancellation = {});
 
 // The widest precision any level of the dataset stores.
 [[nodiscard]] AnalysisValueType widestStoredValueType(
-    const PlotfileDataset& dataset);
+    const PlotfileDataset& dataset, StopToken cancellation = {});
 
 // Throws AnalysisError when the dataset's geometry or the request is not one
 // leaf traversal supports, or when an item's estimate exceeds the cache
-// budget. Reads metadata only.
-[[nodiscard]] LeafChunkPlan planLeafChunks(
-    const PlotfileDataset& dataset, const LeafChunkRequest& request);
+// budget. Reads metadata only, plus, when request.dtype is unset, the first
+// FAB header of each level whose VisMF header records no precision. Throws
+// ReadCancelled once `cancellation` is requested.
+[[nodiscard]] LeafChunkPlan planLeafChunks(const PlotfileDataset& dataset,
+    const LeafChunkRequest& request, StopToken cancellation = {});
 
 // The conservative pinned-bytes bound the planner checks: every block the
 // item could touch -- each distinct stored component and each derived field,

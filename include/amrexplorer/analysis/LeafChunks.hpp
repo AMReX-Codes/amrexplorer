@@ -165,9 +165,11 @@ inline constexpr std::uint64_t leafChunkBlockAllowanceBytes = 4096;
 
 // Throws AnalysisError when the dataset's geometry or the request is not one
 // leaf traversal supports, or when an item's estimate exceeds the cache
-// budget. Reads metadata only.
-[[nodiscard]] LeafChunkPlan planLeafChunks(
-    const PlotfileDataset& dataset, const LeafChunkRequest& request);
+// budget. Reads metadata only, plus, when request.dtype is unset, the first
+// FAB header of each level whose VisMF header records no precision. Throws
+// ReadCancelled once `cancellation` is requested.
+[[nodiscard]] LeafChunkPlan planLeafChunks(const PlotfileDataset& dataset,
+    const LeafChunkRequest& request, StopToken cancellation = {});
 
 // The conservative pinned-bytes bound the planner checks: every block the
 // item could touch -- each distinct stored component and each derived field,

@@ -125,7 +125,9 @@ public:
     // setCacheBudget, but a no-op returning false when pinned blocks exceed
     // the new budget: nothing is stored and nothing is evicted, so a refused
     // change keeps the warm cache and cannot be seen by a concurrent read.
-    [[nodiscard]] bool trySetCacheBudget(std::uint64_t bytes);
+    // A refusal stores the pinned bytes that caused it in `pinnedBytes`.
+    [[nodiscard]] bool trySetCacheBudget(
+        std::uint64_t bytes, std::uint64_t* pinnedBytes = nullptr);
     void clearUnpinnedCache();
 
 private:

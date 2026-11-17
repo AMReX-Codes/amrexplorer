@@ -173,7 +173,8 @@ nanobind extension into `<build>/python/amrexplorer`, importable with
 With `pytest` there too, ctest runs the package's tests as `python_analysis`.
 The GUI is not needed (`-DAMREXPLORER_ENABLE_QT=OFF
 -DAMREXPLORER_ENABLE_REMOTE=OFF` is the usual pairing), and `pip install .`
-builds the module alone through `pyproject.toml`. See
+builds the module alone through `pyproject.toml`, with the developer tools
+under `tools/` switched off (`-DAMREXPLORER_BUILD_TOOLS=OFF`). See
 [python-analysis.md](python-analysis.md).
 
 ## Optional VTK module

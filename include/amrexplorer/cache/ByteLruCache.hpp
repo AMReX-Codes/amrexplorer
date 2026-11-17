@@ -220,12 +220,18 @@ public:
     }
 
     // setBudget, but only when pinned bytes already fit: otherwise false, with
-    // the budget and every resident block left as they were.
-    [[nodiscard]] bool trySetBudget(std::uint64_t budgetBytes)
+    // the budget and every resident block left as they were. A refusal stores
+    // the pinned bytes that caused it in `pinnedBytes`, when given: read under
+    // the same lock, so they are the ones the decision saw.
+    [[nodiscard]] bool trySetBudget(
+        std::uint64_t budgetBytes, std::uint64_t* pinnedBytes = nullptr)
     {
         std::vector<std::shared_ptr<const Value>> doomed;
         std::scoped_lock lock(m_state->mutex);
         if (m_state->metrics.pinnedBytes > budgetBytes) {
+            if (pinnedBytes) {
+                *pinnedBytes = m_state->metrics.pinnedBytes;
+            }
             return false;
         }
         m_state->metrics.budgetBytes = budgetBytes;

@@ -199,7 +199,7 @@ BlockReadResult PlotfileBlockReader::readBlock(
     }
 
     const auto& blockMetadata = level.blocks[static_cast<std::size_t>(request.gridIndex)];
-    const auto dataPath = m_plotfile / blockMetadata.filePath;
+    const auto dataPath = m_plotfile / pathFromText(blockMetadata.filePath);
     std::ifstream input(dataPath, std::ios::binary);
     if (!input) {
         throw BlockReadError("cannot open FAB data file '" + pathText(dataPath) + "'");

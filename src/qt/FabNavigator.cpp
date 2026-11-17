@@ -2,6 +2,7 @@
 
 #include "QtErrorText.hpp"
 
+#include <amrexplorer/core/PathText.hpp>
 #include <amrexplorer/io/FabCatalog.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
 #include <amrexplorer/io/detail/FabHeaderParsing.hpp>
@@ -89,7 +90,7 @@ FabSelectorBuild FabNavigator::buildSelector(
             auto precision = FabRealPrecision::Double;
             if (level.visMfHeaderVersion == 1) {
                 const auto record = inspectFabRecord(
-                    build.root / block.filePath, block.fileOffset);
+                    build.root / amrvis::pathFromText(block.filePath), block.fileOffset);
                 storedBox = record.storedBox;
                 precision = record.precision;
             } else {
@@ -99,7 +100,7 @@ FabSelectorBuild FabNavigator::buildSelector(
                 .ordinal = index,
                 .level = level.level,
                 .blockIndex = index,
-                .filePath = build.root / block.filePath,
+                .filePath = build.root / amrvis::pathFromText(block.filePath),
                 .fileOffset = block.fileOffset,
                 .validBox = block.box,
                 .storedBox = storedBox,

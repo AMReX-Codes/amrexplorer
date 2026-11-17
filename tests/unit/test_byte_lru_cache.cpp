@@ -1,5 +1,6 @@
 #include <amrexplorer/cache/ByteLruCache.hpp>
 
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -78,7 +79,10 @@ int main()
     {
         auto warm = trial.insertAndPin(2, make("warm"), 30);
     }
-    require(!trial.trySetBudget(30), "trySetBudget accepted a budget below the pins");
+    std::uint64_t refusedPins = 0;
+    require(!trial.trySetBudget(30, &refusedPins),
+        "trySetBudget accepted a budget below the pins");
+    require(refusedPins == 40, "a refused trySetBudget misreported its pins");
     require(trial.metrics().budgetBytes == 100, "a refused trySetBudget stored its budget");
     require(trial.metrics().residentBytes == 70, "a refused trySetBudget evicted a block");
     require(trial.trySetBudget(50), "trySetBudget refused a budget the pins fit");

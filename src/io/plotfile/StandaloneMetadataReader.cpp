@@ -109,11 +109,11 @@ PlotfileMetadataResult StandaloneMetadataReader::readFab(
     metadata->isFab = true;
     auto& level = metadata->levels.front();
     level.boxes.push_back(record.storedBox);
-    level.dataPath = fabPath.filename().generic_string();
+    level.dataPath = pathString(fabPath.filename());
     level.visMfHeaderVersion = record.visMfHeaderVersion;
     level.realDescriptor = record.realDescriptor;
     level.blocks.push_back({record.storedBox,
-        fabPath.filename().generic_string(), offset, std::nullopt});
+        pathString(fabPath.filename()), offset, std::nullopt});
     metadata->physicalDomain = sampleBounds(
         level, level.domain, record.dimension);
     validateStandalone(*metadata);
@@ -145,7 +145,7 @@ PlotfileMetadataResult makeSelectedFabMetadata(
         sourceBlock.box, sourceLevel.ghostWidth, source.dimension);
     if (sourceLevel.visMfHeaderVersion == 1) {
         storedBox = inspectFabRecord(
-            dataRoot / sourceBlock.filePath, sourceBlock.fileOffset).storedBox;
+            dataRoot / pathFromText(sourceBlock.filePath), sourceBlock.fileOffset).storedBox;
     }
 
     auto metadata = std::make_shared<DatasetMetadata>();
@@ -212,7 +212,7 @@ PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
     auto& level = metadata->levels.front();
     level.boxes = index.boxes;
     level.ghostWidth = index.ghostWidth;
-    level.dataPath = prefix.filename().generic_string();
+    level.dataPath = pathString(prefix.filename());
     level.visMfHeaderVersion = index.version;
     level.realDescriptor = index.realDescriptor;
     metadata->physicalDomain = sampleBounds(level, level.domain, dimension);

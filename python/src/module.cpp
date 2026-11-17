@@ -27,12 +27,18 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
+#include <functional>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -48,10 +54,10 @@ namespace {
 std::atomic<std::uint64_t> nextDatasetId{1};
 
 // A cancellation flag a script can raise from another thread or a Python
-// signal handler to stop a read in progress; the operation then raises
-// ReadCancelled. Handlers run while a read is in progress because the read
-// polls for signals (Dataset::read). One token may be shared by many operations, and
-// once cancelled it stays cancelled.
+// signal handler to stop an open, a plan or a read in progress; the
+// operation then raises ReadCancelled. Handlers run while one is in progress
+// because the main thread polls for signals (runInterruptibly). One token may
+// be shared by many operations, and once cancelled it stays cancelled.
 struct CancelToken {
     StopSource source;
 };
@@ -61,10 +67,123 @@ StopToken tokenOf(const CancelToken* cancel)
     return cancel ? cancel->source.get_token() : StopToken{};
 }
 
+// How often a blocking call on the main thread hands control back to
+// Python's signal handlers. A call that finishes sooner returns at once.
+constexpr std::chrono::milliseconds signalPollInterval{20};
 
-// How often a read in progress hands control back to Python's signal
-// handlers. A read that finishes sooner returns at once.
-constexpr std::chrono::milliseconds readPollInterval{20};
+// The interpreter's main thread, the only one Python runs signal handlers
+// on. Set when the module is imported.
+unsigned long mainThreadIdent = 0;
+
+bool onMainThread()
+{
+    return PyThread_get_thread_ident() == mainThreadIdent;
+}
+
+// One thread that runs the main thread's blocking calls while the main
+// thread polls for signals, so a script reading thousands of chunks does not
+// create and join a thread for each. Only the main thread submits, and it
+// waits for each job (a signal handler that itself reads queues behind the
+// job it interrupted). Never destroyed: the thread is detached, and joining
+// it during static destruction or DLL unload could deadlock.
+class SignalWorker {
+public:
+    static SignalWorker& instance()
+    {
+        static auto* worker = new SignalWorker;
+        return *worker;
+    }
+
+    void post(std::function<void()> job)
+    {
+        {
+            std::scoped_lock lock(m_mutex);
+            m_jobs.push_back(std::move(job));
+        }
+        m_ready.notify_one();
+    }
+
+private:
+    SignalWorker()
+    {
+        std::thread([this] { run(); }).detach();
+    }
+
+    [[noreturn]] void run()
+    {
+        for (;;) {
+            std::function<void()> job;
+            {
+                std::unique_lock lock(m_mutex);
+                m_ready.wait(lock, [this] { return !m_jobs.empty(); });
+                job = std::move(m_jobs.front());
+                m_jobs.pop_front();
+            }
+            job();
+        }
+    }
+
+    std::mutex m_mutex;
+    std::condition_variable m_ready;
+    std::deque<std::function<void()>> m_jobs;
+};
+
+// Runs work(token) with the GIL released, so other Python threads run
+// meanwhile, and returns its result. Called with the GIL held.
+//
+// On the main thread the work runs on SignalWorker while this thread takes
+// the GIL back every poll interval to run Python's signal handlers: Python
+// runs them only there, between bytecodes, so work that kept the main thread
+// in C++ for its whole length could be stopped neither by Ctrl-C nor by a
+// handler that calls CancelToken.cancel(). The caller's token is polled too
+// and forwarded to the work's own.
+//
+// Elsewhere no handler can run, so the work runs inline on the caller's
+// token: no thread hop, and no waking for the GIL.
+template <typename Work>
+std::invoke_result_t<Work&, StopToken> runInterruptibly(
+    Work&& work, const CancelToken* cancel)
+{
+    using Result = std::invoke_result_t<Work&, StopToken>;
+    const auto requested = tokenOf(cancel);
+    if (!onMainThread()) {
+        nb::gil_scoped_release release;
+        return work(requested);
+    }
+    StopSource stop;
+    if (requested.stop_requested()) {
+        static_cast<void>(stop.request_stop());
+    }
+    // By reference: this function returns only after the task has run.
+    std::packaged_task<Result()> task(
+        [&work, token = stop.get_token()] { return work(token); });
+    auto future = task.get_future();
+    SignalWorker::instance().post([&task] { task(); });
+    for (;;) {
+        {
+            nb::gil_scoped_release release;
+            if (future.wait_for(signalPollInterval)
+                == std::future_status::ready) {
+                break;
+            }
+        }
+        if (requested.stop_requested()) {
+            static_cast<void>(stop.request_stop());
+        }
+        if (PyErr_CheckSignals() != 0) {
+            // A handler raised (KeyboardInterrupt by default): stop the
+            // work, wait for it to let go of what it borrowed, and raise
+            // what the handler raised.
+            static_cast<void>(stop.request_stop());
+            {
+                nb::gil_scoped_release release;
+                future.wait();
+            }
+            throw nb::python_error();
+        }
+    }
+    return future.get();
+}
 
 class DatasetClosed : public std::runtime_error {
 public:
@@ -149,7 +268,7 @@ class Dataset {
 public:
     Dataset(const std::filesystem::path& path,
         const std::vector<std::pair<std::string, std::string>>& derived,
-        std::optional<std::uint64_t> cacheBytes)
+        std::optional<std::uint64_t> cacheBytes, const CancelToken* cancel)
     {
         std::vector<DerivedFieldDefinition> definitions;
         definitions.reserve(derived.size());
@@ -161,9 +280,16 @@ public:
         }
         const auto budget = cacheBytes ? *cacheBytes : defaultCacheBudget();
         const DatasetId id{nextDatasetId.fetch_add(1)};
-        nb::gil_scoped_release release;
-        m_dataset = std::make_shared<PlotfileDataset>(path, id, budget,
-            StopToken{}, std::move(definitions), DerivedFieldPolicy::Strict);
+        // Reading the metadata can take minutes on a large plotfile over a
+        // slow filesystem, so it is interruptible like a read.
+        m_dataset = runInterruptibly(
+            [&](StopToken token) {
+                return std::make_shared<PlotfileDataset>(path, id, budget,
+                    token, std::move(definitions),
+                    DerivedFieldPolicy::Strict);
+            },
+            cancel);
+        m_levelTypes.resize(m_dataset->metadata().levels.size());
     }
 
     PlotfileDataset& dataset() const
@@ -172,6 +298,16 @@ public:
             throw DatasetClosed();
         }
         return *m_dataset;
+    }
+
+    // The dataset, kept alive by the caller across a call that releases the
+    // GIL, so close() from another thread cannot free it underneath.
+    std::shared_ptr<PlotfileDataset> held() const
+    {
+        if (!m_dataset) {
+            throw DatasetClosed();
+        }
+        return m_dataset;
     }
 
     void close() { m_dataset.reset(); }
@@ -248,7 +384,13 @@ public:
 
     nb::list levels() const
     {
-        const auto& meta = metadata();
+        auto keep = held();
+        const auto& meta = keep->metadata();
+        std::vector<std::optional<AnalysisValueType>> types;
+        {
+            nb::gil_scoped_release release;
+            types = levelTypes(*keep);
+        }
         nb::list result;
         for (std::size_t index = 0; index < meta.levels.size(); ++index) {
             const auto& level = meta.levels[index];
@@ -263,33 +405,74 @@ public:
                 level.ghostWidth.values.begin(),
                 level.ghostWidth.values.begin() + meta.dimension);
             entry["num_grids"] = level.blocks.size();
-            entry["dtype"] = levelDtype(static_cast<int>(index));
+            entry["dtype"] = types[index]
+                ? std::optional<std::string>(dtypeName(*types[index]))
+                : std::nullopt;
             result.append(entry);
         }
         return result;
     }
 
-    // A level's stored dtype, or None when it cannot be determined without
-    // a FAB that is missing or unreadable (a version-1 header records no
-    // precision, so the first FAB's header is read). Metadata stays
+    // Each level's stored dtype, or nullopt when it cannot be determined
+    // without a FAB that is missing or unreadable (a version-1 header records
+    // no precision, so the first FAB's header is read). Metadata stays
     // inspectable on a partially copied plotfile; planning, which needs the
     // dtype, raises there instead.
-    std::optional<std::string> levelDtype(int level) const
+    std::vector<std::optional<AnalysisValueType>> levelTypes(
+        const PlotfileDataset& data) const
     {
+        std::vector<std::optional<AnalysisValueType>> types(
+            m_levelTypes.size());
+        for (std::size_t level = 0; level < types.size(); ++level) {
+            try {
+                types[level] = storedType(data, static_cast<int>(level));
+            } catch (const AnalysisError&) {
+            }
+        }
+        return types;
+    }
+
+    std::optional<std::string> widestDtype() const
+    {
+        auto keep = held();
+        nb::gil_scoped_release release;
         try {
-            return dtypeName(storedValueType(dataset(), level));
+            return dtypeName(widestType(*keep));
         } catch (const AnalysisError&) {
             return std::nullopt;
         }
     }
 
-    std::optional<std::string> widestDtype() const
+    // storedValueType, read once per level: for a version-1 header it opens
+    // a FAB, which on a network filesystem is not cheap to repeat on every
+    // `levels` access. Only answers are kept, so a FAB copied in after a
+    // failure is still found.
+    AnalysisValueType storedType(const PlotfileDataset& data, int level) const
     {
-        try {
-            return dtypeName(widestStoredValueType(dataset()));
-        } catch (const AnalysisError&) {
-            return std::nullopt;
+        const auto index = static_cast<std::size_t>(level);
+        {
+            std::scoped_lock lock(m_levelTypesMutex);
+            if (m_levelTypes.at(index)) {
+                return *m_levelTypes[index];
+            }
         }
+        const auto type = storedValueType(data, level);
+        std::scoped_lock lock(m_levelTypesMutex);
+        m_levelTypes[index] = type;
+        return type;
+    }
+
+    // widestStoredValueType through the per-level cache.
+    AnalysisValueType widestType(const PlotfileDataset& data) const
+    {
+        auto widest = AnalysisValueType::Float32;
+        for (std::size_t level = 0; level < m_levelTypes.size(); ++level) {
+            if (storedType(data, static_cast<int>(level))
+                == AnalysisValueType::Float64) {
+                widest = AnalysisValueType::Float64;
+            }
+        }
+        return widest;
     }
 
     std::uint64_t cacheBytes() const
@@ -306,10 +489,12 @@ public:
         // trySetCacheBudget refuses without storing or evicting anything, so
         // a failed call neither drops the warm cache nor exposes the smaller
         // budget to a read on another thread.
-        if (data.trySetCacheBudget(bytes)) {
+        // The pinned bytes the refusal saw: read again, a concurrent read
+        // could have released them, and the message would contradict itself.
+        std::uint64_t pinned = 0;
+        if (data.trySetCacheBudget(bytes, &pinned)) {
             return;
         }
-        const auto pinned = data.cacheMetrics().pinnedBytes;
         throw CacheBudgetExceeded("cannot lower the cache budget to "
             + std::to_string(bytes) + " bytes while "
             + std::to_string(pinned)
@@ -333,13 +518,9 @@ public:
         const std::vector<std::string>& fields,
         std::optional<std::pair<std::vector<double>, std::vector<double>>>
             region,
-        std::optional<std::string> dtype) const
+        std::optional<std::string> dtype, const CancelToken* cancel) const
     {
-        // Held across planning, as in read(), so the GIL can be released.
-        auto keep = m_dataset;
-        if (!keep) {
-            throw DatasetClosed();
-        }
+        auto keep = held();
         const auto& data = *keep;
         LeafChunkRequest request;
         request.fields = fields;
@@ -364,65 +545,32 @@ public:
         }
         // Planning walks every coarse/fine grid pair and may read FAB
         // headers; other Python threads (parallel workers replanning) run
-        // meanwhile.
-        nb::gil_scoped_release release;
-        return std::make_shared<const LeafChunkPlan>(
-            planLeafChunks(data, request));
+        // meanwhile. The default dtype comes through the per-level cache.
+        return runInterruptibly(
+            [&](StopToken token) {
+                if (!request.dtype) {
+                    request.dtype = widestType(data);
+                }
+                return std::make_shared<const LeafChunkPlan>(
+                    planLeafChunks(data, request, token));
+            },
+            cancel);
     }
 
     std::shared_ptr<const LeafChunk> read(
         const LeafChunkItem& item, const CancelToken* cancel)
     {
-        // Held across the read so close() from another thread cannot free
-        // the dataset under it.
-        auto keep = m_dataset;
-        if (!keep) {
-            throw DatasetClosed();
-        }
-        // The read runs on a worker thread while this one waits with the GIL
-        // released, taking it back every poll interval to run Python's
-        // signal handlers. Python runs them only on the main thread, between
-        // bytecodes, so a read that kept this thread in C++ for its whole
-        // length could be stopped neither by Ctrl-C nor by a handler that
-        // calls CancelToken.cancel(). The caller's token is polled too and
-        // forwarded to the read's own.
-        StopSource stop;
-        const auto requested = tokenOf(cancel);
-        if (requested.stop_requested()) {
-            static_cast<void>(stop.request_stop());
-        }
-        auto task = std::async(std::launch::async,
-            [keep, &item, token = stop.get_token()] {
-                return readLeafChunk(*keep, item, token);
-            });
-        for (;;) {
-            {
-                nb::gil_scoped_release release;
-                if (task.wait_for(readPollInterval)
-                    == std::future_status::ready) {
-                    break;
-                }
-            }
-            if (requested.stop_requested()) {
-                static_cast<void>(stop.request_stop());
-            }
-            if (PyErr_CheckSignals() != 0) {
-                // A handler raised (KeyboardInterrupt by default): stop the
-                // read, wait for the worker to let go of the dataset and the
-                // item, and raise what the handler raised.
-                static_cast<void>(stop.request_stop());
-                {
-                    nb::gil_scoped_release release;
-                    task.wait();
-                }
-                throw nb::python_error();
-            }
-        }
-        return task.get();
+        auto keep = held();
+        return runInterruptibly(
+            [&](StopToken token) { return readLeafChunk(*keep, item, token); },
+            cancel);
     }
 
 private:
     std::shared_ptr<PlotfileDataset> m_dataset;
+    // Per level, the stored dtype once read (storedType).
+    mutable std::mutex m_levelTypesMutex;
+    mutable std::vector<std::optional<AnalysisValueType>> m_levelTypes;
 };
 
 // A plan item, kept with the plan it came from so its selection outlives the
@@ -444,6 +592,9 @@ NB_MODULE(_amrexplorer, m)
 
     m.doc() = "Native core of the amrexplorer analysis package.";
 
+    mainThreadIdent = nb::cast<unsigned long>(
+        nb::module_::import_("threading").attr("main_thread")().attr("ident"));
+
     auto analysisError = nb::exception<AnalysisError>(
         m, "AnalysisError", PyExc_ValueError);
     nb::exception<DerivedFieldError>(m, "DerivedFieldError", analysisError);
@@ -463,7 +614,7 @@ NB_MODULE(_amrexplorer, m)
         "The budget open_plotfile uses when cache_bytes is None.");
 
     nb::class_<CancelToken>(m, "CancelToken",
-        "A cancellation flag for reads: call "
+        "A cancellation flag for opens, plans and reads: call "
         "cancel() from another thread or a signal handler, and the "
         "operation in progress raises ReadCancelled.")
         .def(nb::init<>())
@@ -478,8 +629,9 @@ NB_MODULE(_amrexplorer, m)
     nb::class_<Dataset>(m, "_Dataset")
         .def(nb::init<const std::filesystem::path&,
                  const std::vector<std::pair<std::string, std::string>>&,
-                 std::optional<std::uint64_t>>(),
-            "path"_a, "derived"_a, "cache_bytes"_a.none())
+                 std::optional<std::uint64_t>, const CancelToken*>(),
+            "path"_a, "derived"_a, "cache_bytes"_a.none(),
+            "cancel"_a.none() = nb::none())
         .def("close", &Dataset::close)
         .def_prop_ro("closed", &Dataset::closed)
         .def_prop_ro("id", &Dataset::id)
@@ -504,7 +656,8 @@ NB_MODULE(_amrexplorer, m)
         .def("set_cache_bytes", &Dataset::setCacheBytes, "bytes"_a)
         .def("cache_metrics", &Dataset::cacheMetrics)
         .def("plan_leaf_chunks", &Dataset::plan, "fields"_a,
-            "region"_a.none(), "dtype"_a.none())
+            "region"_a.none(), "dtype"_a.none(),
+            "cancel"_a.none() = nb::none())
         .def("read_leaf_chunk",
             [](Dataset& self, const PlanItem& item, const CancelToken* cancel) {
                 return self.read(item.item(), cancel);
@@ -527,7 +680,12 @@ NB_MODULE(_amrexplorer, m)
         .def_prop_ro("dataset_id",
             [](const LeafChunkPlan& self) {
                 return self.selection->dataset.value;
-            });
+            })
+        // Identifies this plan among live ones: a plan item keeps its plan
+        // alive, so no other plan can be at the same address meanwhile.
+        .def_prop_ro("_key", [](const LeafChunkPlan& self) {
+            return reinterpret_cast<std::uintptr_t>(&self);
+        });
 
     m.def("_plan_item",
         [](std::shared_ptr<const LeafChunkPlan> plan, std::int64_t index) {
@@ -557,6 +715,10 @@ NB_MODULE(_amrexplorer, m)
         .def_prop_ro("dataset_id",
             [](const PlanItem& self) {
                 return self.item().selection->dataset.value;
+            })
+        .def_prop_ro("_plan_key",
+            [](const PlanItem& self) {
+                return reinterpret_cast<std::uintptr_t>(self.plan.get());
             })
         .def("_box",
             [](const PlanItem& self, int dimension) {

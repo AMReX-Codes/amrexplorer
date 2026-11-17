@@ -261,7 +261,7 @@ AnalysisValueType storedValueType(const PlotfileDataset& dataset, int levelIndex
             return AnalysisValueType::Float32;
         }
         const auto& block = level.blocks.front();
-        const auto path = dataset.dataRoot() / block.filePath;
+        const auto path = dataset.dataRoot() / pathFromText(block.filePath);
         std::ifstream input(path, std::ios::binary);
         input.seekg(static_cast<std::streamoff>(block.fileOffset), std::ios::beg);
         std::string line;
@@ -322,9 +322,15 @@ std::uint64_t estimateLeafChunkPinnedBytes(const PlotfileDataset& dataset,
     return perBlock * blocks.size();
 }
 
-LeafChunkPlan planLeafChunks(
-    const PlotfileDataset& dataset, const LeafChunkRequest& request)
+LeafChunkPlan planLeafChunks(const PlotfileDataset& dataset,
+    const LeafChunkRequest& request, StopToken cancellation)
 {
+    const auto checkCancelled = [&] {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
+    };
+    checkCancelled();
     const auto& metadata = dataset.metadata();
     requireSupportedGeometry(metadata);
     const auto dimension = metadata.dimension;
@@ -371,7 +377,11 @@ LeafChunkPlan planLeafChunks(
         }
     }
     selection->region = request.region;
-    selection->dtype = request.dtype.value_or(widestStoredValueType(dataset));
+    // Not value_or: its argument is evaluated even when a dtype is given, and
+    // reading every level's precision can fail on a grid the plan never
+    // touches.
+    selection->dtype = request.dtype ? *request.dtype
+                                     : widestStoredValueType(dataset);
 
     LeafChunkPlan plan;
     plan.selection = selection;
@@ -412,6 +422,7 @@ LeafChunkPlan planLeafChunks(
             }
         }
         for (std::size_t grid = 0; grid < level.blocks.size(); ++grid) {
+            checkCancelled();
             const auto& box = level.blocks[grid].box;
             const auto selected = intersect(box, regionBox, dimension);
             if (!selected) {

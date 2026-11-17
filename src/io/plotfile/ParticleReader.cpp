@@ -334,7 +334,7 @@ std::map<DataFileKey, std::filesystem::path> particleDataPaths(
             if (!entry.is_regular_file()) {
                 continue;
             }
-            const auto name = entry.path().filename().string();
+            const auto name = pathString(entry.path().filename());
             constexpr std::string_view prefix = "DATA_";
             if (!name.starts_with(prefix)) {
                 continue;
@@ -585,7 +585,7 @@ std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
         }
         try {
             result.push_back(parseHeader(headerPath,
-                entry.path().filename().string(), cancellation).metadata);
+                pathString(entry.path().filename()), cancellation).metadata);
         } catch (const ParticleReadError&) {
             continue;
         }
@@ -608,7 +608,7 @@ ParticleSample readParticleSample(
     if (cancellation.stop_requested()) {
         throw ReadCancelled();
     }
-    const auto speciesPath = plotfile / species;
+    const auto speciesPath = plotfile / pathFromText(species);
     const auto header
         = parseHeader(speciesPath / "Header", species, cancellation);
     if (!header.checkpoint) {

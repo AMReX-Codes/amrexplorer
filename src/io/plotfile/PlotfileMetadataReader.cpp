@@ -481,7 +481,7 @@ void indexLevelBlocks(const std::filesystem::path& plotfile,
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
         }
-        const auto dataPrefix = plotfile / level.dataPath;
+        const auto dataPrefix = plotfile / pathFromText(level.dataPath);
         auto indexPath = dataPrefix;
         indexPath += "_H";
         const auto visMf = detail::readVisMfIndex(indexPath, metadata.dimension, cancellation);
@@ -505,9 +505,9 @@ void indexLevelBlocks(const std::filesystem::path& plotfile,
         for (std::size_t block = 0; block < visMf.boxes.size(); ++block) {
             BlockMetadata blockMetadata;
             blockMetadata.box = visMf.boxes[block];
-            blockMetadata.filePath = (
-                std::filesystem::path(level.dataPath).parent_path()
-                / visMf.fileNames[block]).generic_string();
+            const auto filePath = (pathFromText(level.dataPath).parent_path()
+                / pathFromText(visMf.fileNames[block])).generic_u8string();
+            blockMetadata.filePath.assign(filePath.begin(), filePath.end());
             blockMetadata.fileOffset = visMf.fileOffsets[block];
             if (visMf.hasPerBlockStatistics
                 && visMf.minimum.size() == visMf.boxes.size()

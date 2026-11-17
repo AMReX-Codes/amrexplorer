@@ -4,7 +4,10 @@ These tests validate raw source values and analysis totals against an
 independent NumPy reconstruction of the fixture plotfiles."""
 
 import _thread
+import concurrent.futures
 import gc
+import os
+import pathlib
 import shutil
 import signal
 import sys
@@ -427,6 +430,82 @@ def test_metadata_survives_a_missing_fab(refined_3d, tmp_path):
         assert ds.widest_dtype is None
         with pytest.raises(ax.AnalysisError, match="precision"):
             ds.plan_leaf_chunks(["density"])
+        # A dtype the script gives needs no level's precision, so planning
+        # reads no FAB header and succeeds.
+        plan = ds.plan_leaf_chunks(["density"], dtype="float32")
+        assert plan.dtype == np.float32 and len(plan) > 0
+
+
+def test_plan_items_compare_by_plan_and_position(refined_2d):
+    path, _ = refined_2d
+    with ax.open_plotfile(path) as ds:
+        plan = ds.plan_leaf_chunks(["density"])
+        other = ds.plan_leaf_chunks(["density"])
+        assert len(plan) >= 3
+        item = plan[2]
+        assert item == plan[2] and hash(item) == hash(plan[2])
+        assert item != plan[1]
+        assert item in plan and item not in other
+        assert plan.index(item) == 2 and plan.count(item) == 1
+        assert other.count(item) == 0
+        with pytest.raises(ValueError):
+            other.index(item)
+        with pytest.raises(ValueError):
+            plan.index(item, 3)
+        assert all(i in plan for i in plan.partition(0, 2))
+        assert len(set(plan) | set(plan.partition(1, 2))) == len(plan)
+        assert "density" not in plan
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Windows names are UTF-16, never stray bytes")
+def test_error_names_a_non_utf8_path(refined_2d, tmp_path):
+    # A POSIX name is bytes. The message escapes the ones that are not
+    # UTF-8; undecodable, they would replace the error with
+    # UnicodeDecodeError.
+    source, _ = refined_2d
+    parent = os.path.join(os.fsencode(tmp_path), b"donn\xe9es")
+    try:
+        os.mkdir(parent)
+    except OSError:
+        pytest.skip("the filesystem refuses names that are not UTF-8")
+    path = os.path.join(parent, b"plt00100")
+    shutil.copytree(source, os.fsdecode(path))
+    (pathlib.Path(os.fsdecode(path)) / "Level_1" / "Cell_D_00000").unlink()
+    with ax.open_plotfile(os.fsdecode(path)) as ds:
+        plan = ds.plan_leaf_chunks(["density"])
+        item = next(item for item in plan if item.level == 1)
+        with pytest.raises(ax.BlockReadError) as error:
+            ds.read_leaf_chunk(item)
+        assert "donn\\xe9es" in str(error.value)
+    with pytest.raises(ax.PlotfileReadError) as error:
+        ax.open_plotfile(os.fsdecode(os.path.join(parent, b"missing")))
+    assert "donn\\xe9es" in str(error.value)
+
+
+def test_cancelled_token_stops_open_plan_and_read(refined_2d):
+    path, _ = refined_2d
+    token = ax.CancelToken()
+    token.cancel()
+    with pytest.raises(ax.ReadCancelled):
+        ax.open_plotfile(path, cancel=token)
+    with ax.open_plotfile(path) as ds:
+        with pytest.raises(ax.ReadCancelled):
+            ds.plan_leaf_chunks(["density"], cancel=token)
+        with pytest.raises(ax.ReadCancelled):
+            list(ds.leaf_cells(["density"], cancel=token))
+        item = ds.plan_leaf_chunks(["density"])[0]
+
+        # Off the main thread no signal handler can run, so the token
+        # reaches the read directly.
+        def read_in_thread(cancel):
+            with concurrent.futures.ThreadPoolExecutor(1) as pool:
+                return pool.submit(ds.read_leaf_chunk, item,
+                                   cancel=cancel).result()
+
+        with pytest.raises(ax.ReadCancelled):
+            read_in_thread(token)
+        assert read_in_thread(ax.CancelToken()).size == item.num_cells
 
 
 def test_read_error_names_a_unicode_path(refined_2d, tmp_path):
@@ -463,11 +542,39 @@ def slow_read(tmp_path):
         yield ds, item
 
 
-def _interrupt_soon():
-    timer = threading.Timer(0.05, _thread.interrupt_main,
-                            args=(signal.SIGINT,))
-    timer.start()
-    return timer
+class _Interrupter:
+    """Sends SIGINT to the main thread again and again from the moment the
+    read has begun (its first cache miss) until the block ends. One signal on
+    a timer could land before the read starts, or after a fast read has
+    returned and pytest.raises has exited; this cannot."""
+
+    def __init__(self, ds):
+        self._ds = ds
+        self._done = threading.Event()
+        self._misses = ds.cache_metrics()["misses"]
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self):
+        # cache_metrics needs the GIL, which the read releases while it waits.
+        while (not self._done.is_set()
+               and self._ds.cache_metrics()["misses"] == self._misses):
+            self._done.wait(0.001)
+        while not self._done.is_set():
+            _thread.interrupt_main(signal.SIGINT)
+            self._done.wait(0.005)
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._done.set()
+        self._thread.join()
+        # Let a signal still pending run under the test's handler, not the
+        # one the test restores: the interpreter runs handlers at loop
+        # back-edges.
+        for _ in range(1000):
+            pass
 
 
 @pytest.mark.skipif(sys.version_info < (3, 10),
@@ -476,14 +583,13 @@ def test_signal_handler_cancels_a_read_in_progress(slow_read):
     ds, item = slow_read
     token = ax.CancelToken()
     previous = signal.signal(signal.SIGINT, lambda *_: token.cancel())
-    timer = _interrupt_soon()
     try:
         # Python runs the handler only between bytecodes; the read must give
         # it the chance, or the read finishes and returns a chunk.
-        with pytest.raises(ax.ReadCancelled):
-            ds.read_leaf_chunk(item, cancel=token)
+        with _Interrupter(ds):
+            with pytest.raises(ax.ReadCancelled):
+                ds.read_leaf_chunk(item, cancel=token)
     finally:
-        timer.cancel()
         signal.signal(signal.SIGINT, previous)
     assert token.cancelled
 
@@ -492,12 +598,22 @@ def test_signal_handler_cancels_a_read_in_progress(slow_read):
                     reason="interrupt_main(signum) needs Python 3.10")
 def test_keyboard_interrupt_stops_a_read(slow_read):
     ds, item = slow_read
-    timer = _interrupt_soon()
+    # Python's own SIGINT handler raises KeyboardInterrupt; this one does
+    # the same, once, so the signals that follow cannot escape the test.
+    raised = []
+
+    def interrupt(*_):
+        if not raised:
+            raised.append(True)
+            raise KeyboardInterrupt
+
+    previous = signal.signal(signal.SIGINT, interrupt)
     try:
-        with pytest.raises(KeyboardInterrupt):
-            ds.read_leaf_chunk(item)
+        with _Interrupter(ds):
+            with pytest.raises(KeyboardInterrupt):
+                ds.read_leaf_chunk(item)
     finally:
-        timer.cancel()
+        signal.signal(signal.SIGINT, previous)
     # The interrupted read let go of its pins; the dataset still reads.
     assert ds.cache_metrics()["pinned_bytes"] == 0
     assert ds.read_leaf_chunk(item).size == 96 ** 3

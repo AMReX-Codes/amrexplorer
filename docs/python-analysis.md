@@ -163,7 +163,7 @@ path-like object and returns a dataset. Use it as a context manager or call
 | `levels` | Per-level dictionaries with `level`, `step`, `domain`, `cell_size`, `index_origin`, `ghost_cells`, `num_grids`, and `dtype` (`None` when it can only be read from a missing or unreadable FAB). |
 | `widest_dtype` | Widest stored field precision across levels, as a NumPy dtype, or `None` if any level's `dtype` is `None`. |
 | `leaf_cells(fields, region=None, dtype=None)` | Iterate over chunks. Also accepts `cancel=token` and `progress=callback`; the callback receives `(items_read, total_items)`. |
-| `plan_leaf_chunks(fields, region=None, dtype=None)` | Create a plan. |
+| `plan_leaf_chunks(fields, region=None, dtype=None)` | Create a plan. Also accepts `cancel=token`. |
 | `read_leaf_chunk(item, cancel=None)` | Read one item; `cancel` is a keyword argument. |
 | `cache_bytes`, `set_cache_bytes(n)`, `cache_metrics()` | Inspect or change the block-cache budget, and inspect cache metrics. |
 
@@ -205,11 +205,12 @@ Exceptions are exported from `amrexplorer`:
 | `BlockReadError` | A data block cannot be read. | `PlotfileReadError` |
 | `CacheBudgetExceeded` | A read cannot fit its required blocks, or a budget reduction cannot accommodate pinned blocks. | `MemoryError` |
 | `DatasetClosed` | An operation needs a dataset that has been closed. | `RuntimeError` |
-| `ReadCancelled` | A read was cancelled using a `CancelToken`. | `RuntimeError` |
+| `ReadCancelled` | An open, plan, or read was cancelled using a `CancelToken`. | `RuntimeError` |
 
-Pressing Ctrl-C during a read raises `KeyboardInterrupt` promptly, and a
-`signal` handler that calls `token.cancel()` stops a read that uses that
-token.
+Pressing Ctrl-C while `open_plotfile`, `plan_leaf_chunks`, or a read is in
+progress raises `KeyboardInterrupt` promptly, and a `signal` handler that
+calls `token.cancel()` stops any of them that was given that token (each
+takes `cancel=token`).
 
 For example, a batch script can report a failed plotfile and continue:
 

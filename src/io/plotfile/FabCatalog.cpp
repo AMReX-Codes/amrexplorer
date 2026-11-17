@@ -115,7 +115,7 @@ bool startsWithFabHeader(
 std::filesystem::path companionHeaderPath(
     const std::filesystem::path& dataPath)
 {
-    const auto filename = dataPath.filename().string();
+    const auto filename = pathString(dataPath.filename());
     const auto marker = filename.rfind("_D_");
     if (marker == std::string::npos || marker + 3 == filename.size()
         || !std::all_of(filename.begin() + static_cast<std::ptrdiff_t>(marker + 3),
@@ -127,7 +127,7 @@ std::filesystem::path companionHeaderPath(
             "a companion MultiFab _H file");
     }
     return dataPath.parent_path()
-        / (filename.substr(0, marker) + "_H");
+        / pathFromText(filename.substr(0, marker) + "_H");
 }
 
 IntBox storedBox(
@@ -159,7 +159,7 @@ std::vector<FabRecord> recordsFromCompanion(
     std::vector<FabRecord> records;
     for (std::size_t block = 0; block < level.blocks.size(); ++block) {
         const auto& metadata = level.blocks[block];
-        if (std::filesystem::path(metadata.filePath).filename()
+        if (pathFromText(metadata.filePath).filename()
             != dataPath.filename()) {
             continue;
         }

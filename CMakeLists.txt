@@ -80,6 +80,8 @@ option(AMREXPLORER_ENABLE_VTK "Build the optional VTK volume module" OFF)
 option(AMREXPLORER_ENABLE_REMOTE
     "Build production remote client/server support" ${AMREXPLORER_ENABLE_QT})
 option(AMREXPLORER_BUILD_TESTS "Build unit and integration tests" ON)
+option(AMREXPLORER_BUILD_TOOLS
+    "Build the developer tools (dataset_inspect, query_benchmark, line_repro)" ON)
 option(AMREXPLORER_ENABLE_PYTHON
     "Build the amrexplorer Python analysis module (needs nanobind)" OFF)
 option(AMREXPLORER_ENABLE_SERVER_TEST_HOOKS
@@ -338,9 +340,11 @@ if(AMREXPLORER_ENABLE_PYTHON)
     add_subdirectory(python)
 endif()
 
-add_subdirectory(tools/dataset_inspect)
-add_subdirectory(tools/query_benchmark)
-add_subdirectory(tools/line_repro)
+if(AMREXPLORER_BUILD_TOOLS)
+    add_subdirectory(tools/dataset_inspect)
+    add_subdirectory(tools/query_benchmark)
+    add_subdirectory(tools/line_repro)
+endif()
 
 if(AMREXPLORER_BUILD_TESTS)
     include(CTest)

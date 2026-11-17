@@ -90,7 +90,8 @@ def _region(region, dimension: int):
 
 class PlanItem:
     """One work item: exactly one grid's selected leaf cells. Immutable, valid
-    only for the dataset and plan it came from."""
+    only for the dataset and plan it came from. Two items are equal when they
+    are the same position of the same plan."""
 
     __slots__ = ("_native", "_dimension")
 
@@ -138,6 +139,17 @@ class PlanItem:
         lower, upper = self._native._selected_box(self._dimension)
         return tuple(lower), tuple(upper)
 
+    def _key(self):
+        return (self._native._plan_key, self._native.index)
+
+    def __eq__(self, other):
+        if not isinstance(other, PlanItem):
+            return NotImplemented
+        return self._key() == other._key()
+
+    def __hash__(self) -> int:
+        return hash(self._key())
+
     def __repr__(self) -> str:
         return (f"PlanItem(index={self.index}, level={self.level}, "
                 f"grid={self.grid}, num_cells={self.num_cells})")
@@ -164,6 +176,22 @@ class LeafChunkPlan(Sequence):
     def __iter__(self) -> Iterator[PlanItem]:
         for index in range(len(self)):
             yield self[index]
+
+    # An item knows its plan and position, so these need no scan.
+    def __contains__(self, item) -> bool:
+        return (isinstance(item, PlanItem)
+                and item._native._plan_key == self._native._key)
+
+    def index(self, item, start: int = 0, stop: Optional[int] = None) -> int:
+        if item in self:
+            position = item.index
+            begin, end, _ = slice(start, stop).indices(len(self))
+            if begin <= position < end:
+                return position
+        raise ValueError(f"{item!r} is not in this plan")
+
+    def count(self, item) -> int:
+        return 1 if item in self else 0
 
     @property
     def fields(self) -> list:
@@ -324,13 +352,14 @@ class LeafChunk(Mapping):
 class Dataset:
     """An open plotfile. Use as a context manager, or call close()."""
 
-    def __init__(self, path, derived=(), cache_bytes: Optional[int] = None):
+    def __init__(self, path, derived=(), cache_bytes: Optional[int] = None,
+                 *, cancel=None):
         # Kept so another handle can be opened on the same definitions
         # (amrexplorer.parallel's worker-local datasets).
         self._definitions = _definitions(derived)
         self._native = _native._Dataset(
             os.fspath(path), self._definitions,
-            None if cache_bytes is None else int(cache_bytes))
+            None if cache_bytes is None else int(cache_bytes), cancel)
 
     # Lifetime ---------------------------------------------------------------
     def close(self) -> None:
@@ -421,15 +450,17 @@ class Dataset:
 
     # Leaf cells -------------------------------------------------------------
     def plan_leaf_chunks(self, fields: Iterable[str] = (), region: Region = None,
-                         dtype=None) -> LeafChunkPlan:
+                         dtype=None, *, cancel=None) -> LeafChunkPlan:
         """Plan the leaf cells whose centers lie in `region` (lower <= center
         < upper per axis; None is the whole domain), one item per grid that
-        has any. `dtype=None` uses the widest stored dtype across levels."""
+        has any. `dtype=None` uses the widest stored dtype across levels.
+        `cancel` is an optional CancelToken; Ctrl-C raises KeyboardInterrupt
+        promptly, as for reads."""
         if isinstance(fields, str):
             fields = [fields]
         native_region = _region(region, self.dimension)
         plan = self._native.plan_leaf_chunks(
-            list(fields), native_region, _dtype_name(dtype))
+            list(fields), native_region, _dtype_name(dtype), cancel)
         return LeafChunkPlan(plan, self.dimension, native_region)
 
     def read_leaf_chunk(self, item: PlanItem, *, cancel=None) -> LeafChunk:
@@ -445,7 +476,8 @@ class Dataset:
                    progress=None) -> Iterator[LeafChunk]:
         """Plan, then read every item serially in canonical order.
         `progress(done, total)` is called after each item is read."""
-        plan = self.plan_leaf_chunks(fields, region=region, dtype=dtype)
+        plan = self.plan_leaf_chunks(fields, region=region, dtype=dtype,
+                                     cancel=cancel)
         for done, item in enumerate(plan, start=1):
             chunk = self.read_leaf_chunk(item, cancel=cancel)
             if progress is not None:
@@ -457,7 +489,8 @@ class Dataset:
         return f"Dataset({self.path if not self.closed else ''!r}, {state})"
 
 
-def open_plotfile(path, derived=(), cache_bytes: Optional[int] = None) -> Dataset:
+def open_plotfile(path, derived=(), cache_bytes: Optional[int] = None, *,
+                  cancel=None) -> Dataset:
     """Open a plotfile for analysis.
 
     derived: derived-field definitions: a {name: expression} mapping, or a
@@ -468,5 +501,8 @@ def open_plotfile(path, derived=(), cache_bytes: Optional[int] = None) -> Datase
     cache_bytes: the block-cache budget. None uses AMREXPLORER_CACHE_SIZE_MB
         if set (raising if it is not a positive whole number) and 1 GiB
         otherwise.
+    cancel: an optional CancelToken that stops reading the metadata. Ctrl-C
+        raises KeyboardInterrupt promptly, as for reads.
     """
-    return Dataset(path, derived=derived, cache_bytes=cache_bytes)
+    return Dataset(path, derived=derived, cache_bytes=cache_bytes,
+                   cancel=cancel)

@@ -29,6 +29,8 @@ cmake.build-type = "Release"
 AMREXPLORER_ENABLE_QT = "OFF"
 AMREXPLORER_ENABLE_REMOTE = "OFF"
 AMREXPLORER_BUILD_TESTS = "OFF"
+# The developer tools are not part of the wheel.
+AMREXPLORER_BUILD_TOOLS = "OFF"
 AMREXPLORER_ENABLE_PYTHON = "ON"
 
 [tool.scikit-build.metadata.version]

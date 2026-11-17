@@ -319,7 +319,12 @@ def test_cache_budget_validation(refined_2d, monkeypatch):
         assert ds.cache_bytes == 5000
         with pytest.raises(ax.AnalysisError):
             ds.set_cache_bytes(0)
-    for bad in ("0", "lots", "12MB", "", str(2**64)):
+    bad_values = ["0", "lots", "12MB", str(2**64)]
+    if sys.platform != "win32":
+        # Windows has no empty environment variables: setting one to ""
+        # removes it, and the default budget applies.
+        bad_values.append("")
+    for bad in bad_values:
         monkeypatch.setenv("AMREXPLORER_CACHE_SIZE_MB", bad)
         with pytest.raises(ax.AnalysisError, match="AMREXPLORER_CACHE_SIZE_MB"):
             ax.open_plotfile(path)
